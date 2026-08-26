@@ -64,3 +64,32 @@ impl BlockBehaviour for FlowerBlock {
 }
 
 impl PlantBlockBase for FlowerBlock {}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+
+    #[test]
+    fn small_flowers_block_id_and_default_state_parity() {
+        let flowers = [
+            &Block::DANDELION,
+            &Block::POPPY,
+            &Block::BLUE_ORCHID,
+            &Block::ALLIUM,
+            &Block::AZURE_BLUET,
+            &Block::RED_TULIP,
+            &Block::ORANGE_TULIP,
+            &Block::WHITE_TULIP,
+            &Block::PINK_TULIP,
+            &Block::OXEYE_DAISY,
+            &Block::CORNFLOWER,
+            &Block::LILY_OF_THE_VALLEY,
+        ];
+        for flower in flowers {
+            assert_ne!(flower.default_state.id, Block::AIR.default_state.id);
+        }
+        assert_eq!(Block::DANDELION.name, "dandelion");
+        assert_eq!(Block::POPPY.name, "poppy");
+        assert_eq!(Block::CORNFLOWER.name, "cornflower");
+    }
+}

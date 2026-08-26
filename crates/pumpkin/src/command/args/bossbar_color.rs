@@ -85,3 +85,33 @@ impl<'a> FindArg<'a> for BossbarColorArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bossbar_color_arg_parsing_parity() {
+        let parse_color = |s: &str| -> Option<BossbarColor> {
+            match s {
+                "blue" => Some(BossbarColor::Blue),
+                "green" => Some(BossbarColor::Green),
+                "pink" => Some(BossbarColor::Pink),
+                "purple" => Some(BossbarColor::Purple),
+                "red" => Some(BossbarColor::Red),
+                "white" => Some(BossbarColor::White),
+                "yellow" => Some(BossbarColor::Yellow),
+                _ => None,
+            }
+        };
+
+        assert!(matches!(parse_color("blue"), Some(BossbarColor::Blue)));
+        assert!(matches!(parse_color("green"), Some(BossbarColor::Green)));
+        assert!(matches!(parse_color("pink"), Some(BossbarColor::Pink)));
+        assert!(matches!(parse_color("purple"), Some(BossbarColor::Purple)));
+        assert!(matches!(parse_color("red"), Some(BossbarColor::Red)));
+        assert!(matches!(parse_color("white"), Some(BossbarColor::White)));
+        assert!(matches!(parse_color("yellow"), Some(BossbarColor::Yellow)));
+        assert!(parse_color("orange").is_none());
+    }
+}

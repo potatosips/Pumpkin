@@ -121,7 +121,7 @@ impl AgeableMob for HappyGhastEntity {
 impl NBTStorage for HappyGhastEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_int(
@@ -133,7 +133,7 @@ impl NBTStorage for HappyGhastEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(timeout) = nbt.get_int("still_timeout") {
@@ -238,5 +238,16 @@ impl Mob for HappyGhastEntity {
             self.animal_interact(player, item_stack, Sound::EntityHappyGhastAmbient)
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn happy_ghast_food_and_still_timeout_parity() {
+        assert_eq!(HAPPY_GHAST_FOOD.len(), 1);
+        assert_eq!(HAPPY_GHAST_FOOD[0].id, Item::SNOWBALL.id);
     }
 }

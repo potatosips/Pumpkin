@@ -51,6 +51,7 @@ impl TNTBlock {
 
         let pos = entity.pos.load();
         let tnt = Arc::new(TNTEntity::new(entity, DEFAULT_POWER, DEFAULT_FUSE));
+        tnt.set_random_initial_velocity();
         world.spawn_entity(tnt).await;
         world.play_sound(
             pumpkin_data::sound::Sound::EntityTntPrimed,

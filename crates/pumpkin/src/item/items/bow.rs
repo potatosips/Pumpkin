@@ -172,8 +172,7 @@ impl BowItem {
             ArrowPickup::Allowed
         };
 
-        let mut arrow =
-            ArrowEntity::new_shot(arrow_entity, player.get_entity(), &projectile, pickup);
+        let arrow = ArrowEntity::new_shot(arrow_entity, player.get_entity(), &projectile, pickup);
 
         // Read enchantments of the held item (bow)
         let stack = player.inventory().held_item().await;
@@ -182,11 +181,14 @@ impl BowItem {
         {
             for (enchantment, level) in enchantments.enchantment.iter() {
                 if **enchantment == pumpkin_data::Enchantment::POWER {
-                    arrow.base_damage *= 1.0 + 0.25 * (f64::from(*level) + 1.0);
+                    arrow.set_base_damage(
+                        arrow.base_damage.load() * (1.0 + 0.25 * (f64::from(*level) + 1.0)),
+                    );
                 } else if **enchantment == pumpkin_data::Enchantment::PUNCH {
                     arrow.punch_level.store(*level as u8, Ordering::Relaxed);
                 } else if **enchantment == pumpkin_data::Enchantment::FLAME {
                     arrow.is_flame.store(true, Ordering::Relaxed);
+                    arrow.set_on_fire_for_ticks(100);
                 }
             }
         }

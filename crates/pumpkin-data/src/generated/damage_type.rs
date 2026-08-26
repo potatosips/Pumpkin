@@ -553,6 +553,62 @@ impl DamageType {
             _ => None,
         }
     }
+    pub const fn name(&self) -> &'static str {
+        match self.id {
+            0 => "arrow",
+            1 => "bad_respawn_point",
+            2 => "cactus",
+            3 => "campfire",
+            4 => "cramming",
+            5 => "dragon_breath",
+            6 => "drown",
+            7 => "dry_out",
+            8 => "ender_pearl",
+            9 => "explosion",
+            10 => "fall",
+            11 => "falling_anvil",
+            12 => "falling_block",
+            13 => "falling_stalactite",
+            14 => "fireball",
+            15 => "fireworks",
+            16 => "fly_into_wall",
+            17 => "freeze",
+            18 => "generic",
+            19 => "generic_kill",
+            20 => "hot_floor",
+            21 => "in_fire",
+            22 => "in_wall",
+            23 => "indirect_magic",
+            24 => "lava",
+            25 => "lightning_bolt",
+            26 => "mace_smash",
+            27 => "magic",
+            28 => "mob_attack",
+            29 => "mob_attack_no_aggro",
+            30 => "mob_projectile",
+            31 => "on_fire",
+            32 => "out_of_world",
+            33 => "outside_border",
+            34 => "player_attack",
+            35 => "player_explosion",
+            36 => "sonic_boom",
+            37 => "spear",
+            38 => "spit",
+            39 => "stalagmite",
+            40 => "starve",
+            41 => "sting",
+            42 => "sulfur_cube_hot",
+            43 => "sweet_berry_bush",
+            44 => "thorns",
+            45 => "thrown",
+            46 => "trident",
+            47 => "unattributed_fireball",
+            48 => "wind_charge",
+            49 => "wither",
+            50 => "wither_skull",
+            _ => "unknown",
+        }
+    }
 }
 impl Taggable for DamageType {
     #[inline]
@@ -561,7 +617,7 @@ impl Taggable for DamageType {
     }
     #[inline]
     fn registry_key(&self) -> &str {
-        self.message_id
+        self.name()
     }
     #[inline]
     fn registry_id(&self) -> u16 {

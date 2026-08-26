@@ -235,3 +235,62 @@ const fn is_base_block(instrument: NoteblockInstrument) -> bool {
             | NoteblockInstrument::Banjo
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, NoteBlockLikeProperties, NoteblockInstrument,
+    };
+
+    #[test]
+    fn note_block_id_parity() {
+        assert_eq!(Block::NOTE_BLOCK.name, "note_block");
+    }
+
+    #[test]
+    fn note_block_default_state_parity() {
+        assert_ne!(
+            Block::NOTE_BLOCK.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn note_block_properties_roundtrip_parity() {
+        for instrument in [
+            NoteblockInstrument::Harp,
+            NoteblockInstrument::Bass,
+            NoteblockInstrument::Snare,
+            NoteblockInstrument::Hat,
+            NoteblockInstrument::Basedrum,
+            NoteblockInstrument::Bell,
+            NoteblockInstrument::Flute,
+            NoteblockInstrument::Chime,
+            NoteblockInstrument::Guitar,
+            NoteblockInstrument::Xylophone,
+            NoteblockInstrument::IronXylophone,
+            NoteblockInstrument::CowBell,
+            NoteblockInstrument::Didgeridoo,
+            NoteblockInstrument::Bit,
+            NoteblockInstrument::Banjo,
+            NoteblockInstrument::Pling,
+        ] {
+            for note in [0, 12, 24] {
+                for powered in [true, false] {
+                    let props = NoteBlockLikeProperties {
+                        instrument,
+                        note,
+                        powered,
+                    };
+                    let state_id = props.to_state_id(&Block::NOTE_BLOCK);
+                    let rt = NoteBlockLikeProperties::from_state_id(state_id, &Block::NOTE_BLOCK);
+                    assert_eq!(rt.instrument, instrument);
+                    assert_eq!(rt.note, note);
+                    assert_eq!(rt.powered, powered);
+                }
+            }
+        }
+    }
+}

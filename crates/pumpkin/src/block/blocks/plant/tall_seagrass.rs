@@ -72,3 +72,27 @@ impl PlantBlockBase for TallSeaGrassBlock {
         block_state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, DoubleBlockHalf, TallSeagrassLikeProperties,
+    };
+
+    #[test]
+    fn tall_seagrass_block_id_parity() {
+        assert_eq!(Block::TALL_SEAGRASS.name, "tall_seagrass");
+    }
+
+    #[test]
+    fn tall_seagrass_properties_parity() {
+        for half in [DoubleBlockHalf::Lower, DoubleBlockHalf::Upper] {
+            let props = TallSeagrassLikeProperties { half };
+            let state_id = props.to_state_id(&Block::TALL_SEAGRASS);
+            let roundtrip =
+                TallSeagrassLikeProperties::from_state_id(state_id, &Block::TALL_SEAGRASS);
+            assert_eq!(roundtrip.half, half);
+        }
+    }
+}

@@ -125,3 +125,35 @@ impl PlantBlockBase for KelpBlock {
         block_state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kelp_block_id_parity() {
+        assert_eq!(Block::KELP.name, "kelp");
+        assert_eq!(Block::KELP_PLANT.name, "kelp_plant");
+        assert_eq!(
+            KelpBlock::ids().as_ref(),
+            &[BlockId::KELP, BlockId::KELP_PLANT]
+        );
+    }
+
+    #[test]
+    fn kelp_default_state_parity() {
+        assert_ne!(Block::KELP.default_state.id, Block::AIR.default_state.id);
+        assert_ne!(
+            Block::KELP_PLANT.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn kelp_cannot_support_tag_parity() {
+        assert!(Block::STONE.is_solid());
+        assert!(Block::DIRT.is_solid());
+        assert!(Block::SAND.is_solid());
+        assert!(!Block::STONE.has_tag(&tag::Block::MINECRAFT_CANNOT_SUPPORT_KELP));
+    }
+}

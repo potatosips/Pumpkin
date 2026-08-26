@@ -135,3 +135,74 @@ fn can_survive(block_accessor: &dyn BlockAccessor, pos: &BlockPos) -> bool {
     block_below == &Block::CHORUS_PLANT
         || block_below.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CHORUS_PLANT)
 }
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, BrownMushroomBlockLikeProperties};
+    use pumpkin_data::tag::{self, Taggable};
+
+    #[test]
+    fn chorus_plant_block_id_parity() {
+        assert_eq!(Block::CHORUS_PLANT.name, "chorus_plant");
+        assert_eq!(Block::CHORUS_FLOWER.name, "chorus_flower");
+    }
+
+    #[test]
+    fn chorus_plant_default_state_parity() {
+        assert_ne!(
+            Block::CHORUS_PLANT.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::CHORUS_FLOWER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn chorus_plant_connection_properties_roundtrip() {
+        // Chorus plant uses BrownMushroomBlockLikeProperties (6 boolean face connections)
+        // = 64 states total
+        let mut count = 0;
+        for down in [true, false] {
+            for up in [true, false] {
+                for north in [true, false] {
+                    for south in [true, false] {
+                        for east in [true, false] {
+                            for west in [true, false] {
+                                let props = BrownMushroomBlockLikeProperties {
+                                    down,
+                                    up,
+                                    north,
+                                    south,
+                                    east,
+                                    west,
+                                };
+                                let state_id = props.to_state_id(&Block::CHORUS_PLANT);
+                                let rt = BrownMushroomBlockLikeProperties::from_state_id(
+                                    state_id,
+                                    &Block::CHORUS_PLANT,
+                                );
+                                assert_eq!(rt.down, down);
+                                assert_eq!(rt.up, up);
+                                assert_eq!(rt.north, north);
+                                assert_eq!(rt.south, south);
+                                assert_eq!(rt.east, east);
+                                assert_eq!(rt.west, west);
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 64, "Expected 64 chorus plant states");
+    }
+
+    #[test]
+    fn chorus_plant_supports_tag_parity() {
+        // End stone should support chorus plant
+        assert!(Block::END_STONE.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CHORUS_PLANT));
+    }
+}

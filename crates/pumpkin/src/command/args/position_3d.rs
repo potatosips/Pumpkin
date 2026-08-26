@@ -87,3 +87,20 @@ impl<'a> FindArg<'a> for Position3DArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_vec3_resolves_and_centers_relative_coordinates() {
+        let result = MaybeRelativePosition3D::try_new("~1.5", "~5", "~-2")
+            .and_then(|position| position.try_to_absolute(Some(Vector3::new(10.0, 64.0, 20.0))));
+        assert_eq!(result, Some(Vector3::new(11.5, 69.0, 18.0)));
+
+        // Absolute integer X/Z centers (+0.5), Y remains exact
+        let absolute_result = MaybeRelativePosition3D::try_new("10", "64", "20")
+            .and_then(|position| position.try_to_absolute(None));
+        assert_eq!(absolute_result, Some(Vector3::new(10.5, 64.0, 20.5)));
+    }
+}

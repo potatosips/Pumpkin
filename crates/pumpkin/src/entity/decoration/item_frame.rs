@@ -292,22 +292,24 @@ impl NBTStorage for ItemFrameEntity {
             {
                 *self.item_stack.lock().await = stack;
             }
-            self.rotation.store(
-                (nbt.get_byte("ItemRotation").unwrap_or(0) as u8) % 8,
-                Ordering::Relaxed,
-            );
-            let facing = nbt.get_byte("Facing").unwrap_or(0) as u8 % 6;
-            self.facing.store(facing, Ordering::Relaxed);
-            // The spawn packet's data field carries the frame's direction.
-            self.entity.data.store(i32::from(facing), Ordering::Relaxed);
-            self.item_drop_chance
-                .store(nbt.get_float("ItemDropChance").unwrap_or(1.0));
-            self.invisible.store(
-                nbt.get_bool("Invisible").unwrap_or(false),
-                Ordering::Relaxed,
-            );
-            self.fixed
-                .store(nbt.get_bool("Fixed").unwrap_or(false), Ordering::Relaxed);
+            if let Some(rotation) = nbt.get_byte("ItemRotation") {
+                self.rotation.store((rotation as u8) % 8, Ordering::Relaxed);
+            }
+            if let Some(facing) = nbt.get_byte("Facing") {
+                let facing = facing as u8 % 6;
+                self.facing.store(facing, Ordering::Relaxed);
+                // The spawn packet's data field carries the frame's direction.
+                self.entity.data.store(i32::from(facing), Ordering::Relaxed);
+            }
+            if let Some(item_drop_chance) = nbt.get_float("ItemDropChance") {
+                self.item_drop_chance.store(item_drop_chance);
+            }
+            if let Some(invisible) = nbt.get_bool("Invisible") {
+                self.invisible.store(invisible, Ordering::Relaxed);
+            }
+            if let Some(fixed) = nbt.get_bool("Fixed") {
+                self.fixed.store(fixed, Ordering::Relaxed);
+            }
         })
     }
 }
@@ -464,5 +466,27 @@ impl EntityBase for ItemFrameEntity {
 
     fn cast_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn item_frame_analog_output_matches_vanilla_spec() {
+        // Empty frame produces 0
+        let calculate_analog_output =
+            |is_empty: bool, rotation: u8| -> u8 { if is_empty { 0 } else { (rotation % 8) + 1 } };
+
+        assert_eq!(calculate_analog_output(true, 0), 0);
+        assert_eq!(calculate_analog_output(true, 4), 0);
+
+        // Frame with item produces 1..=8 based on rotation (0..8)
+        for rot in 0..8 {
+            assert_eq!(calculate_analog_output(false, rot), rot + 1);
+        }
+
+        // Modulo 8 wrapping
+        assert_eq!(calculate_analog_output(false, 8), 1);
+        assert_eq!(calculate_analog_output(false, 9), 2);
     }
 }

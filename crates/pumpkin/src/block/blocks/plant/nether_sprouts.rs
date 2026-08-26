@@ -35,3 +35,29 @@ impl PlantBlockBase for NetherSproutsBlock {
         block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_NETHER_SPROUTS)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn nether_sprouts_block_id_parity() {
+        assert_eq!(Block::NETHER_SPROUTS.name, "nether_sprouts");
+    }
+
+    #[test]
+    fn nether_sprouts_default_state_parity() {
+        assert_ne!(
+            Block::NETHER_SPROUTS.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn nether_sprouts_supports_tag_parity() {
+        assert!(Block::WARPED_NYLIUM.has_tag(&tag::Block::MINECRAFT_SUPPORTS_NETHER_SPROUTS));
+        assert!(Block::SOUL_SOIL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_NETHER_SPROUTS));
+        assert!(Block::DIRT.has_tag(&tag::Block::MINECRAFT_SUPPORTS_NETHER_SPROUTS));
+    }
+}

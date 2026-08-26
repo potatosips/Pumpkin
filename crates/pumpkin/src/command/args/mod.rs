@@ -43,6 +43,9 @@ pub mod gamemode;
 pub mod gameprofile;
 pub mod hex_color;
 pub mod message;
+pub mod nbt_compound;
+pub mod nbt_path;
+pub mod nbt_tag;
 pub mod players;
 pub mod position_2d;
 pub mod position_3d;
@@ -133,6 +136,9 @@ pub enum Arg<'a> {
     Particle(Particle),
     Msg(String),
     TextComponent(TextComponent),
+    NbtCompound(pumpkin_nbt::compound::NbtCompound),
+    NbtTag(pumpkin_nbt::tag::NbtTag),
+    NbtPath(crate::command::nbt_path::NbtPath),
     Time(i32),
     Num(Result<Number, NotInBounds>),
     Bool(bool),

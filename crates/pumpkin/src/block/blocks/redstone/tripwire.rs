@@ -96,8 +96,12 @@ impl BlockBehaviour for TripwireBlock {
                         BlockFlags::empty(),
                     )
                     .await;
-                // TODO world.emitGameEvent(player, GameEvent.SHEAR, pos);
-                // TODO: Deduct 1 durability from held shears (skip in Creative mode).
+                if !matches!(
+                    args.player.gamemode.load(),
+                    pumpkin_util::GameMode::Creative | pumpkin_util::GameMode::Spectator
+                ) {
+                    args.player.damage_held_item(1).await;
+                }
             }
         })
     }
@@ -206,6 +210,52 @@ impl TripwireBlock {
             Some(props.facing) == facing.opposite().to_horizontal_facing()
         } else {
             block == &Block::TRIPWIRE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, TripwireLikeProperties};
+
+    #[test]
+    fn tripwire_block_id_parity() {
+        assert_eq!(Block::TRIPWIRE.name, "tripwire");
+    }
+
+    #[test]
+    fn tripwire_default_state_parity() {
+        assert_ne!(
+            Block::TRIPWIRE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn tripwire_properties_roundtrip_parity() {
+        for attached in [true, false] {
+            for disarmed in [true, false] {
+                for powered in [true, false] {
+                    let props = TripwireLikeProperties {
+                        attached,
+                        disarmed,
+                        east: true,
+                        north: false,
+                        powered,
+                        south: true,
+                        west: false,
+                    };
+                    let state_id = props.to_state_id(&Block::TRIPWIRE);
+                    let rt = TripwireLikeProperties::from_state_id(state_id, &Block::TRIPWIRE);
+                    assert_eq!(rt.attached, attached);
+                    assert_eq!(rt.disarmed, disarmed);
+                    assert_eq!(rt.powered, powered);
+                    assert!(rt.east);
+                    assert!(!rt.north);
+                }
+            }
         }
     }
 }

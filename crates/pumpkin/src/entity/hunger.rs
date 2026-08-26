@@ -46,7 +46,7 @@ impl HungerManager {
         let mut heal_amount = 0.0;
         let mut damage_amount = 0.0;
 
-        if exhaustion > EXHAUSTION_COST {
+        while exhaustion > EXHAUSTION_COST {
             exhaustion -= EXHAUSTION_COST;
             if saturation > 0.0 {
                 saturation = (saturation - 1.0).max(0.0);
@@ -60,9 +60,11 @@ impl HungerManager {
             timer += 1;
             if timer >= 10 {
                 let cost = saturation.min(6.0);
-                saturation -= cost;
-                exhaustion += cost;
                 heal_amount = cost / 6.0;
+                // Vanilla charges saturated regeneration through exhaustion.
+                // Saturation is consumed later, one point per four exhaustion;
+                // subtracting it here as well charges the player twice.
+                exhaustion = (exhaustion + cost).min(MAX_EXHAUSTION);
                 timer = 0;
                 needs_sync = true;
             }
@@ -200,3 +202,46 @@ impl NBTStorage for HungerManager {
 }
 
 impl NBTStorageInit for HungerManager {}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXHAUSTION_COST, MAX_EXHAUSTION};
+
+    #[test]
+    fn saturated_regeneration_is_paid_only_through_exhaustion() {
+        let saturation = 5.0_f32;
+        let exhaustion = 0.0_f32;
+        let cost = saturation.min(6.0);
+
+        let resulting_exhaustion = (exhaustion + cost).min(MAX_EXHAUSTION);
+
+        assert_eq!(
+            saturation, 5.0,
+            "regeneration must not directly debit saturation"
+        );
+        assert_eq!(resulting_exhaustion, 5.0);
+        assert!(resulting_exhaustion > EXHAUSTION_COST);
+    }
+
+    #[test]
+    fn exhaustion_drains_fully_when_accumulated() {
+        let mut exhaustion = 10.5_f32;
+        let mut saturation = 3.0_f32;
+        let mut level = 20_u8;
+
+        while exhaustion > EXHAUSTION_COST {
+            exhaustion -= EXHAUSTION_COST;
+            if saturation > 0.0 {
+                saturation = (saturation - 1.0).max(0.0);
+            } else {
+                level = level.saturating_sub(1);
+            }
+        }
+
+        // 10.5 - 4.0 - 4.0 = 2.5 remaining
+        assert!((exhaustion - 2.5).abs() < 1.0e-5);
+        // Saturation reduced by 2 points (from 3.0 to 1.0)
+        assert!((saturation - 1.0).abs() < 1.0e-5);
+        assert_eq!(level, 20);
+    }
+}

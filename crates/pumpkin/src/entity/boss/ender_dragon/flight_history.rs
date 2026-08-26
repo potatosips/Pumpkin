@@ -40,3 +40,25 @@ impl DragonFlightHistory {
         self.samples[index as usize]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dragon_flight_history_ring_buffer_wrapping() {
+        let mut history = DragonFlightHistory::default();
+        assert_eq!(history.get(0).y, 0.0);
+
+        history.record(100.0, 45.0);
+        assert_eq!(history.get(0).y, 100.0);
+        assert_eq!(history.get(0).y_rot, 45.0);
+
+        // Fill past 64 to test circular wrap
+        for i in 1..=70 {
+            history.record(100.0 + f64::from(i), 45.0);
+        }
+        assert_eq!(history.get(0).y, 170.0);
+        assert_eq!(history.get(1).y, 169.0);
+    }
+}

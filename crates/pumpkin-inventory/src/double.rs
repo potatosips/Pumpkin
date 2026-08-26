@@ -135,3 +135,45 @@ impl Clearable for DoubleInventory {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::item::Item;
+    use pumpkin_world::inventory::SimpleInventory;
+
+    #[tokio::test]
+    async fn double_inventory_operations() {
+        let first = Arc::new(SimpleInventory::new(27));
+        let second = Arc::new(SimpleInventory::new(27));
+        let double_inv = DoubleInventory::new(first.clone(), second.clone());
+
+        assert_eq!(double_inv.size(), 54);
+        assert!(double_inv.is_empty().await);
+
+        // Put diamond in first inventory (slot 0) and iron in second inventory (slot 27 in double)
+        let diamond = ItemStack::new(10, &Item::DIAMOND);
+        let iron = ItemStack::new(20, &Item::IRON_INGOT);
+
+        double_inv.set_stack(0, diamond.clone()).await;
+        double_inv.set_stack(27, iron.clone()).await;
+
+        assert!(!double_inv.is_empty().await);
+        assert_eq!(double_inv.get_stack(0).await.item_count, 10);
+        assert_eq!(double_inv.get_stack(27).await.item_count, 20);
+        assert_eq!(first.get_stack(0).await.item_count, 10);
+        assert_eq!(second.get_stack(0).await.item_count, 20);
+
+        // Remove specific amount across boundary
+        let removed = double_inv.remove_stack_specific(27, 5).await;
+        assert_eq!(removed.item_count, 5);
+        assert_eq!(double_inv.get_stack(27).await.item_count, 15);
+        assert_eq!(second.get_stack(0).await.item_count, 15);
+
+        // Clear double inventory
+        double_inv.clear().await;
+        assert!(double_inv.is_empty().await);
+        assert!(first.is_empty().await);
+        assert!(second.is_empty().await);
+    }
+}

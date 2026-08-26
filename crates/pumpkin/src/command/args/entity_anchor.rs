@@ -77,3 +77,28 @@ impl<'a> FindArg<'a> for EntityAnchorArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entity_anchor_parsing_parity() {
+        assert_eq!(EntityAnchor::Feet.as_str(), "feet");
+        assert_eq!(EntityAnchor::Eyes.as_str(), "eyes");
+
+        let parse_anchor = |s: &str| -> Option<EntityAnchor> {
+            match s.to_lowercase().as_str() {
+                "feet" => Some(EntityAnchor::Feet),
+                "eyes" => Some(EntityAnchor::Eyes),
+                _ => None,
+            }
+        };
+
+        assert_eq!(parse_anchor("feet"), Some(EntityAnchor::Feet));
+        assert_eq!(parse_anchor("eyes"), Some(EntityAnchor::Eyes));
+        assert_eq!(parse_anchor("FEET"), Some(EntityAnchor::Feet));
+        assert_eq!(parse_anchor("EYES"), Some(EntityAnchor::Eyes));
+        assert_eq!(parse_anchor("head"), None);
+    }
+}

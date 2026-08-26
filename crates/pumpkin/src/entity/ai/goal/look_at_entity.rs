@@ -79,17 +79,13 @@ impl LookAtEntityGoal {
 impl Goal for LookAtEntityGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
-            if mob.get_random().random::<f32>() >= self.chance {
+            let mob_entity = mob.get_mob_entity();
+            if mob_entity.target.lock().await.is_some() {
                 return false;
             }
 
-            let mob_entity = mob.get_mob_entity();
-
-            {
-                let mob_target = mob_entity.target.lock().await;
-                if mob_target.is_some() {
-                    self.target.clone_from(&mob_target);
-                }
+            if mob.get_random().random::<f32>() >= self.chance {
+                return false;
             }
 
             let world = mob_entity.living_entity.entity.world.load();
@@ -111,6 +107,9 @@ impl Goal for LookAtEntityGoal {
     fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
             let mob_entity = mob.get_mob_entity();
+            if mob_entity.target.lock().await.is_some() {
+                return false;
+            }
             if let Some(target) = &self.target {
                 if !target.get_entity().is_alive() {
                     return false;

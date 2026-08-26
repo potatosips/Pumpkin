@@ -356,3 +356,51 @@ impl TripwireHookBlock {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, HorizontalFacing, TripwireHookLikeProperties,
+    };
+
+    #[test]
+    fn tripwire_hook_block_id_parity() {
+        assert_eq!(Block::TRIPWIRE_HOOK.name, "tripwire_hook");
+    }
+
+    #[test]
+    fn tripwire_hook_default_state_parity() {
+        assert_ne!(
+            Block::TRIPWIRE_HOOK.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn tripwire_hook_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for attached in [true, false] {
+                for powered in [true, false] {
+                    let props = TripwireHookLikeProperties {
+                        attached,
+                        facing,
+                        powered,
+                    };
+                    let state_id = props.to_state_id(&Block::TRIPWIRE_HOOK);
+                    let rt =
+                        TripwireHookLikeProperties::from_state_id(state_id, &Block::TRIPWIRE_HOOK);
+                    assert_eq!(rt.attached, attached);
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.powered, powered);
+                }
+            }
+        }
+    }
+}

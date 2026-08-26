@@ -250,3 +250,26 @@ impl TrackedStack {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::item::Item;
+
+    #[test]
+    fn tracked_stack_sync_state() {
+        let mut tracked = TrackedStack::EMPTY;
+        let diamond = ItemStack::new(10, &Item::DIAMOND);
+        let gold = ItemStack::new(5, &Item::GOLD_INGOT);
+
+        // Initially empty tracked state is out of sync with diamond
+        assert!(!tracked.is_in_sync(&diamond));
+
+        // When updated with received stack, it is in sync
+        tracked.set_received_stack(diamond.clone());
+        assert!(tracked.is_in_sync(&diamond));
+
+        // But out of sync with gold
+        assert!(!tracked.is_in_sync(&gold));
+    }
+}

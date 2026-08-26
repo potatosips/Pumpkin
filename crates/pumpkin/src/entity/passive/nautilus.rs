@@ -218,7 +218,7 @@ impl NautilusEntity {
 impl NBTStorage for NautilusEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_animal_nbt(nbt);
             nbt.put_bool("IsTame", self.is_tame.load(Ordering::Relaxed));
             nbt.put_bool("Saddled", self.is_saddled.load(Ordering::Relaxed));
@@ -231,7 +231,7 @@ impl NBTStorage for NautilusEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_animal_nbt(nbt);
             if let Some(is_tame) = nbt.get_bool("IsTame") {
                 self.is_tame.store(is_tame, Ordering::Relaxed);

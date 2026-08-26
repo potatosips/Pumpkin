@@ -10,7 +10,14 @@
 //! - Brew time (0-400): Progress of the current brewing operation
 //! - Fuel time (0-20): Amount of fuel remaining
 
-use std::{any::Any, pin::Pin, sync::Arc};
+use std::{
+    any::Any,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 use pumpkin_data::tag::Taggable;
 use pumpkin_data::{screen::WindowType, tag};
@@ -19,9 +26,96 @@ use pumpkin_world::{block::entities::PropertyDelegate, inventory::Inventory};
 use crate::{
     player::player_inventory::PlayerInventory,
     screen_handler::{ScreenHandler, ScreenHandlerBehaviour, ScreenHandlerFuture, ScreenProperty},
+    slot::{BoxFuture, NormalSlot, Slot},
 };
 
 use pumpkin_data::item_stack::ItemStack;
+
+pub struct BrewingPotionSlot {
+    pub inventory: Arc<dyn Inventory>,
+    pub index: usize,
+    pub id: AtomicU8,
+}
+
+impl BrewingPotionSlot {
+    pub fn new(inventory: Arc<dyn Inventory>, index: usize) -> Self {
+        Self {
+            inventory,
+            index,
+            id: AtomicU8::new(0),
+        }
+    }
+}
+
+impl Slot for BrewingPotionSlot {
+    fn get_inventory(&self) -> Arc<dyn Inventory> {
+        self.inventory.clone()
+    }
+    fn get_index(&self) -> usize {
+        self.index
+    }
+    fn set_id(&self, id: usize) {
+        self.id.store(id as u8, Ordering::Relaxed);
+    }
+    fn can_insert<'a>(&'a self, stack: &'a ItemStack) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            stack
+                .get_data_component::<pumpkin_data::data_component_impl::PotionContentsImpl>()
+                .is_some()
+                || stack.item == &pumpkin_data::item::Item::GLASS_BOTTLE
+        })
+    }
+    fn get_max_item_count_for_stack<'a>(&'a self, _stack: &'a ItemStack) -> BoxFuture<'a, u8> {
+        Box::pin(async move { 1 })
+    }
+    fn get_max_item_count(&self) -> BoxFuture<'_, u8> {
+        Box::pin(async move { 1 })
+    }
+    fn mark_dirty(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.inventory.mark_dirty();
+        })
+    }
+}
+
+pub struct BrewingFuelSlot {
+    pub inventory: Arc<dyn Inventory>,
+    pub index: usize,
+    pub id: AtomicU8,
+}
+
+impl BrewingFuelSlot {
+    pub fn new(inventory: Arc<dyn Inventory>, index: usize) -> Self {
+        Self {
+            inventory,
+            index,
+            id: AtomicU8::new(0),
+        }
+    }
+}
+
+impl Slot for BrewingFuelSlot {
+    fn get_inventory(&self) -> Arc<dyn Inventory> {
+        self.inventory.clone()
+    }
+    fn get_index(&self) -> usize {
+        self.index
+    }
+    fn set_id(&self, id: usize) {
+        self.id.store(id as u8, Ordering::Relaxed);
+    }
+    fn can_insert<'a>(&'a self, stack: &'a ItemStack) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            stack.get_item().has_tag(&tag::Item::MINECRAFT_BREWING_FUEL)
+                || stack.item == &pumpkin_data::item::Item::BLAZE_POWDER
+        })
+    }
+    fn mark_dirty(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.inventory.mark_dirty();
+        })
+    }
+}
 
 /// Screen handler for the brewing stand.
 ///
@@ -82,13 +176,19 @@ impl BrewingScreenHandler {
 
         handler.add_listener(Arc::new(BrewingScreenListener)).await;
 
-        // Add all 5 brewing stand slots: 0-2 = potions, 3 = ingredient, 4 = fuel
-        for i in 0..5 {
-            handler.add_slot(Arc::new(crate::slot::NormalSlot::new(
+        // Add 3 potion slots (0-2)
+        for i in 0..3 {
+            handler.add_slot(Arc::new(BrewingPotionSlot::new(
                 handler.inventory.clone(),
                 i,
             )));
         }
+
+        // Add ingredient slot (3)
+        handler.add_slot(Arc::new(NormalSlot::new(handler.inventory.clone(), 3)));
+
+        // Add fuel slot (4)
+        handler.add_slot(Arc::new(BrewingFuelSlot::new(handler.inventory.clone(), 4)));
 
         // Add player slots
         let pi: Arc<dyn Inventory> = player_inventory.clone();
@@ -127,7 +227,7 @@ impl ScreenHandler for BrewingScreenHandler {
     /// - Potions (0-2) -> Player inventory
     /// - Ingredient (3) -> Player inventory
     /// - Fuel (4) -> Player inventory
-    /// - From player: potions -> potion slots, fuel -> fuel slot, else -> ingredient slot
+    /// - From player: potions/bottles -> potion slots, fuel -> fuel slot, else -> ingredient slot
     fn quick_move<'a>(
         &'a mut self,
         _player: &'a dyn crate::screen_handler::InventoryPlayer,
@@ -151,17 +251,17 @@ impl ScreenHandler for BrewingScreenHandler {
                     .await
             } else {
                 // Moving from player inventory to brewing stand
-                // Check item type to determine target slot
-
-                // Check if item has potion contents (for slots 0-2)
-                let has_potion_contents = stack
+                // Check if item is potion or glass bottle (for slots 0-2)
+                let is_potion_or_bottle = stack
                     .get_data_component::<pumpkin_data::data_component_impl::PotionContentsImpl>()
-                    .is_some();
+                    .is_some()
+                    || stack.item == &pumpkin_data::item::Item::GLASS_BOTTLE;
 
                 // Check if item is brewing fuel (for slot 4)
-                let is_fuel = stack.get_item().has_tag(&tag::Item::MINECRAFT_BREWING_FUEL);
+                let is_fuel = stack.get_item().has_tag(&tag::Item::MINECRAFT_BREWING_FUEL)
+                    || stack.item == &pumpkin_data::item::Item::BLAZE_POWDER;
 
-                if has_potion_contents {
+                if is_potion_or_bottle {
                     // Try to insert into potion slots (0-2)
                     self.insert_item(&mut stack, 0, 3, false).await
                 } else if is_fuel {
@@ -200,4 +300,43 @@ pub async fn create_brewing(
     let handler =
         BrewingScreenHandler::new(sync_id, player_inventory, inventory, property_delegate).await;
     Some(handler)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::data_component_impl::PotionContentsImpl;
+    use pumpkin_data::item::Item;
+    use pumpkin_world::inventory::SimpleInventory;
+
+    #[tokio::test]
+    async fn brewing_slot_filters() {
+        let inv = Arc::new(SimpleInventory::new(5));
+        let potion_slot = BrewingPotionSlot::new(inv.clone(), 0);
+        let fuel_slot = BrewingFuelSlot::new(inv.clone(), 4);
+
+        let mut potion = ItemStack::new(1, &Item::POTION);
+        potion.set_data_component(PotionContentsImpl {
+            potion_id: Some(0),
+            custom_color: None,
+            custom_effects: Vec::new(),
+            custom_name: None,
+        });
+
+        let glass_bottle = ItemStack::new(1, &Item::GLASS_BOTTLE);
+        let blaze_powder = ItemStack::new(1, &Item::BLAZE_POWDER);
+        let stone = ItemStack::new(1, &Item::STONE);
+
+        // Potion slot accepts potion and glass bottle, rejects blaze powder and stone
+        assert!(potion_slot.can_insert(&potion).await);
+        assert!(potion_slot.can_insert(&glass_bottle).await);
+        assert!(!potion_slot.can_insert(&blaze_powder).await);
+        assert!(!potion_slot.can_insert(&stone).await);
+        assert_eq!(potion_slot.get_max_item_count().await, 1);
+
+        // Fuel slot accepts blaze powder, rejects potion and glass bottle
+        assert!(fuel_slot.can_insert(&blaze_powder).await);
+        assert!(!fuel_slot.can_insert(&potion).await);
+        assert!(!fuel_slot.can_insert(&glass_bottle).await);
+    }
 }

@@ -323,7 +323,7 @@ impl AgeableMob for SnifferEntity {
 impl NBTStorage for SnifferEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_int("State", self.get_state().id());
@@ -336,7 +336,7 @@ impl NBTStorage for SnifferEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(state_id) = nbt.get_int("State") {
@@ -407,7 +407,7 @@ impl Mob for SnifferEntity {
                     ),
                     Metadata::new(
                         pumpkin_data::tracked_data::sniffer::DROP_SEED_AT_TICK,
-                        VarInt(self.drop_seed_at_tick.load(Ordering::Relaxed)),
+                        VarInt(self.drop_seed_at_tick.load(Ordering::Relaxed) as i32),
                     ),
                 ],
                 None,
@@ -424,5 +424,29 @@ impl Mob for SnifferEntity {
             self.animal_interact(player, item_stack, Sound::EntitySnifferEat)
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniffer_state_id_mappings() {
+        assert_eq!(SnifferState::from_id(0), SnifferState::Idling);
+        assert_eq!(SnifferState::from_id(1), SnifferState::FeelingHappy);
+        assert_eq!(SnifferState::from_id(2), SnifferState::Scenting);
+        assert_eq!(SnifferState::from_id(3), SnifferState::Sniffing);
+        assert_eq!(SnifferState::from_id(4), SnifferState::Searching);
+        assert_eq!(SnifferState::from_id(5), SnifferState::Digging);
+        assert_eq!(SnifferState::from_id(6), SnifferState::Rising);
+        assert_eq!(SnifferState::from_id(99), SnifferState::Idling);
+    }
+
+    #[test]
+    fn sniffer_constants_parity() {
+        assert_eq!(DIGGING_DROP_SEED_OFFSET_TICKS, 120);
+        assert_eq!(SNIFFER_BABY_START_AGE, -48000);
+        assert_eq!(SNIFFER_FOOD.len(), 2);
     }
 }

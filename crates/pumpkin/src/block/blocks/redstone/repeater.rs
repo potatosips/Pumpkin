@@ -293,3 +293,54 @@ impl RepeaterBlock {
         Self::get_max_input_level_sides(self, world, pos, state_id, block, true).await > 0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, HorizontalFacing, RepeaterLikeProperties,
+    };
+
+    #[test]
+    fn repeater_block_id_parity() {
+        assert_eq!(Block::REPEATER.name, "repeater");
+    }
+
+    #[test]
+    fn repeater_default_state_parity() {
+        assert_ne!(
+            Block::REPEATER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn repeater_properties_roundtrip_parity() {
+        for delay in 1..=4 {
+            for facing in [
+                HorizontalFacing::North,
+                HorizontalFacing::South,
+                HorizontalFacing::East,
+                HorizontalFacing::West,
+            ] {
+                for locked in [true, false] {
+                    for powered in [true, false] {
+                        let props = RepeaterLikeProperties {
+                            delay,
+                            facing,
+                            locked,
+                            powered,
+                        };
+                        let state_id = props.to_state_id(&Block::REPEATER);
+                        let rt = RepeaterLikeProperties::from_state_id(state_id, &Block::REPEATER);
+                        assert_eq!(rt.delay, delay);
+                        assert_eq!(rt.facing, facing);
+                        assert_eq!(rt.locked, locked);
+                        assert_eq!(rt.powered, powered);
+                    }
+                }
+            }
+        }
+    }
+}

@@ -643,4 +643,17 @@ mod tests {
         assert!(!parse("@e[type=pumpkin:iron_golem]"));
         assert!(!parse("@e[type=minecraft:not_an_entity]"));
     }
+
+    #[test]
+    fn parse_combined_type_tag_and_limit_keeps_both_predicates() {
+        let mut reader = StringReader::new("@e[type=cow,tag=parity_diff,limit=1]");
+        let selector = EntitySelectorParser::new(&mut reader, true)
+            .parse_and_consume()
+            .expect("selector should parse");
+        assert_eq!(selector.predicates.len(), 3);
+        assert!(matches!(
+            &selector.predicates[2],
+            super::super::EntitySelectorPredicate::Tag(tag, false) if tag == "parity_diff"
+        ));
+    }
 }

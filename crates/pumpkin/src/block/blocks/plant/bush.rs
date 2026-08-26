@@ -36,3 +36,21 @@ impl BlockBehaviour for BushBlock {
 }
 
 impl PlantBlockBase for BushBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn bush_block_ids_parity() {
+        let ids = BushBlock::ids();
+        assert!(ids.contains(&BlockId::BUSH));
+        assert!(ids.contains(&BlockId::FIREFLY_BUSH));
+    }
+
+    #[test]
+    fn bush_default_state_parity() {
+        assert_eq!(Block::BUSH.name, "bush");
+    }
+}

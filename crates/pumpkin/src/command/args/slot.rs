@@ -107,3 +107,26 @@ impl<'a> FindArg<'a> for SlotsArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_slot_and_slot_ranges_lookup_parity() {
+        let single_slot = get_slot_range("weapon.mainhand");
+        assert!(single_slot.is_some());
+        assert_eq!(single_slot.unwrap().len(), 1);
+
+        let armor_head = get_slot_range("armor.head");
+        assert!(armor_head.is_some());
+        assert_eq!(armor_head.unwrap().len(), 1);
+
+        let multi_slots = get_slot_range("container.*");
+        assert!(multi_slots.is_some());
+        assert!(multi_slots.unwrap().len() > 1);
+
+        let invalid_slot = get_slot_range("invalid.slot.identifier");
+        assert!(invalid_slot.is_none());
+    }
+}

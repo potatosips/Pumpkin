@@ -142,3 +142,67 @@ impl BlockBehaviour for TrapDoorBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, Half, HorizontalFacing, OakTrapdoorLikeProperties,
+    };
+
+    #[test]
+    fn trapdoor_ids_parity() {
+        assert_eq!(Block::OAK_TRAPDOOR.name, "oak_trapdoor");
+        assert_eq!(Block::IRON_TRAPDOOR.name, "iron_trapdoor");
+        assert_eq!(Block::COPPER_TRAPDOOR.name, "copper_trapdoor");
+    }
+
+    #[test]
+    fn trapdoor_default_state_parity() {
+        assert_ne!(
+            Block::OAK_TRAPDOOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::IRON_TRAPDOOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn trapdoor_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for half in [Half::Top, Half::Bottom] {
+                for open in [true, false] {
+                    for powered in [true, false] {
+                        for waterlogged in [true, false] {
+                            let props = OakTrapdoorLikeProperties {
+                                facing,
+                                half,
+                                open,
+                                powered,
+                                waterlogged,
+                            };
+                            let state_id = props.to_state_id(&Block::OAK_TRAPDOOR);
+                            let rt = OakTrapdoorLikeProperties::from_state_id(
+                                state_id,
+                                &Block::OAK_TRAPDOOR,
+                            );
+                            assert_eq!(rt.facing, facing);
+                            assert_eq!(rt.half, half);
+                            assert_eq!(rt.open, open);
+                            assert_eq!(rt.powered, powered);
+                            assert_eq!(rt.waterlogged, waterlogged);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -11,6 +11,129 @@ use tracing::warn;
 
 use crate::world_info::{WorldGenSettings, WorldInfoError};
 
+#[derive(Clone, Copy)]
+enum JavaRuleTransform {
+    Direct,
+    InvertedBool,
+    FireTick,
+}
+
+/// The exact Java 1.21.4 gamerule surface and its mapping to Pumpkin's internal
+/// (newer cross-edition) registry. Keep this list version-specific.
+fn java_1_21_4_game_rules() -> Vec<(&'static str, GameRule, JavaRuleTransform)> {
+    use GameRule::*;
+    use JavaRuleTransform::{Direct as D, FireTick as F, InvertedBool as I};
+    vec![
+        ("announceAdvancements", ShowAdvancementMessages, D),
+        ("blockExplosionDropDecay", BlockExplosionDropDecay, D),
+        ("commandBlockOutput", CommandBlockOutput, D),
+        ("commandModificationBlockLimit", MaxBlockModifications, D),
+        ("disableElytraMovementCheck", ElytraMovementCheck, I),
+        ("disablePlayerMovementCheck", PlayerMovementCheck, I),
+        ("disableRaids", Raids, I),
+        ("doDaylightCycle", AdvanceTime, D),
+        ("doEntityDrops", EntityDrops, D),
+        ("doFireTick", FireSpreadRadiusAroundPlayer, F),
+        ("doImmediateRespawn", ImmediateRespawn, D),
+        ("doInsomnia", SpawnPhantoms, D),
+        ("doLimitedCrafting", LimitedCrafting, D),
+        ("doMobLoot", MobDrops, D),
+        ("doMobSpawning", SpawnMobs, D),
+        ("doPatrolSpawning", SpawnPatrols, D),
+        ("doTileDrops", BlockDrops, D),
+        ("doTraderSpawning", SpawnWanderingTraders, D),
+        ("doVinesSpread", SpreadVines, D),
+        ("doWardenSpawning", SpawnWardens, D),
+        ("doWeatherCycle", AdvanceWeather, D),
+        ("drowningDamage", DrowningDamage, D),
+        ("enderPearlsVanishOnDeath", EnderPearlsVanishOnDeath, D),
+        ("fallDamage", FallDamage, D),
+        ("fireDamage", FireDamage, D),
+        ("forgiveDeadPlayers", ForgiveDeadPlayers, D),
+        ("freezeDamage", FreezeDamage, D),
+        ("globalSoundEvents", GlobalSoundEvents, D),
+        ("keepInventory", KeepInventory, D),
+        ("lavaSourceConversion", LavaSourceConversion, D),
+        ("logAdminCommands", LogAdminCommands, D),
+        ("maxCommandChainLength", MaxCommandSequenceLength, D),
+        ("maxCommandForkCount", MaxCommandForks, D),
+        ("maxEntityCramming", MaxEntityCramming, D),
+        ("mobExplosionDropDecay", MobExplosionDropDecay, D),
+        ("mobGriefing", MobGriefing, D),
+        ("naturalRegeneration", NaturalHealthRegeneration, D),
+        (
+            "playersNetherPortalCreativeDelay",
+            PlayersNetherPortalCreativeDelay,
+            D,
+        ),
+        (
+            "playersNetherPortalDefaultDelay",
+            PlayersNetherPortalDefaultDelay,
+            D,
+        ),
+        ("playersSleepingPercentage", PlayersSleepingPercentage, D),
+        ("projectilesCanBreakBlocks", ProjectilesCanBreakBlocks, D),
+        ("randomTickSpeed", RandomTickSpeed, D),
+        ("reducedDebugInfo", ReducedDebugInfo, D),
+        ("sendCommandFeedback", SendCommandFeedback, D),
+        ("showDeathMessages", ShowDeathMessages, D),
+        ("snowAccumulationHeight", MaxSnowAccumulationHeight, D),
+        ("spawnChunkRadius", SpawnChunkRadius, D),
+        ("spawnRadius", RespawnRadius, D),
+        ("spectatorsGenerateChunks", SpectatorsGenerateChunks, D),
+        ("tntExplosionDropDecay", TntExplosionDropDecay, D),
+        ("universalAnger", UniversalAnger, D),
+        ("waterSourceConversion", WaterSourceConversion, D),
+    ]
+}
+
+#[must_use]
+pub fn java_game_rules_to_nbt(rules: &GameRuleRegistry) -> NbtCompound {
+    let mut result = NbtCompound::new();
+    for (name, rule, transform) in java_1_21_4_game_rules() {
+        let value = match (transform, rules.get(&rule)) {
+            (JavaRuleTransform::Direct, GameRuleValue::Bool(value)) => value.to_string(),
+            (JavaRuleTransform::Direct, GameRuleValue::Int(value)) => value.to_string(),
+            (JavaRuleTransform::InvertedBool, GameRuleValue::Bool(value)) => (!*value).to_string(),
+            (JavaRuleTransform::FireTick, GameRuleValue::Int(value)) => (*value >= 0).to_string(),
+            _ => unreachable!("invalid Java 1.21.4 gamerule mapping"),
+        };
+        result.put_string(name, value);
+    }
+    result
+}
+
+pub fn apply_java_game_rules_from_nbt(rules: &mut GameRuleRegistry, nbt: &NbtCompound) {
+    for (name, rule, transform) in java_1_21_4_game_rules() {
+        let Some(serialized) = nbt.get_string(name) else {
+            continue;
+        };
+        match (transform, rules.get_mut(&rule)) {
+            (JavaRuleTransform::Direct, GameRuleValue::Bool(value)) => {
+                if let Ok(parsed) = serialized.parse::<bool>() {
+                    *value = parsed;
+                }
+            }
+            (JavaRuleTransform::Direct, GameRuleValue::Int(value)) => {
+                if let Ok(parsed) = serialized.parse::<i32>() {
+                    *value = i64::from(parsed);
+                }
+            }
+            (JavaRuleTransform::InvertedBool, GameRuleValue::Bool(value)) => {
+                if let Ok(parsed) = serialized.parse::<bool>() {
+                    *value = !parsed;
+                }
+            }
+            (JavaRuleTransform::FireTick, GameRuleValue::Int(value)) => {
+                if let Ok(parsed) = serialized.parse::<bool>() {
+                    *value = if parsed { 128 } else { -1 };
+                }
+            }
+            _ => unreachable!("invalid Java 1.21.4 gamerule mapping"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct DataFileRoot<T> {
     #[serde(rename = "data")]
@@ -455,4 +578,36 @@ pub fn write_scheduled_events_stub(
 
     pumpkin_nbt::nbt_compress::write_gzip_compound_tag(root, file)
         .map_err(|e| WorldInfoError::SerializationError(e.to_string()))
+}
+
+#[cfg(test)]
+mod java_game_rule_tests {
+    use super::*;
+
+    #[test]
+    fn java_1_21_4_game_rules_use_exact_string_surface() {
+        let nbt = java_game_rules_to_nbt(&GameRuleRegistry::default());
+        assert_eq!(nbt.child_tags.len(), 52);
+        assert_eq!(nbt.get_string("fallDamage"), Some("true"));
+        assert_eq!(nbt.get_string("spawnChunkRadius"), Some("2"));
+        assert!(nbt.get_string("fall_damage").is_none());
+        assert!(nbt.get_string("locatorBar").is_none());
+    }
+
+    #[test]
+    fn java_1_21_4_game_rules_round_trip_transforms() {
+        let mut source = GameRuleRegistry::default();
+        source.raids = false;
+        source.fire_spread_radius_around_player = -1;
+        source.random_tick_speed = -42;
+
+        let nbt = java_game_rules_to_nbt(&source);
+        assert_eq!(nbt.get_string("disableRaids"), Some("true"));
+        assert_eq!(nbt.get_string("doFireTick"), Some("false"));
+        assert_eq!(nbt.get_string("randomTickSpeed"), Some("-42"));
+
+        let mut decoded = GameRuleRegistry::default();
+        apply_java_game_rules_from_nbt(&mut decoded, &nbt);
+        assert_eq!(decoded, source);
+    }
 }

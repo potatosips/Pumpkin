@@ -171,3 +171,59 @@ fn is_in_wall(args: &GetStateForNeighborUpdateArgs<'_>) -> FenceGateProperties {
 
     fence_props
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, HorizontalFacing, OakFenceGateLikeProperties,
+    };
+
+    #[test]
+    fn fence_gate_ids_parity() {
+        assert_eq!(Block::OAK_FENCE_GATE.name, "oak_fence_gate");
+        assert_eq!(Block::BAMBOO_FENCE_GATE.name, "bamboo_fence_gate");
+        assert_eq!(Block::CHERRY_FENCE_GATE.name, "cherry_fence_gate");
+    }
+
+    #[test]
+    fn fence_gate_default_state_parity() {
+        assert_ne!(
+            Block::OAK_FENCE_GATE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn fence_gate_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for in_wall in [true, false] {
+                for open in [true, false] {
+                    for powered in [true, false] {
+                        let props = OakFenceGateLikeProperties {
+                            facing,
+                            in_wall,
+                            open,
+                            powered,
+                        };
+                        let state_id = props.to_state_id(&Block::OAK_FENCE_GATE);
+                        let rt = OakFenceGateLikeProperties::from_state_id(
+                            state_id,
+                            &Block::OAK_FENCE_GATE,
+                        );
+                        assert_eq!(rt.facing, facing);
+                        assert_eq!(rt.in_wall, in_wall);
+                        assert_eq!(rt.open, open);
+                        assert_eq!(rt.powered, powered);
+                    }
+                }
+            }
+        }
+    }
+}

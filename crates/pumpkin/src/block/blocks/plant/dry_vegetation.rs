@@ -114,3 +114,38 @@ impl PlantBlockBase for DryVegetationBlock {
         block_below.has_tag(&tag::Block::MINECRAFT_SUPPORTS_DRY_VEGETATION)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn dry_vegetation_block_id_parity() {
+        assert_eq!(Block::DEAD_BUSH.name, "dead_bush");
+        assert_eq!(
+            DryVegetationBlock::ids().as_ref(),
+            &[
+                BlockId::DEAD_BUSH,
+                BlockId::TALL_DRY_GRASS,
+                BlockId::SHORT_DRY_GRASS,
+            ]
+        );
+    }
+
+    #[test]
+    fn dry_vegetation_default_state_parity() {
+        assert_ne!(
+            Block::DEAD_BUSH.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn dry_vegetation_supports_tag_parity() {
+        assert!(Block::SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_DRY_VEGETATION));
+        assert!(Block::RED_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_DRY_VEGETATION));
+        assert!(Block::TERRACOTTA.has_tag(&tag::Block::MINECRAFT_SUPPORTS_DRY_VEGETATION));
+        assert!(Block::DIRT.has_tag(&tag::Block::MINECRAFT_SUPPORTS_DRY_VEGETATION));
+    }
+}

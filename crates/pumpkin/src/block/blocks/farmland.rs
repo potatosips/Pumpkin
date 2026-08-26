@@ -4,6 +4,7 @@ use crate::block::BlockBehaviour;
 use crate::block::BlockFuture;
 use crate::block::CanPlaceAtArgs;
 use crate::block::GetStateForNeighborUpdateArgs;
+use crate::block::OnLandedUponArgs;
 use crate::block::OnPlaceArgs;
 use crate::block::OnScheduledTickArgs;
 use crate::block::RandomTickArgs;
@@ -28,6 +29,44 @@ type FarmlandProperties = FarmlandLikeProperties;
 pub struct FarmlandBlock;
 
 impl BlockBehaviour for FarmlandBlock {
+    fn on_landed_upon<'a>(&'a self, args: OnLandedUponArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(living) = args.entity.get_living_entity() {
+                living
+                    .handle_fall_damage(args.entity, args.fall_distance, 1.0)
+                    .await;
+            }
+
+            if args.fall_distance > 0.5 {
+                let entity_pos = args.entity.get_entity().pos.load();
+                let target_pos = BlockPos(Vector3::new(
+                    entity_pos.x.floor() as i32,
+                    (entity_pos.y - 0.2).floor() as i32,
+                    entity_pos.z.floor() as i32,
+                ));
+                if args.world.get_block(&target_pos) == &Block::FARMLAND {
+                    let mut event =
+                        crate::plugin::api::events::block::block_fade::BlockFadeEvent::new(
+                            target_pos,
+                            &Block::DIRT,
+                        );
+                    if let Some(server) = args.world.server.upgrade() {
+                        server.plugin_manager.fire(&server, &mut event).await;
+                    }
+                    if !event.cancelled {
+                        args.world
+                            .set_block_state(
+                                &target_pos,
+                                Block::DIRT.default_state.id,
+                                BlockFlags::NOTIFY_ALL,
+                            )
+                            .await;
+                    }
+                }
+            }
+        })
+    }
+
     fn on_scheduled_tick<'a>(&'a self, args: OnScheduledTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             // TODO: push up entities
@@ -69,8 +108,9 @@ impl BlockBehaviour for FarmlandBlock {
 
     fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            // TODO: add rain check. Remember to check which one is most optimized.
-            if is_water_nearby(args.world, args.position) {
+            if is_water_nearby(args.world, args.position)
+                || args.world.is_raining_at(&args.position.up()).await
+            {
                 let mut props = FarmlandProperties::default(args.block);
                 props.moisture = 7;
                 let mut event = crate::plugin::block::moisture_change::MoistureChangeEvent {

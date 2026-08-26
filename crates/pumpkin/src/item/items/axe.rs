@@ -3,10 +3,9 @@ use std::pin::Pin;
 use crate::entity::player::Player;
 use crate::item::{ItemBehaviour, ItemMetadata};
 use crate::server::Server;
-use pumpkin_data::block_properties::BlockProperties;
-use pumpkin_data::block_properties::{OakDoorLikeProperties, PaleOakWoodLikeProperties};
 use pumpkin_data::item_stack::ItemStack;
-use pumpkin_data::tag::Taggable;
+use pumpkin_data::sound::{Sound, SoundCategory};
+use pumpkin_data::world::WorldEvent;
 use pumpkin_data::{Block, tag};
 use pumpkin_data::{BlockDirection, BlockId};
 use pumpkin_util::GameMode;
@@ -40,44 +39,14 @@ impl ItemBehaviour for AxeItem {
             // First we try to strip the block. by getting his equivalent and applying it the axis.
 
             // If there is a strip equivalent.
-            let changed = if let Some(replacement) = replacement_block {
-                let new_block = replacement.to_block();
-                // Bamboo blocks are pillars too, but they are not part of the logs tag.
-                let new_state_id = if block.has_tag(&tag::Block::MINECRAFT_LOGS)
-                    || block == &Block::BAMBOO_BLOCK
-                {
-                    let log_information = world.get_block_state_id(&location);
-                    let log_props =
-                        PaleOakWoodLikeProperties::from_state_id(log_information, block);
-                    // create new properties for the new log.
-                    let mut new_log_properties = PaleOakWoodLikeProperties::default(new_block);
-                    new_log_properties.axis = log_props.axis;
-
-                    // create new properties for the new log.
-
-                    // Set old axis to the new log.
-                    new_log_properties.axis = log_props.axis;
-                    new_log_properties.to_state_id(new_block)
+            let changed = if let Some((replacement, effect)) = replacement_block {
+                world.play_sound(effect.sound(), SoundCategory::Blocks, &location.to_f64());
+                if let Some(event) = effect.world_event() {
+                    world.sync_world_event(event, location, 0);
                 }
-                // Let's check if It's a door
-                else if block.has_tag(&tag::Block::MINECRAFT_DOORS) {
-                    // get block state of the old log.
-                    let door_information = world.get_block_state_id(&location);
-                    // get the log properties
-                    let door_props = OakDoorLikeProperties::from_state_id(door_information, block);
-                    // create new properties for the new log.
-                    let mut new_door_properties = OakDoorLikeProperties::default(new_block);
-                    // Set old axis to the new log.
-                    new_door_properties.facing = door_props.facing;
-                    new_door_properties.open = door_props.open;
-                    new_door_properties.half = door_props.half;
-                    new_door_properties.hinge = door_props.hinge;
-                    new_door_properties.powered = door_props.powered;
-                    new_door_properties.to_state_id(new_block)
-                } else {
-                    new_block.default_state.id
-                };
-                // TODO Implements trapdoors when It's implemented
+                let new_block = replacement.to_block();
+                let old_state_id = world.get_block_state_id(&location);
+                let new_state_id = state_with_properties_of(block, old_state_id, new_block);
                 world
                     .set_block_state(&location, new_state_id, BlockFlags::NOTIFY_ALL)
                     .await;
@@ -87,7 +56,6 @@ impl ItemBehaviour for AxeItem {
             };
 
             if changed && player.gamemode.load() != GameMode::Creative {
-                // TODO: Handle DamageResult::Broken to broadcast item break and update player slot.
                 let _ = item.damage_item(1);
             }
         })
@@ -97,17 +65,122 @@ impl ItemBehaviour for AxeItem {
         self
     }
 }
-const fn try_use_axe(id: BlockId) -> Option<BlockId> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AxeEffect {
+    Strip,
+    Scrape,
+    WaxOff,
+}
+
+/// Vanilla's `BlockState#setValue`-style replacement copies every property
+/// shared by the old and replacement blocks. Unsupported properties are
+/// ignored by the generated replacement property parser.
+pub(crate) fn state_with_properties_of(
+    old_block: &Block,
+    old_state_id: pumpkin_data::BlockStateId,
+    new_block: &Block,
+) -> pumpkin_data::BlockStateId {
+    old_block
+        .properties(old_state_id)
+        .map_or(new_block.default_state.id, |properties| {
+            new_block
+                .from_properties(&properties.to_props())
+                .to_state_id(new_block)
+        })
+}
+
+impl AxeEffect {
+    const fn sound(self) -> Sound {
+        match self {
+            Self::Strip => Sound::ItemAxeStrip,
+            Self::Scrape => Sound::ItemAxeScrape,
+            Self::WaxOff => Sound::ItemAxeWaxOff,
+        }
+    }
+
+    const fn world_event(self) -> Option<WorldEvent> {
+        match self {
+            Self::Strip => None,
+            Self::Scrape => Some(WorldEvent::ParticlesScrape),
+            Self::WaxOff => Some(WorldEvent::ParticlesWaxOff),
+        }
+    }
+}
+
+const fn try_use_axe(id: BlockId) -> Option<(BlockId, AxeEffect)> {
     // Trying to get the strip equivalent
     if let Some(block) = get_stripped_equivalent(id) {
-        return Some(block);
+        return Some((block, AxeEffect::Strip));
     }
     // Else decrease the level of oxidation
     if let Some(block) = get_deoxidized_equivalent(id) {
-        return Some(block);
+        return Some((block, AxeEffect::Scrape));
     }
     // Else unwax the block
-    get_unwaxed_equivalent(id)
+    match get_unwaxed_equivalent(id) {
+        Some(block) => Some((block, AxeEffect::WaxOff)),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_axe_effect_priority_and_feedback() {
+        assert_eq!(
+            try_use_axe(BlockId::OAK_LOG),
+            Some((BlockId::STRIPPED_OAK_LOG, AxeEffect::Strip))
+        );
+        assert_eq!(
+            try_use_axe(BlockId::WEATHERED_COPPER),
+            Some((BlockId::EXPOSED_COPPER, AxeEffect::Scrape))
+        );
+        assert_eq!(
+            try_use_axe(BlockId::WAXED_WEATHERED_COPPER),
+            Some((BlockId::WEATHERED_COPPER, AxeEffect::WaxOff))
+        );
+        assert_eq!(try_use_axe(BlockId::STONE), None);
+
+        assert!(AxeEffect::Strip.world_event().is_none());
+        assert_eq!(
+            AxeEffect::Scrape.world_event().map(|event| event as u16),
+            Some(WorldEvent::ParticlesScrape as u16)
+        );
+        assert_eq!(
+            AxeEffect::WaxOff.world_event().map(|event| event as u16),
+            Some(WorldEvent::ParticlesWaxOff as u16)
+        );
+    }
+
+    #[test]
+    fn copper_replacements_preserve_all_shared_block_properties() {
+        let pairs = [
+            (&Block::COPPER_TRAPDOOR, &Block::WAXED_COPPER_TRAPDOOR),
+            (&Block::CUT_COPPER_STAIRS, &Block::WAXED_CUT_COPPER_STAIRS),
+            (&Block::CUT_COPPER_SLAB, &Block::WAXED_CUT_COPPER_SLAB),
+            (&Block::COPPER_BULB, &Block::WAXED_COPPER_BULB),
+        ];
+
+        for (old_block, new_block) in pairs {
+            let old_state = old_block.states.last().expect("block has states").id;
+            let new_state = state_with_properties_of(old_block, old_state, new_block);
+            assert_eq!(
+                old_block
+                    .properties(old_state)
+                    .expect("old properties")
+                    .to_props(),
+                new_block
+                    .properties(new_state)
+                    .expect("new properties")
+                    .to_props(),
+                "{} -> {} lost block state",
+                old_block.name,
+                new_block.name,
+            );
+        }
+    }
 }
 
 const fn get_stripped_equivalent(id: BlockId) -> Option<BlockId> {

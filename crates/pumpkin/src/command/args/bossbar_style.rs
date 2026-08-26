@@ -89,3 +89,44 @@ impl<'a> FindArg<'a> for BossbarStyleArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bossbar_style_arg_parsing_parity() {
+        let parse_style = |s: &str| -> Option<BossbarDivisions> {
+            match s {
+                "notched_10" => Some(BossbarDivisions::Notches10),
+                "notched_12" => Some(BossbarDivisions::Notches12),
+                "notched_20" => Some(BossbarDivisions::Notches20),
+                "notched_6" => Some(BossbarDivisions::Notches6),
+                "progress" => Some(BossbarDivisions::NoDivision),
+                _ => None,
+            }
+        };
+
+        assert!(matches!(
+            parse_style("progress"),
+            Some(BossbarDivisions::NoDivision)
+        ));
+        assert!(matches!(
+            parse_style("notched_6"),
+            Some(BossbarDivisions::Notches6)
+        ));
+        assert!(matches!(
+            parse_style("notched_10"),
+            Some(BossbarDivisions::Notches10)
+        ));
+        assert!(matches!(
+            parse_style("notched_12"),
+            Some(BossbarDivisions::Notches12)
+        ));
+        assert!(matches!(
+            parse_style("notched_20"),
+            Some(BossbarDivisions::Notches20)
+        ));
+        assert!(parse_style("notched_8").is_none());
+    }
+}

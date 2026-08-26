@@ -116,3 +116,44 @@ impl BlockBehaviour for RailBlock {
         can_place_rail_at(args.block_accessor, args.position)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, RailLikeProperties, RailShape};
+
+    #[test]
+    fn rail_block_id_parity() {
+        assert_eq!(Block::RAIL.name, "rail");
+    }
+
+    #[test]
+    fn rail_default_state_parity() {
+        assert_ne!(Block::RAIL.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn rail_properties_roundtrip_parity() {
+        for shape in [
+            RailShape::NorthSouth,
+            RailShape::EastWest,
+            RailShape::AscendingEast,
+            RailShape::AscendingWest,
+            RailShape::AscendingNorth,
+            RailShape::AscendingSouth,
+            RailShape::SouthEast,
+            RailShape::SouthWest,
+            RailShape::NorthWest,
+            RailShape::NorthEast,
+        ] {
+            for waterlogged in [true, false] {
+                let props = RailLikeProperties { shape, waterlogged };
+                let state_id = props.to_state_id(&Block::RAIL);
+                let rt = RailLikeProperties::from_state_id(state_id, &Block::RAIL);
+                assert_eq!(rt.shape, shape);
+                assert_eq!(rt.waterlogged, waterlogged);
+            }
+        }
+    }
+}

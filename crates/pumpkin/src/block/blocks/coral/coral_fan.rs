@@ -231,3 +231,30 @@ fn can_place_at(world: &dyn BlockAccessor, block_pos: &BlockPos, facing: Horizon
         .get_block_state(&block_pos.offset(facing.to_offset()))
         .is_side_solid(facing.opposite().to_block_direction())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn coral_fan_ids_parity() {
+        assert_eq!(Block::TUBE_CORAL_FAN.name, "tube_coral_fan");
+        assert_eq!(Block::TUBE_CORAL_WALL_FAN.name, "tube_coral_wall_fan");
+        assert_eq!(Block::DEAD_TUBE_CORAL_FAN.name, "dead_tube_coral_fan");
+        assert_eq!(
+            Block::DEAD_TUBE_CORAL_WALL_FAN.name,
+            "dead_tube_coral_wall_fan"
+        );
+    }
+
+    #[test]
+    fn coral_fan_properties_parity() {
+        for waterlogged in [true, false] {
+            let props = CoralFanLikeProperties { waterlogged };
+            let state_id = props.to_state_id(&Block::TUBE_CORAL_FAN);
+            let roundtrip = CoralFanLikeProperties::from_state_id(state_id, &Block::TUBE_CORAL_FAN);
+            assert_eq!(roundtrip.waterlogged, waterlogged);
+        }
+    }
+}

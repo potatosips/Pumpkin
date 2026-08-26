@@ -268,10 +268,17 @@ pub fn build() -> TokenStream {
 
 fn reverse_mapping(mapping: &[u16], mapped_size: usize) -> Vec<u16> {
     let mut result = vec![0u16; mapped_size];
+    let mut seen = vec![false; mapped_size];
     for (new_id, old_id) in mapping.iter().enumerate() {
         let old_id = *old_id as usize;
-        if old_id != 0 && old_id < mapped_size {
+        // ViaBackwards maps items introduced in newer versions onto fallback
+        // items that already existed in the older registry. Preserve the first
+        // (canonical) source ID instead of letting a later fallback overwrite
+        // the reverse mapping (for example diamond_spear overwriting
+        // diamond_sword in the 1.21.4 table).
+        if old_id != 0 && old_id < mapped_size && !seen[old_id] {
             result[old_id] = new_id as u16;
+            seen[old_id] = true;
         }
     }
     result

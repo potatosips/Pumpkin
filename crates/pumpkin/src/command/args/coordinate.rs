@@ -73,3 +73,34 @@ impl<const IS_Y: bool> MaybeRelativeBlockCoordinate<IS_Y> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_coordinate_centering_and_relative_offsets_parity() {
+        // X/Z integer coordinates get centered (+0.5)
+        let x_coord = MaybeRelativeCoordinate::<false>::try_from("100").unwrap();
+        assert_eq!(x_coord.into_absolute(None), Some(100.5));
+
+        // X/Z decimal coordinates are exact
+        let x_decimal = MaybeRelativeCoordinate::<false>::try_from("100.25").unwrap();
+        assert_eq!(x_decimal.into_absolute(None), Some(100.25));
+
+        // Y coordinates do not get centered
+        let y_coord = MaybeRelativeCoordinate::<true>::try_from("64").unwrap();
+        assert_eq!(y_coord.into_absolute(None), Some(64.0));
+
+        // Relative coordinates
+        let rel_x = MaybeRelativeCoordinate::<false>::try_from("~5.5").unwrap();
+        assert_eq!(rel_x.into_absolute(Some(10.0)), Some(15.5));
+
+        let rel_empty = MaybeRelativeCoordinate::<false>::try_from("~").unwrap();
+        assert_eq!(rel_empty.into_absolute(Some(10.0)), Some(10.0));
+
+        // Block coordinates floor calculation
+        let block_rel = MaybeRelativeBlockCoordinate::<false>::try_from("~0.6").unwrap();
+        assert_eq!(block_rel.into_absolute(Some(10.2)), Some(10));
+    }
+}

@@ -75,3 +75,28 @@ fn can_survive(block_accessor: &dyn BlockAccessor, pos: &BlockPos) -> bool {
 
     plant_count == 1
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::tag::{self, Taggable};
+
+    #[test]
+    fn chorus_flower_block_id_parity() {
+        assert_eq!(Block::CHORUS_FLOWER.name, "chorus_flower");
+    }
+
+    #[test]
+    fn chorus_flower_default_state_parity() {
+        assert_ne!(
+            Block::CHORUS_FLOWER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn chorus_flower_supports_tag_parity() {
+        assert!(Block::END_STONE.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CHORUS_FLOWER));
+    }
+}

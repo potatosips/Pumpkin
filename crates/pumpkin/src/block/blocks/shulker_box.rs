@@ -119,3 +119,46 @@ impl BlockBehaviour for ShulkerBoxBlock {
 impl ShulkerBoxBlock {
     pub const OPEN_ANIMATION_EVENT_TYPE: u8 = 1;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, EndRodLikeProperties, Facing};
+
+    #[test]
+    fn shulker_box_ids_parity() {
+        assert_eq!(Block::SHULKER_BOX.name, "shulker_box");
+        assert_eq!(Block::WHITE_SHULKER_BOX.name, "white_shulker_box");
+        assert_eq!(Block::BLACK_SHULKER_BOX.name, "black_shulker_box");
+    }
+
+    #[test]
+    fn shulker_box_default_state_parity() {
+        assert_ne!(
+            Block::SHULKER_BOX.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::WHITE_SHULKER_BOX.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn shulker_box_properties_roundtrip_parity() {
+        for facing in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            let props = EndRodLikeProperties { facing };
+            let state_id = props.to_state_id(&Block::SHULKER_BOX);
+            let rt = EndRodLikeProperties::from_state_id(state_id, &Block::SHULKER_BOX);
+            assert_eq!(rt.facing, facing);
+        }
+    }
+}

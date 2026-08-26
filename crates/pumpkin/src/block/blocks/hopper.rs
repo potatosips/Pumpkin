@@ -148,3 +148,39 @@ async fn check_powered_state(
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, FacingHopper, HopperLikeProperties};
+
+    #[test]
+    fn hopper_block_id_parity() {
+        assert_eq!(Block::HOPPER.name, "hopper");
+    }
+
+    #[test]
+    fn hopper_default_state_parity() {
+        assert_ne!(Block::HOPPER.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn hopper_properties_roundtrip_parity() {
+        for facing in [
+            FacingHopper::Down,
+            FacingHopper::North,
+            FacingHopper::South,
+            FacingHopper::West,
+            FacingHopper::East,
+        ] {
+            for enabled in [true, false] {
+                let props = HopperLikeProperties { enabled, facing };
+                let state_id = props.to_state_id(&Block::HOPPER);
+                let rt = HopperLikeProperties::from_state_id(state_id, &Block::HOPPER);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.enabled, enabled);
+            }
+        }
+    }
+}

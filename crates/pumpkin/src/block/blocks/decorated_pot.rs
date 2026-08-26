@@ -132,3 +132,47 @@ impl BlockBehaviour for DecoratedPotBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, DecoratedPotLikeProperties, HorizontalFacing,
+    };
+
+    #[test]
+    fn decorated_pot_block_id_parity() {
+        assert_eq!(Block::DECORATED_POT.name, "decorated_pot");
+    }
+
+    #[test]
+    fn decorated_pot_default_state_parity() {
+        assert_ne!(
+            Block::DECORATED_POT.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn decorated_pot_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for waterlogged in [true, false] {
+                let props = DecoratedPotLikeProperties {
+                    facing,
+                    waterlogged,
+                    cracked: false,
+                };
+                let state_id = props.to_state_id(&Block::DECORATED_POT);
+                let rt = DecoratedPotLikeProperties::from_state_id(state_id, &Block::DECORATED_POT);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.waterlogged, waterlogged);
+            }
+        }
+    }
+}

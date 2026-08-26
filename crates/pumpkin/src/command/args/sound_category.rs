@@ -91,3 +91,49 @@ impl<'a> FindArg<'a> for SoundCategoryArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sound_category_name_mapping_parity() {
+        let parse_category = |s: &str| -> Option<SoundCategory> {
+            match s.to_lowercase().as_str() {
+                "master" => Some(SoundCategory::Master),
+                "music" => Some(SoundCategory::Music),
+                "record" => Some(SoundCategory::Records),
+                "weather" => Some(SoundCategory::Weather),
+                "block" => Some(SoundCategory::Blocks),
+                "hostile" => Some(SoundCategory::Hostile),
+                "neutral" => Some(SoundCategory::Neutral),
+                "player" => Some(SoundCategory::Players),
+                "ambient" => Some(SoundCategory::Ambient),
+                "voice" => Some(SoundCategory::Voice),
+                _ => None,
+            }
+        };
+
+        assert!(matches!(
+            parse_category("master"),
+            Some(SoundCategory::Master)
+        ));
+        assert!(matches!(
+            parse_category("record"),
+            Some(SoundCategory::Records)
+        ));
+        assert!(matches!(
+            parse_category("block"),
+            Some(SoundCategory::Blocks)
+        ));
+        assert!(matches!(
+            parse_category("player"),
+            Some(SoundCategory::Players)
+        ));
+        assert!(matches!(
+            parse_category("VOICE"),
+            Some(SoundCategory::Voice)
+        ));
+        assert!(parse_category("unknown").is_none());
+    }
+}

@@ -163,3 +163,63 @@ impl ComposterBlock {
         world.spawn_entity(Arc::new(item_entity)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_composter_chances_and_levels() {
+        // Tier 1 (30%): Leaves, Seeds, Sweet Berries
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::OAK_LEAVES.id),
+            Some(0.30)
+        );
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::WHEAT_SEEDS.id),
+            Some(0.30)
+        );
+
+        // Tier 2 (50%): Cactus, Sugar Cane, Dried Kelp
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::CACTUS.id),
+            Some(0.50)
+        );
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::SUGAR_CANE.id),
+            Some(0.50)
+        );
+
+        // Tier 3 (65%): Apple, Carrot, Wheat
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::APPLE.id),
+            Some(0.65)
+        );
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::WHEAT.id),
+            Some(0.65)
+        );
+
+        // Tier 4 (85%): Bread, Cookie, Baked Potato
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::BREAD.id),
+            Some(0.85)
+        );
+
+        // Tier 5 (100%): Cake, Pumpkin Pie
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::CAKE.id),
+            Some(1.00)
+        );
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::PUMPKIN_PIE.id),
+            Some(1.00)
+        );
+
+        // Non-compostable item
+        assert_eq!(
+            get_composter_increase_chance_from_item_id(Item::DIAMOND.id),
+            None
+        );
+    }
+}

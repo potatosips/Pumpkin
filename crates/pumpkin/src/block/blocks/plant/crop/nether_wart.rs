@@ -93,3 +93,28 @@ impl CropBlockBase for NetherWartBlock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nether_wart_block_id_and_default_state_parity() {
+        assert_eq!(Block::NETHER_WART.name, "nether_wart");
+        let default_props = NetherWartLikeProperties::from_state_id(
+            Block::NETHER_WART.default_state.id,
+            &Block::NETHER_WART,
+        );
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn nether_wart_properties_encoding_decoding_parity() {
+        for age in 0..=3 {
+            let props = NetherWartLikeProperties { age };
+            let state_id = props.to_state_id(&Block::NETHER_WART);
+            let decoded = NetherWartLikeProperties::from_state_id(state_id, &Block::NETHER_WART);
+            assert_eq!(decoded.age, age);
+        }
+    }
+}

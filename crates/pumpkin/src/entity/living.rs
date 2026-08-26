@@ -937,6 +937,9 @@ impl LivingEntity {
     }
 
     async fn get_effective_gravity(&self, caller: &Arc<dyn EntityBase>) -> f64 {
+        if caller.get_entity().has_no_gravity() {
+            return 0.0;
+        }
         let final_gravity = caller.get_gravity();
 
         if self.entity.velocity.load().y <= 0.0
@@ -1016,7 +1019,7 @@ impl LivingEntity {
                 && self.jumping_cooldown.load(SeqCst) == 0
             {
                 self.jump().await;
-
+                self.jumping.store(false, SeqCst);
                 self.jumping_cooldown.store(10, SeqCst);
             }
         } else {
@@ -1438,12 +1441,28 @@ impl LivingEntity {
         fall_distance: f32,
         damage_per_distance: f32,
     ) {
-        let may_fly = if let Some(player) = caller.get_player() {
+        let player = caller.get_player();
+        let may_fly = if let Some(player) = player {
             player.abilities.lock().await.allow_flying
         } else {
             false
         };
         if may_fly || self.is_immune_to_fall_damage() {
+            return;
+        }
+
+        // Java's fallDamage rule applies to players, not to every living entity.
+        // Keep mob fall damage active when the rule is disabled.
+        if player.is_some()
+            && !self
+                .entity
+                .world
+                .load()
+                .level_info
+                .load()
+                .game_rules
+                .fall_damage
+        {
             return;
         }
 
@@ -1589,6 +1608,9 @@ impl LivingEntity {
 
             // Drop loot
             self.drop_loot(params.clone()).await;
+            if let Some(mob) = dyn_self.get_mob() {
+                mob.mob_on_death(cause).await;
+            }
 
             // Award experience
             if params.killed_by_player.unwrap_or(false)
@@ -1991,19 +2013,29 @@ impl LivingEntity {
         false
     }
 
-    async fn damage_armor_items(&self, caller: &dyn EntityBase, damage_amount: f32) {
+    async fn damage_armor_items(
+        &self,
+        caller: &dyn EntityBase,
+        damage_amount: f32,
+        damage_type: &DamageType,
+    ) {
         // Formula: armor loses floor(incoming_damage / 4) durability, minimum 1.
         let armor_damage = (damage_amount / 4.0).floor().max(1.0) as i32;
         let mut equipment_updates = Vec::new();
 
-        // TODO: Falling anvil/stalactite should only damage the helmet slot.
-        // TODO: Implement DAMAGE_RESISTANT component checks (e.g. netherite vs fire).
+        let damages_helmet_only = damage_type.has_tag(&tag::DamageType::MINECRAFT_DAMAGES_HELMET);
 
         let armor_slots: Vec<(usize, ItemStack, EquipmentSlot)> = {
             let equipment_lock = self.entity_equipment.lock().await;
             self.equipment_slots
                 .iter()
-                .filter(|(_, slot)| slot.is_armor_slot())
+                .filter(|(_, slot)| {
+                    if damages_helmet_only {
+                        matches!(slot, EquipmentSlot::Head(_))
+                    } else {
+                        slot.is_armor_slot()
+                    }
+                })
                 .filter_map(|(index, slot)| {
                     equipment_lock
                         .equipment
@@ -2244,7 +2276,33 @@ impl NBTStorage for LivingEntity {
                     nbt.put("active_effects", NbtTag::List(effects_list));
                 }
             }
-            //TODO: write equipment
+            let equipment = self.entity_equipment.lock().await;
+            let mut armor_items = Vec::with_capacity(4);
+            for slot in [
+                EquipmentSlot::FEET,
+                EquipmentSlot::LEGS,
+                EquipmentSlot::CHEST,
+                EquipmentSlot::HEAD,
+            ] {
+                let mut item_nbt = NbtCompound::new();
+                let stack = equipment.get(&slot);
+                if !stack.is_empty() {
+                    stack.write_item_stack(&mut item_nbt);
+                }
+                armor_items.push(NbtTag::Compound(item_nbt));
+            }
+            nbt.put("ArmorItems", NbtTag::List(armor_items));
+
+            let mut hand_items = Vec::with_capacity(2);
+            for slot in [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND] {
+                let mut item_nbt = NbtCompound::new();
+                let stack = equipment.get(&slot);
+                if !stack.is_empty() {
+                    stack.write_item_stack(&mut item_nbt);
+                }
+                hand_items.push(NbtTag::Compound(item_nbt));
+            }
+            nbt.put("HandItems", NbtTag::List(hand_items));
             // todo more...
         })
     }
@@ -2252,24 +2310,26 @@ impl NBTStorage for LivingEntity {
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.entity.read_nbt_non_mut(nbt).await;
-            self.health.store(nbt.get_float("Health").unwrap_or(0.0));
+            store_float_if_present(&self.health, nbt.get_float("Health"));
 
             // Clamp any persisted absorption to the entity's configured max
-            let raw_abs = nbt.get_float("AbsorptionAmount").unwrap_or(0.0);
-            let max_abs = self.get_attribute_value(&Attributes::MAX_ABSORPTION) as f32;
-            let clamped_abs = raw_abs.max(0.0).min(max_abs);
-            self.absorption.store(clamped_abs);
+            if let Some(raw_abs) = nbt.get_float("AbsorptionAmount") {
+                let max_abs = self.get_attribute_value(&Attributes::MAX_ABSORPTION) as f32;
+                let clamped_abs = raw_abs.max(0.0).min(max_abs);
+                self.absorption.store(clamped_abs);
+            }
 
             // Load fall distance, but if this entity is currently marked dead ensure we don't restore
             // a lethal fall distance that would immediately re-kill on spawn.
             let fd = nbt
                 .get_float("FallDistance")
-                .or_else(|| nbt.get_float("fall_distance"))
-                .unwrap_or(0.0);
-            if self.dead.load(Relaxed) {
-                self.fall_distance.store(0.0);
-            } else {
-                self.fall_distance.store(fd);
+                .or_else(|| nbt.get_float("fall_distance"));
+            if let Some(fd) = fd {
+                if self.dead.load(Relaxed) {
+                    self.fall_distance.store(0.0);
+                } else {
+                    self.fall_distance.store(fd);
+                }
             }
             {
                 let mut active_effects = self.active_effects.lock().await;
@@ -2286,6 +2346,47 @@ impl NBTStorage for LivingEntity {
                                 warn!("Unable to read effect from nbt");
                             }
                         }
+                    }
+                }
+            }
+
+            let mut equipment = self.entity_equipment.lock().await;
+            if let Some(armor_items) = nbt.get_list("ArmorItems") {
+                for slot in [
+                    EquipmentSlot::FEET,
+                    EquipmentSlot::LEGS,
+                    EquipmentSlot::CHEST,
+                    EquipmentSlot::HEAD,
+                ] {
+                    equipment.equipment.remove(&slot);
+                }
+                for (tag, slot) in armor_items.iter().zip([
+                    EquipmentSlot::FEET,
+                    EquipmentSlot::LEGS,
+                    EquipmentSlot::CHEST,
+                    EquipmentSlot::HEAD,
+                ]) {
+                    if let NbtTag::Compound(item_nbt) = tag
+                        && let Some(stack) = ItemStack::read_item_stack(item_nbt)
+                        && !stack.is_empty()
+                    {
+                        equipment.put(&slot, stack);
+                    }
+                }
+            }
+            if let Some(hand_items) = nbt.get_list("HandItems") {
+                for slot in [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND] {
+                    equipment.equipment.remove(&slot);
+                }
+                for (tag, slot) in hand_items
+                    .iter()
+                    .zip([EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND])
+                {
+                    if let NbtTag::Compound(item_nbt) = tag
+                        && let Some(stack) = ItemStack::read_item_stack(item_nbt)
+                        && !stack.is_empty()
+                    {
+                        equipment.put(&slot, stack);
                     }
                 }
             }
@@ -2370,10 +2471,45 @@ impl EntityBase for LivingEntity {
             let bypasses_cooldown_protection =
                 damage_type == DamageType::GENERIC_KILL || damage_type == DamageType::OUT_OF_WORLD;
 
+            // Vanilla parity: Wither damage immunities & Wither Armor (Phase 2)
+            if self.entity.entity_type == &EntityType::WITHER {
+                if damage_type.has_tag(&tag::DamageType::MINECRAFT_WITHER_IMMUNE_TO) {
+                    return false;
+                }
+                // Below or equal to 50% health, Wither Armor activates and deflects all projectiles
+                if self.health.load() <= self.get_max_health() / 2.0
+                    && damage_type.has_tag(&tag::DamageType::MINECRAFT_IS_PROJECTILE)
+                {
+                    return false;
+                }
+            }
+
+            // Vanilla parity: Ender Dragon only takes damage from player attacks, explosions, or always_hurts_ender_dragons
+            if self.entity.entity_type == &EntityType::ENDER_DRAGON
+                && !damage_type.has_tag(&tag::DamageType::MINECRAFT_ALWAYS_HURTS_ENDER_DRAGONS)
+                && !damage_type.has_tag(&tag::DamageType::MINECRAFT_IS_PLAYER_ATTACK)
+                && !damage_type.has_tag(&tag::DamageType::MINECRAFT_IS_EXPLOSION)
+                && !bypasses_cooldown_protection
+            {
+                return false;
+            }
+
             let mut damage_after_armor = amount;
+            if damage_type.has_tag(&tag::DamageType::MINECRAFT_DAMAGES_HELMET) {
+                let has_helmet = self
+                    .entity_equipment
+                    .lock()
+                    .await
+                    .equipment
+                    .get(&EquipmentSlot::HEAD)
+                    .is_some_and(|stack| !stack.is_empty());
+                if has_helmet {
+                    damage_after_armor *= 0.75;
+                }
+            }
             if !bypasses_armor_durability(&damage_type) {
-                let mut armor = 0.0f32;
-                let mut toughness = 0.0f32;
+                let mut armor = self.get_attribute_value(&Attributes::ARMOR) as f32;
+                let mut toughness = self.get_attribute_value(&Attributes::ARMOR_TOUGHNESS) as f32;
                 {
                     let equipment_lock = self.entity_equipment.lock().await;
                     for slot in [
@@ -2432,25 +2568,25 @@ impl EntityBase for LivingEntity {
                                     }
                                 } else if enc == &Enchantment::FIRE_PROTECTION {
                                     if is_fire_damage {
-                                        factor = *level * 2;
+                                        factor = level.saturating_mul(2);
                                     }
                                 } else if enc == &Enchantment::BLAST_PROTECTION {
                                     if damage_type == DamageType::EXPLOSION
                                         || damage_type == DamageType::PLAYER_EXPLOSION
                                     {
-                                        factor = *level * 2;
+                                        factor = level.saturating_mul(2);
                                     }
                                 } else if enc == &Enchantment::PROJECTILE_PROTECTION {
                                     if damage_type == DamageType::ARROW
                                         || damage_type == DamageType::MOB_PROJECTILE
                                         || damage_type == DamageType::THROWN
                                     {
-                                        factor = (*level) * 2;
+                                        factor = level.saturating_mul(2);
                                     }
                                 } else if enc == &Enchantment::FEATHER_FALLING
                                     && damage_type == DamageType::FALL
                                 {
-                                    factor = (*level) * 4;
+                                    factor = level.saturating_mul(4);
                                 }
                                 epf += factor;
                             }
@@ -2464,26 +2600,25 @@ impl EntityBase for LivingEntity {
             }
 
             // Apply Resistance effect reduction (20% per level), excluding bypasses_cooldown_protection and starvation damage
-            let resistance_reduction =
-                if !bypasses_cooldown_protection && damage_type != DamageType::STARVE {
-                    self.get_effect(&StatusEffect::RESISTANCE)
-                        .await
-                        .map_or(0.0, |e| 0.2 * (e.amplifier + 1) as f32)
-                } else {
-                    0.0
-                };
+            let (effective_amount, resisted_amount) = if !bypasses_cooldown_protection
+                && damage_type != DamageType::STARVE
+            {
+                self.get_effect(&StatusEffect::RESISTANCE)
+                    .await
+                    .map_or((damage_after_enchantments, 0.0), |effect| {
+                        damage_after_resistance(damage_after_enchantments, effect.amplifier)
+                    })
+            } else {
+                (damage_after_enchantments, 0.0)
+            };
 
-            // Total damage after reductions
-            let effective_amount = damage_after_enchantments * (1.0 - resistance_reduction);
-
-            if resistance_reduction > 0.0 {
-                let resisted = damage_after_enchantments * resistance_reduction;
+            if resisted_amount > 0.0 {
                 if let Some(player) = caller.get_player() {
                     player
                         .increment_stat(
                             StatisticCategory::Custom,
                             CustomStatistic::DamageResisted as i32,
-                            (resisted * 10.0) as i32,
+                            (resisted_amount * 10.0) as i32,
                         )
                         .await;
                 }
@@ -2492,7 +2627,7 @@ impl EntityBase for LivingEntity {
                         .increment_stat(
                             StatisticCategory::Custom,
                             CustomStatistic::DamageDealtResisted as i32,
-                            (resisted * 10.0) as i32,
+                            (resisted_amount * 10.0) as i32,
                         )
                         .await;
                 }
@@ -2527,15 +2662,24 @@ impl EntityBase for LivingEntity {
                         let held_item = attacker_player.inventory().held_item().await;
                         let is_axe = held_item.is_axe();
                         if is_axe {
-                            let mut disable_chance = 0.25;
+                            let efficiency_level = held_item
+                                .get_data_component::<EnchantmentsImpl>()
+                                .and_then(|enchantments| {
+                                    enchantments.enchantment.iter().find_map(
+                                        |(enchantment, level)| {
+                                            (**enchantment == Enchantment::EFFICIENCY)
+                                                .then_some(*level)
+                                        },
+                                    )
+                                })
+                                .unwrap_or(0);
                             let is_sprinting = attacker_player
                                 .living_entity
                                 .entity
                                 .sprinting
                                 .load(Ordering::Relaxed);
-                            if is_sprinting {
-                                disable_chance = 1.0;
-                            }
+                            let disable_chance =
+                                shield_disable_chance(efficiency_level, is_sprinting);
 
                             if rand::random::<f32>() < disable_chance
                                 && let Some(victim_player) = caller.get_player()
@@ -2553,17 +2697,15 @@ impl EntityBase for LivingEntity {
                         }
                     }
 
-                    let active_hand = self.active_hand.lock().await;
-                    if let Some(hand) = *active_hand {
-                        let slot = if hand == Hand::Left {
-                            EquipmentSlot::MAIN_HAND
-                        } else {
-                            EquipmentSlot::OFF_HAND
-                        };
+                    let active_hand = *self.active_hand.lock().await;
+                    if let Some(hand) = active_hand {
+                        let slot = equipment_slot_for_hand(hand);
 
                         let mut equipment_guard = self.entity_equipment.lock().await;
                         if let Some(stack) = equipment_guard.equipment.get_mut(&slot) {
-                            let durability_damage = (amount / 1.0).floor().max(1.0) as i32;
+                            let Some(durability_damage) = shield_durability_damage(amount) else {
+                                return false;
+                            };
                             if stack.damage_item(durability_damage) == DamageResult::Broken {
                                 if let Some(player) = caller.get_player() {
                                     player
@@ -2649,6 +2791,12 @@ impl EntityBase for LivingEntity {
             self.try_spawn_infested_silverfish().await;
 
             if play_sound {
+                world.send_entity_status(
+                    &self.entity,
+                    EntityStatus::KineticHit,
+                    Some(ActorEventType::Hurt),
+                );
+
                 world.play_sound(
                     self.hurt_sound(),
                     SoundCategory::Players,
@@ -2786,7 +2934,8 @@ impl EntityBase for LivingEntity {
             // Armor loses floor(raw_damage / 4) durability, minimum 1.
             // Not applied when the source is in `#minecraft:bypasses_armor`.
             if damage_amount > 0.0 && !bypasses_armor_durability(&damage_type) {
-                self.damage_armor_items(caller, damage_amount).await;
+                self.damage_armor_items(caller, damage_amount, &damage_type)
+                    .await;
             }
 
             true
@@ -2822,6 +2971,9 @@ impl EntityBase for LivingEntity {
                 self.health.load() <= 0.0 && self.death_time.load(Relaxed) < 20;
             if is_alive || (in_death_animation && self.entity.entity_type != &EntityType::PLAYER) {
                 self.tick_movement(server, caller).await;
+                // Entity pushing / collisions (vanilla parity):
+                // Mobs and players push each other when colliding instead of merging together.
+                let _ = caller.push_entities(caller).await;
                 // Vanilla-like order: freeze logic runs after movement/collisions.
                 self.entity.tick_frozen(caller.as_ref()).await;
             }
@@ -3183,9 +3335,46 @@ pub(crate) const fn bypasses_armor_durability(damage_type: &DamageType) -> bool 
     (damage_type.id < 64) && ((BYPASS_MASK >> damage_type.id) & 1 == 1)
 }
 
+const fn equipment_slot_for_hand(hand: Hand) -> EquipmentSlot {
+    match hand {
+        Hand::Right => EquipmentSlot::MAIN_HAND,
+        Hand::Left => EquipmentSlot::OFF_HAND,
+    }
+}
+
+fn shield_durability_damage(blocked_damage: f32) -> Option<i32> {
+    (blocked_damage >= 3.0).then(|| 1 + blocked_damage.floor() as i32)
+}
+
+fn shield_disable_chance(efficiency_level: i32, sprinting: bool) -> f32 {
+    0.25 + 0.05 * efficiency_level.max(0) as f32 + if sprinting { 0.75 } else { 0.0 }
+}
+
+fn damage_after_resistance(damage: f32, amplifier: u8) -> (f32, f32) {
+    let remaining_fraction = (1.0 - 0.2 * (f32::from(amplifier) + 1.0)).max(0.0);
+    let effective = damage * remaining_fraction;
+    (effective, damage - effective)
+}
+
+fn store_float_if_present(target: &AtomicCell<f32>, value: Option<f32>) {
+    if let Some(value) = value {
+        target.store(value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vanilla_partial_nbt_preserves_omitted_living_values() {
+        let health = AtomicCell::new(20.0);
+        store_float_if_present(&health, None);
+        assert_eq!(health.load(), 20.0);
+
+        store_float_if_present(&health, Some(7.5));
+        assert_eq!(health.load(), 7.5);
+    }
 
     // ── bypasses_armor_durability ─────────────────────────────────────
 
@@ -3247,6 +3436,40 @@ mod tests {
                 dt.message_id
             );
         }
+    }
+
+    #[test]
+    fn shield_uses_the_active_hand_equipment_slot() {
+        assert!(equipment_slot_for_hand(Hand::Right) == EquipmentSlot::MAIN_HAND);
+        assert!(equipment_slot_for_hand(Hand::Left) == EquipmentSlot::OFF_HAND);
+    }
+
+    #[test]
+    fn shield_durability_uses_vanilla_threshold_and_plus_one_cost() {
+        assert_eq!(shield_durability_damage(0.0), None);
+        assert_eq!(shield_durability_damage(2.99), None);
+        assert_eq!(shield_durability_damage(3.0), Some(4));
+        assert_eq!(shield_durability_damage(5.9), Some(6));
+    }
+
+    #[test]
+    fn axe_shield_disable_chance_includes_efficiency_and_sprinting() {
+        assert!((shield_disable_chance(0, false) - 0.25).abs() < f32::EPSILON);
+        assert!((shield_disable_chance(3, false) - 0.40).abs() < f32::EPSILON);
+        assert!((shield_disable_chance(0, true) - 1.0).abs() < f32::EPSILON);
+        assert!((shield_disable_chance(3, true) - 1.15).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn vanilla_resistance_is_overflow_safe_and_clamps_damage_to_zero() {
+        let (effective, resisted) = damage_after_resistance(10.0, 0);
+        assert!((effective - 8.0).abs() < 1.0e-5);
+        assert!((resisted - 2.0).abs() < 1.0e-5);
+        let (effective, resisted) = damage_after_resistance(10.0, 3);
+        assert!((effective - 2.0).abs() < 1.0e-5);
+        assert!((resisted - 8.0).abs() < 1.0e-5);
+        assert_eq!(damage_after_resistance(10.0, 4), (0.0, 10.0));
+        assert_eq!(damage_after_resistance(10.0, u8::MAX), (0.0, 10.0));
     }
 
     #[test]
@@ -3325,5 +3548,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(bytes, [10, 17, 1, 28, 0xff, 0xcd, 0x5c, 0xab]);
+
+        let mut legacy_bytes = Vec::new();
+        metadata
+            .write(
+                &mut legacy_bytes,
+                &pumpkin_util::version::JavaMinecraftVersion::V_1_21_4,
+            )
+            .unwrap();
+        // 1.21.4's entity_effect particle is registry ID 20, not current ID 28.
+        assert_eq!(legacy_bytes, [10, 18, 1, 20, 0xff, 0xcd, 0x5c, 0xab]);
+    }
+
+    #[test]
+    fn vanilla_damages_helmet_tag_matches_falling_hazards() {
+        use pumpkin_data::damage::DamageType;
+        use pumpkin_data::tag::{DamageType as DamageTag, Taggable};
+
+        assert!(DamageType::FALLING_ANVIL.has_tag(&DamageTag::MINECRAFT_DAMAGES_HELMET));
+        assert!(DamageType::FALLING_BLOCK.has_tag(&DamageTag::MINECRAFT_DAMAGES_HELMET));
+        assert!(DamageType::FALLING_STALACTITE.has_tag(&DamageTag::MINECRAFT_DAMAGES_HELMET));
+        assert!(!DamageType::PLAYER_ATTACK.has_tag(&DamageTag::MINECRAFT_DAMAGES_HELMET));
+        assert!(!DamageType::ARROW.has_tag(&DamageTag::MINECRAFT_DAMAGES_HELMET));
+    }
+
+    #[test]
+    fn vanilla_wither_armor_and_ender_dragon_damage_tags() {
+        use pumpkin_data::damage::DamageType;
+        use pumpkin_data::tag::{DamageType as DamageTag, Taggable};
+
+        // Projectiles deflected by Wither Armor (below 50% HP)
+        assert!(DamageType::ARROW.has_tag(&DamageTag::MINECRAFT_IS_PROJECTILE));
+        assert!(DamageType::TRIDENT.has_tag(&DamageTag::MINECRAFT_IS_PROJECTILE));
+        assert!(DamageType::FIREBALL.has_tag(&DamageTag::MINECRAFT_IS_PROJECTILE));
+        assert!(DamageType::WITHER_SKULL.has_tag(&DamageTag::MINECRAFT_IS_PROJECTILE));
+        assert!(!DamageType::PLAYER_ATTACK.has_tag(&DamageTag::MINECRAFT_IS_PROJECTILE));
+
+        // Damage types Wither is immune to
+        assert!(DamageType::DROWN.has_tag(&DamageTag::MINECRAFT_WITHER_IMMUNE_TO));
+        assert!(!DamageType::PLAYER_ATTACK.has_tag(&DamageTag::MINECRAFT_WITHER_IMMUNE_TO));
+
+        // Ender dragon damage
+        assert!(DamageType::PLAYER_ATTACK.has_tag(&DamageTag::MINECRAFT_IS_PLAYER_ATTACK));
+        assert!(DamageType::EXPLOSION.has_tag(&DamageTag::MINECRAFT_IS_EXPLOSION));
+        assert!(DamageType::PLAYER_EXPLOSION.has_tag(&DamageTag::MINECRAFT_IS_EXPLOSION));
     }
 }

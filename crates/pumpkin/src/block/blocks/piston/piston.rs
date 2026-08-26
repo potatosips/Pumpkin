@@ -565,3 +565,45 @@ async fn move_piston(
 
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, Facing, StickyPistonLikeProperties};
+
+    #[test]
+    fn piston_block_ids_parity() {
+        assert_eq!(Block::PISTON.name, "piston");
+        assert_eq!(Block::STICKY_PISTON.name, "sticky_piston");
+    }
+
+    #[test]
+    fn piston_default_state_parity() {
+        assert_ne!(Block::PISTON.default_state.id, Block::AIR.default_state.id);
+        assert_ne!(
+            Block::STICKY_PISTON.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn piston_properties_parity() {
+        for facing in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            for extended in [true, false] {
+                let props = StickyPistonLikeProperties { extended, facing };
+                let state_id = props.to_state_id(&Block::PISTON);
+                let rt = StickyPistonLikeProperties::from_state_id(state_id, &Block::PISTON);
+                assert_eq!(rt.extended, extended);
+                assert_eq!(rt.facing, facing);
+            }
+        }
+    }
+}

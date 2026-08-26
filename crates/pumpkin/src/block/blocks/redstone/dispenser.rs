@@ -29,8 +29,8 @@ use crate::entity::{Entity, EntityBase};
 use crate::item::ItemMetadata;
 use crate::item::items::boat::BoatItem;
 use crate::item::items::bucket::{
-    FilledBucketItem, play_bucket_evaporation, should_evaporate_in_nether, try_pickup_fluid_at,
-    try_place_filled_bucket,
+    FilledBucketItem, play_bucket_evaporation, should_evaporate_in_nether, spawn_bucket_entity,
+    try_pickup_fluid_at, try_place_filled_bucket_at,
 };
 use crate::item::items::honeycomb::try_wax_block;
 use crate::item::items::ignite::ignition::Ignition;
@@ -319,6 +319,9 @@ impl DispenserBlock {
         } else if item.item.id == Item::HONEYCOMB.id {
             // Honeycombs wax copper blocks
             Self::dispense_honeycomb(ctx, item).await;
+        } else if item.item.id == Item::SHEARS.id {
+            // Shears carve pumpkins, shear beehives and entities
+            Self::dispense_shears(ctx, item).await;
         } else if entity_from_egg(item.item.id).is_some() {
             // Spawn eggs
             Self::dispense_spawn_egg(ctx, item).await;
@@ -486,6 +489,7 @@ impl DispenserBlock {
 
         let entity = Entity::new(ctx.world.clone(), spawn_pos, &EntityType::TNT);
         let tnt = Arc::new(TNTEntity::new(entity, TNT_POWER, TNT_FUSE));
+        tnt.set_random_initial_velocity();
         ctx.world.spawn_entity(tnt).await;
         ctx.world
             .play_sound(Sound::EntityTntPrimed, SoundCategory::Blocks, &spawn_pos);
@@ -734,12 +738,11 @@ impl DispenserBlock {
     async fn dispense_filled_bucket(ctx: &DispenseContext<'_>, item: &mut ItemStack) {
         let front = Self::target_position(ctx);
 
-        // TODO: Spawn the stored entity for axolotl/fish/tadpole buckets, like the player path.
-        let emptied = if should_evaporate_in_nether(item.item, ctx.world) {
+        let placed_at = if should_evaporate_in_nether(item.item, ctx.world) {
             play_bucket_evaporation(ctx.world, &front.to_f64());
-            true
+            Some(front)
         } else {
-            try_place_filled_bucket(
+            try_place_filled_bucket_at(
                 ctx.world,
                 item.item,
                 *ctx.position,
@@ -748,8 +751,10 @@ impl DispenserBlock {
             .await
         };
 
-        if emptied {
+        if let Some(spawn_pos) = placed_at {
+            spawn_bucket_entity(ctx.world, item, spawn_pos).await;
             *item = ItemStack::new(1, &Item::BUCKET);
+            Self::play_dispense_effects(ctx, WorldEvent::SoundDispenserDispense);
             Self::play_dispense_effects(ctx, WorldEvent::SoundDispenserDispense);
         } else {
             Self::drop_item(ctx, item).await;
@@ -799,6 +804,18 @@ impl DispenserBlock {
         }
     }
 
+    async fn dispense_shears(ctx: &DispenseContext<'_>, item: &mut ItemStack) {
+        let front = Self::target_position(ctx);
+        let front_block = ctx.world.get_block(&front);
+
+        if crate::item::items::shears::try_shear_block(ctx.world, &front, front_block).await {
+            let _ = item.damage_item(1);
+            Self::play_dispense_effects(ctx, WorldEvent::SoundDispenserDispense);
+        } else {
+            Self::play_dispense_effects(ctx, WorldEvent::SoundDispenserFail);
+        }
+    }
+
     async fn drop_item(ctx: &DispenseContext<'_>, item: &mut ItemStack) {
         let drop_item = item.split(1);
         Self::eject_item(ctx, drop_item).await;
@@ -825,5 +842,47 @@ impl DispenserBlock {
 
         let item_entity = Arc::new(ItemEntity::new_with_velocity(entity, stack, velocity, 40));
         ctx.world.spawn_entity(item_entity).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn vanilla_dispenser_facing_and_particles() {
+        assert_eq!(to_normal(Facing::North), Vector3::new(0.0, 0.0, -1.0));
+        assert_eq!(to_normal(Facing::East), Vector3::new(1.0, 0.0, 0.0));
+        assert_eq!(to_normal(Facing::South), Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(to_normal(Facing::West), Vector3::new(-1.0, 0.0, 0.0));
+        assert_eq!(to_normal(Facing::Up), Vector3::new(0.0, 1.0, 0.0));
+        assert_eq!(to_normal(Facing::Down), Vector3::new(0.0, -1.0, 0.0));
+
+        assert_eq!(to_data3d(Facing::Down), 0);
+        assert_eq!(to_data3d(Facing::Up), 1);
+        assert_eq!(to_data3d(Facing::North), 2);
+        assert_eq!(to_data3d(Facing::South), 3);
+        assert_eq!(to_data3d(Facing::West), 4);
+        assert_eq!(to_data3d(Facing::East), 5);
+    }
+
+    #[test]
+    fn vanilla_dispenser_state_properties() {
+        let mut props = DispenserLikeProperties::default(&Block::DISPENSER);
+        props.facing = Facing::North;
+        props.triggered = false;
+
+        let state_id = props.to_state_id(&Block::DISPENSER);
+        let roundtrip = DispenserLikeProperties::from_state_id(state_id, &Block::DISPENSER);
+
+        assert_eq!(roundtrip.facing, Facing::North);
+        assert!(!roundtrip.triggered);
+
+        props.triggered = true;
+        let triggered_id = props.to_state_id(&Block::DISPENSER);
+        let roundtrip_trig =
+            DispenserLikeProperties::from_state_id(triggered_id, &Block::DISPENSER);
+        assert!(roundtrip_trig.triggered);
     }
 }

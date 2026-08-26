@@ -148,7 +148,7 @@ impl Animal for FrogEntity {
 impl NBTStorage for FrogEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_string("variant", self.get_variant().as_str().to_string());
@@ -157,7 +157,7 @@ impl NBTStorage for FrogEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(variant_str) = nbt.get_string("variant") {
@@ -214,5 +214,25 @@ impl Mob for FrogEntity {
             self.animal_interact(player, item_stack, Sound::EntityFrogAmbient)
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frog_variant_id_and_name_parity() {
+        assert_eq!(FrogVariant::from_id(0), FrogVariant::Cold);
+        assert_eq!(FrogVariant::from_id(1), FrogVariant::Temperate);
+        assert_eq!(FrogVariant::from_id(2), FrogVariant::Warm);
+
+        assert_eq!(FrogVariant::Cold.as_str(), "minecraft:cold");
+        assert_eq!(FrogVariant::Temperate.as_str(), "minecraft:temperate");
+        assert_eq!(FrogVariant::Warm.as_str(), "minecraft:warm");
+
+        assert_eq!(FrogVariant::from_name("cold"), FrogVariant::Cold);
+        assert_eq!(FrogVariant::from_name("warm"), FrogVariant::Warm);
+        assert_eq!(FrogVariant::from_name("unknown"), FrogVariant::Temperate);
     }
 }

@@ -1,4 +1,4 @@
-use super::{Entity, EntityBase, NBTStorage, living::LivingEntity};
+use super::{Entity, EntityBase, NBTStorage, NbtFuture, living::LivingEntity};
 use crate::{entity::EntityBaseFuture, server::Server};
 use core::f32;
 use pumpkin_data::Block;
@@ -29,9 +29,38 @@ impl TNTEntity {
             fuse: AtomicU32::new(fuse),
         }
     }
+
+    pub fn set_random_initial_velocity(&self) {
+        let angle = rand::random::<f64>() * TAU;
+        self.entity
+            .set_velocity(Vector3::new(-angle.sin() * 0.02, 0.2, -angle.cos() * 0.02));
+    }
 }
 
-impl NBTStorage for TNTEntity {}
+impl NBTStorage for TNTEntity {
+    fn write_nbt<'a>(
+        &'a self,
+        nbt: &'a mut pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.entity.write_nbt(nbt).await;
+            nbt.put_short("fuse", self.fuse.load(Relaxed) as i16);
+            nbt.put_float("explosion_power", self.power);
+        })
+    }
+
+    fn read_nbt_non_mut<'a>(
+        &'a self,
+        nbt: &'a pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.entity.read_nbt_non_mut(nbt).await;
+            if let Some(fuse) = nbt.get_short("fuse") {
+                self.fuse.store(fuse.max(0) as u32, Relaxed);
+            }
+        })
+    }
+}
 
 impl EntityBase for TNTEntity {
     fn tick<'a>(
@@ -43,7 +72,9 @@ impl EntityBase for TNTEntity {
             let entity = &self.entity;
 
             let mut velo = entity.velocity.load();
-            velo.y -= self.get_gravity();
+            if !entity.has_no_gravity() {
+                velo.y -= self.get_gravity();
+            }
 
             entity.move_entity(caller, velo).await;
             entity.tick_block_collisions(caller, server).await;
@@ -84,11 +115,6 @@ impl EntityBase for TNTEntity {
 
     fn init_data_tracker(&self) -> EntityBaseFuture<'_, ()> {
         Box::pin(async {
-            let pos: f64 = rand::random::<f64>() * TAU;
-
-            self.entity
-                .set_velocity(Vector3::new(-pos.sin() * 0.02, 0.2, -pos.cos() * 0.02));
-
             self.entity.send_meta_data(
                 &[
                     Metadata::new(

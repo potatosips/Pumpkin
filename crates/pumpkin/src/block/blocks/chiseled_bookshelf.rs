@@ -145,7 +145,13 @@ impl ChiseledBookshelfBlock {
         slot: i8,
         item: &mut ItemStack,
     ) {
-        // TODO: Increment used stats for chiseled bookshelf on the player
+        player
+            .increment_stat(
+                pumpkin_data::statistic::StatisticCategory::Used,
+                Item::CHISELED_BOOKSHELF.id as i32,
+                1,
+            )
+            .await;
 
         let sound = if item.get_item() == &Item::ENCHANTED_BOOK {
             Sound::BlockChiseledBookshelfPickupEnchanted
@@ -174,6 +180,14 @@ impl ChiseledBookshelfBlock {
         properties: ChiseledBookshelfLikeProperties,
         slot: i8,
     ) {
+        player
+            .increment_stat(
+                pumpkin_data::statistic::StatisticCategory::Used,
+                Item::CHISELED_BOOKSHELF.id as i32,
+                1,
+            )
+            .await;
+
         let mut stack = entity.remove_stack_specific(slot as usize, 1).await;
 
         let sound = if stack.get_item() == &Item::ENCHANTED_BOOK {
@@ -246,6 +260,60 @@ impl ChiseledBookshelfBlock {
             4 => properties.slot_4_occupied,
             5 => properties.slot_5_occupied,
             _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, ChiseledBookshelfLikeProperties, HorizontalFacing,
+    };
+
+    #[test]
+    fn chiseled_bookshelf_block_id_parity() {
+        assert_eq!(Block::CHISELED_BOOKSHELF.name, "chiseled_bookshelf");
+    }
+
+    #[test]
+    fn chiseled_bookshelf_default_state_parity() {
+        assert_ne!(
+            Block::CHISELED_BOOKSHELF.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn chiseled_bookshelf_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for slot_0 in [true, false] {
+                for slot_5 in [true, false] {
+                    let props = ChiseledBookshelfLikeProperties {
+                        facing,
+                        slot_0_occupied: slot_0,
+                        slot_1_occupied: false,
+                        slot_2_occupied: false,
+                        slot_3_occupied: false,
+                        slot_4_occupied: false,
+                        slot_5_occupied: slot_5,
+                    };
+                    let state_id = props.to_state_id(&Block::CHISELED_BOOKSHELF);
+                    let rt = ChiseledBookshelfLikeProperties::from_state_id(
+                        state_id,
+                        &Block::CHISELED_BOOKSHELF,
+                    );
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.slot_0_occupied, slot_0);
+                    assert_eq!(rt.slot_5_occupied, slot_5);
+                }
+            }
         }
     }
 }

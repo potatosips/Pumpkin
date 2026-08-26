@@ -132,14 +132,74 @@ impl BlockBehaviour for EnderChestBlock {
 }
 
 fn is_chest_blocked(world: &World, block_pos: &BlockPos) -> bool {
-    // TODO: Block opening when a cat is sitting on top.
-    has_block_on_top(world, block_pos)
+    has_block_on_top(world, block_pos) || has_cat_on_top(world, block_pos)
 }
+
 fn has_block_on_top(world: &World, block_pos: &BlockPos) -> bool {
     let above_pos = block_pos.up();
     let above_state = world.get_block_state(&above_pos);
     above_state.is_solid_block()
 }
+
+fn has_cat_on_top(world: &World, block_pos: &BlockPos) -> bool {
+    let above_pos = block_pos.up();
+    let aabb = pumpkin_util::math::boundingbox::BoundingBox::from_block(&above_pos);
+    let entities = world.get_entities_at_box(&aabb);
+    for entity in entities {
+        let entity_type = entity.get_entity().entity_type;
+        if entity_type == &pumpkin_data::entity::EntityType::CAT
+            || entity_type == &pumpkin_data::entity::EntityType::OCELOT
+        {
+            if let Some(mob) = entity.get_mob() {
+                if mob.is_sitting() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
 impl EnderChestBlock {
     pub const LID_ANIMATION_EVENT_TYPE: u8 = 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, HorizontalFacing, LadderLikeProperties};
+
+    #[test]
+    fn ender_chest_block_id_parity() {
+        assert_eq!(Block::ENDER_CHEST.name, "ender_chest");
+    }
+
+    #[test]
+    fn ender_chest_default_state_parity() {
+        assert_ne!(
+            Block::ENDER_CHEST.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn ender_chest_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for waterlogged in [true, false] {
+                let props = LadderLikeProperties {
+                    facing,
+                    waterlogged,
+                };
+                let state_id = props.to_state_id(&Block::ENDER_CHEST);
+                let rt = LadderLikeProperties::from_state_id(state_id, &Block::ENDER_CHEST);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.waterlogged, waterlogged);
+            }
+        }
+    }
 }

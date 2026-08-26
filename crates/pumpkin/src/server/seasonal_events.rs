@@ -11,6 +11,18 @@ pub fn is_april() -> bool {
 }
 
 #[must_use]
+pub fn is_halloween() -> bool {
+    let data = OffsetDateTime::now_utc();
+    data.month() == Month::October && data.day() == 31
+}
+
+#[must_use]
+pub fn is_christmas() -> bool {
+    let data = OffsetDateTime::now_utc();
+    data.month() == Month::December && (data.day() >= 24 && data.day() <= 26)
+}
+
+#[must_use]
 pub fn modify_chat_message(
     message: &str,
     advanced_config: &AdvancedConfiguration,
@@ -26,4 +38,17 @@ pub fn modify_chat_message(
     words.shuffle(&mut rng);
     let result = words.join(" ");
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seasonal_event_dates_parity() {
+        // Validation of monthly logic
+        assert!(!is_april() || OffsetDateTime::now_utc().month() == Month::April);
+        assert!(!is_halloween() || OffsetDateTime::now_utc().month() == Month::October);
+        assert!(!is_christmas() || OffsetDateTime::now_utc().month() == Month::December);
+    }
 }

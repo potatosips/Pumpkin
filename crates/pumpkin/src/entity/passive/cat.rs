@@ -272,7 +272,7 @@ impl CatEntity {
 impl NBTStorage for CatEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_animal_nbt(nbt);
             let variant_str = match self.variant.load(Ordering::Relaxed) {
                 0 => "minecraft:all_black",
@@ -303,7 +303,7 @@ impl NBTStorage for CatEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_animal_nbt(nbt);
             if let Some(variant_str) = nbt.get_string("variant") {
                 let variant = match variant_str
@@ -434,13 +434,6 @@ impl Mob for CatEntity {
                 )],
                 None,
             );
-            entity.send_meta_data(
-                &[Metadata::new(
-                    pumpkin_data::tracked_data::cat::SOUND_VARIANT,
-                    VarInt(self.sound_variant.load(Ordering::Relaxed) as i32),
-                )],
-                None,
-            );
         })
     }
 
@@ -508,5 +501,19 @@ impl Mob for CatEntity {
 
             self.mob_entity.mob_interact(player, item_stack).await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dye_color_from_item_parsing() {
+        assert_eq!(get_dye_color_from_item(&Item::WHITE_DYE), Some(0));
+        assert_eq!(get_dye_color_from_item(&Item::ORANGE_DYE), Some(1));
+        assert_eq!(get_dye_color_from_item(&Item::RED_DYE), Some(14));
+        assert_eq!(get_dye_color_from_item(&Item::BLACK_DYE), Some(15));
+        assert_eq!(get_dye_color_from_item(&Item::STICK), None);
     }
 }

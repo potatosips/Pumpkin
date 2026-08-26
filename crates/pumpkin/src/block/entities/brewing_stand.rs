@@ -188,11 +188,27 @@ impl BrewingStandBlockEntity {
             return;
         }
 
-        // Consume ingredient
+        // Consume ingredient & handle crafting remainder
+        let remainder_item_opt = Self::get_crafting_remainder(ingredient.get_item());
+
         let mut items = self.items.write().await;
         items[3].decrement(1);
+        let remainder_to_drop = if let Some(remainder) = remainder_item_opt {
+            if items[3].is_empty() {
+                items[3] = ItemStack::new(1, remainder);
+                None
+            } else {
+                Some(ItemStack::new(1, remainder))
+            }
+        } else {
+            None
+        };
         self.mark_dirty();
         drop(items);
+
+        if let Some(drop_stack) = remainder_to_drop {
+            world.drop_stack(&self.position, drop_stack).await;
+        }
 
         // Play sound at the center of the block
         let pos = Vector3::new(
@@ -204,9 +220,25 @@ impl BrewingStandBlockEntity {
 
         // Mark dirty to trigger update
         self.mark_dirty();
+    }
 
-        // Handle crafting remainder (like glass bottles from honey bottles)
-        // TODO: Implement remainder handling when item lookup by ID is available
+    #[must_use]
+    pub fn get_crafting_remainder(item: &Item) -> Option<&'static Item> {
+        if item.id == Item::HONEY_BOTTLE.id
+            || item.id == Item::POTION.id
+            || item.id == Item::SPLASH_POTION.id
+            || item.id == Item::LINGERING_POTION.id
+            || item.id == Item::DRAGON_BREATH.id
+        {
+            Some(&Item::GLASS_BOTTLE)
+        } else if item.id == Item::WATER_BUCKET.id
+            || item.id == Item::LAVA_BUCKET.id
+            || item.id == Item::MILK_BUCKET.id
+        {
+            Some(&Item::BUCKET)
+        } else {
+            None
+        }
     }
 }
 
@@ -522,6 +554,9 @@ impl crate::block::entities::BlockEntity for BrewingStandBlockEntity {
                 // Update the block state properties for the brewing stand to reflect bottle presence
                 let world = world.clone();
                 let (block, state) = world.get_block_and_state(&self.position);
+                if block.id != pumpkin_data::Block::BREWING_STAND.id {
+                    return;
+                }
                 // Use generated block properties helper to produce a new state id with the bits set
                 let mut props =
                     pumpkin_data::block_properties::BrewingStandLikeProperties::from_state_id(
@@ -564,5 +599,42 @@ impl PropertyDelegate for BrewingStandBlockEntity {
 
     fn get_properties_size(&self) -> i32 {
         2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_brewing_stand_crafting_remainders_match_spec() {
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::HONEY_BOTTLE).map(|i| i.id),
+            Some(Item::GLASS_BOTTLE.id)
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::WATER_BUCKET).map(|i| i.id),
+            Some(Item::BUCKET.id)
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::LAVA_BUCKET).map(|i| i.id),
+            Some(Item::BUCKET.id)
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::MILK_BUCKET).map(|i| i.id),
+            Some(Item::BUCKET.id)
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::DRAGON_BREATH).map(|i| i.id),
+            Some(Item::GLASS_BOTTLE.id)
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::NETHER_WART).map(|i| i.id),
+            None
+        );
+        assert_eq!(
+            BrewingStandBlockEntity::get_crafting_remainder(&Item::BLAZE_POWDER).map(|i| i.id),
+            None
+        );
     }
 }

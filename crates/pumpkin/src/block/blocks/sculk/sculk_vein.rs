@@ -225,3 +225,45 @@ const fn set_face(props: &mut GlowLichenLikeProperties, direction: BlockDirectio
         BlockDirection::East => props.east = true,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, GlowLichenLikeProperties};
+
+    #[test]
+    fn sculk_vein_block_id_parity() {
+        assert_eq!(Block::SCULK_VEIN.name, "sculk_vein");
+    }
+
+    #[test]
+    fn sculk_vein_default_state_parity() {
+        assert_ne!(
+            Block::SCULK_VEIN.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn sculk_vein_properties_roundtrip_parity() {
+        let props = GlowLichenLikeProperties {
+            down: true,
+            east: false,
+            north: true,
+            south: false,
+            up: false,
+            waterlogged: true,
+            west: true,
+        };
+        let state_id = props.to_state_id(&Block::SCULK_VEIN);
+        let rt = GlowLichenLikeProperties::from_state_id(state_id, &Block::SCULK_VEIN);
+        assert!(rt.down);
+        assert!(!rt.east);
+        assert!(rt.north);
+        assert!(!rt.south);
+        assert!(!rt.up);
+        assert!(rt.waterlogged);
+        assert!(rt.west);
+    }
+}

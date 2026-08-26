@@ -66,6 +66,17 @@ impl ScreenHandler for CartographyTableScreenHandler {
         self
     }
 
+    fn on_closed<'a>(&'a mut self, player: &'a dyn InventoryPlayer) -> ScreenHandlerFuture<'a, ()> {
+        Box::pin(async move {
+            self.default_on_closed(player).await;
+            self.drop_inventory(player, self.input_inventory.clone())
+                .await;
+            self.output_inventory
+                .set_stack(0, ItemStack::EMPTY.clone())
+                .await;
+        })
+    }
+
     fn on_slot_click<'a>(
         &'a mut self,
         slot_index: i32,
@@ -109,5 +120,147 @@ impl ScreenHandler for CartographyTableScreenHandler {
             }
             stack
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::screen_handler::PlayerFuture;
+    use pumpkin_data::data_component_impl::EquipmentSlot;
+    use pumpkin_data::item::Item;
+    use pumpkin_data::statistic::StatisticCategory;
+    use pumpkin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+        dropped: Arc<Mutex<Vec<ItemStack>>>,
+    }
+
+    impl TestPlayer {
+        fn new() -> Self {
+            let equipment = Arc::new(Mutex::new(EntityEquipment::new()));
+            let mut equipment_slots = HashMap::new();
+            equipment_slots.insert(40, EquipmentSlot::OFF_HAND);
+            let inventory = Arc::new(PlayerInventory::new(equipment, Arc::new(equipment_slots)));
+            Self {
+                inventory,
+                dropped: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn drop_item(&self, item: ItemStack, _retain_ownership: bool) -> PlayerFuture<'_, ()> {
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                dropped.lock().await.push(item);
+            })
+        }
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+        fn is_creative(&self) -> bool {
+            false
+        }
+        fn experience_level(&self) -> i32 {
+            0
+        }
+        fn add_experience_levels(&self, _levels: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+        fn set_enchantment_seed(&self, _seed: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_inventory_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_cursor_packet<'a>(
+            &'a self,
+            _packet: &'a CSetCursorItem,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_property_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerProperty,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_set_packet<'a>(
+            &'a self,
+            _packet: &'a CSetPlayerInventory,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_set_held_item_packet<'a>(
+            &'a self,
+            _packet: &'a CSetSelectedSlot,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_equipment_change<'a>(
+            &'a self,
+            _slot: &'a EquipmentSlot,
+            _stack: &'a ItemStack,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn award_experience(&self, _amount: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn increment_stat(
+            &self,
+            _category: StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn cartography_table_close_drop() {
+        let player = TestPlayer::new();
+        let mut handler = CartographyTableScreenHandler::new(1, &player.inventory);
+
+        // Put map and paper in input slots
+        let map = ItemStack::new(1, &Item::FILLED_MAP);
+        let paper = ItemStack::new(1, &Item::PAPER);
+        handler.input_inventory.set_stack(0, map.clone()).await;
+        handler.input_inventory.set_stack(1, paper.clone()).await;
+
+        // Close cartography table - inputs should be dropped/given to player
+        handler.on_closed(&player).await;
+        assert!(handler.input_inventory.get_stack(0).await.is_empty());
+        assert!(handler.input_inventory.get_stack(1).await.is_empty());
+        assert!(handler.output_inventory.get_stack(0).await.is_empty());
     }
 }

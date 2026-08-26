@@ -70,3 +70,37 @@ impl BlockBehaviour for RedstoneOreBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn redstone_ore_ids_parity() {
+        assert_eq!(Block::REDSTONE_ORE.name, "redstone_ore");
+        assert_eq!(Block::DEEPSLATE_REDSTONE_ORE.name, "deepslate_redstone_ore");
+    }
+
+    #[test]
+    fn redstone_ore_default_state_parity() {
+        assert_ne!(
+            Block::REDSTONE_ORE.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::DEEPSLATE_REDSTONE_ORE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn redstone_ore_properties_parity() {
+        for lit in [true, false] {
+            let props = RedstoneOreLikeProperties { lit };
+            let state_id = props.to_state_id(&Block::REDSTONE_ORE);
+            let rt = RedstoneOreLikeProperties::from_state_id(state_id, &Block::REDSTONE_ORE);
+            assert_eq!(rt.lit, lit);
+        }
+    }
+}

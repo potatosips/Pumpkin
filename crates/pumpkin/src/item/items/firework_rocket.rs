@@ -11,6 +11,7 @@ use pumpkin_data::BlockDirection;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
+use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 
@@ -25,7 +26,7 @@ impl ItemMetadata for FireworkRocketItem {
 impl ItemBehaviour for FireworkRocketItem {
     fn use_on_block<'a>(
         &'a self,
-        _item: &'a mut ItemStack,
+        item: &'a mut ItemStack,
         player: &'a Player,
         location: BlockPos,
         _face: BlockDirection,
@@ -44,8 +45,14 @@ impl ItemBehaviour for FireworkRocketItem {
                 ),
                 &EntityType::FIREWORK_ROCKET,
             );
-            let entity = FireworkRocketEntity::new(entity);
+            let entity = FireworkRocketEntity::new_with_item(entity, item);
             world.spawn_entity(Arc::new(entity)).await;
+            world.play_sound(
+                Sound::EntityFireworkRocketLaunch,
+                SoundCategory::Ambient,
+                &player.position(),
+            );
+            item.decrement_unless_creative(player.gamemode.load(), 1);
         })
     }
 
@@ -56,14 +63,35 @@ impl ItemBehaviour for FireworkRocketItem {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async {
             if player.get_entity().is_fall_flying() {
+                let main_hand = player.inventory().held_item().await;
+                let (item_stack, hand) = if main_hand.item.id == Item::FIREWORK_ROCKET.id {
+                    (main_hand, pumpkin_util::Hand::Right)
+                } else {
+                    (
+                        player.inventory().off_hand_item().await,
+                        pumpkin_util::Hand::Left,
+                    )
+                };
+                if item_stack.item.id != Item::FIREWORK_ROCKET.id || item_stack.item_count == 0 {
+                    return;
+                }
                 let world = player.world();
                 let entity = Entity::new(
                     world.clone(),
                     player.get_entity().pos.load(),
                     &EntityType::FIREWORK_ROCKET,
                 );
-                let entity = FireworkRocketEntity::new_shot(entity, player.get_entity());
+                let entity =
+                    FireworkRocketEntity::new_shot(entity, player.get_entity(), &item_stack);
                 world.spawn_entity(Arc::new(entity)).await;
+                world.play_sound(
+                    Sound::EntityFireworkRocketLaunch,
+                    SoundCategory::Ambient,
+                    &player.position(),
+                );
+                let mut remaining = item_stack;
+                remaining.decrement_unless_creative(player.gamemode.load(), 1);
+                player.inventory().set_stack_in_hand(hand, remaining).await;
             }
         })
     }

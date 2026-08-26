@@ -50,3 +50,28 @@ impl BlockBehaviour for WheatBlock {
 impl PlantBlockBase for WheatBlock {}
 
 impl CropBlockBase for WheatBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, WheatLikeProperties};
+
+    #[test]
+    fn wheat_block_id_and_default_state_parity() {
+        assert_eq!(Block::WHEAT.name, "wheat");
+        let default_props =
+            WheatLikeProperties::from_state_id(Block::WHEAT.default_state.id, &Block::WHEAT);
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn wheat_properties_encoding_decoding_parity() {
+        for age in 0..=7 {
+            let props = WheatLikeProperties { age };
+            let state_id = props.to_state_id(&Block::WHEAT);
+            let decoded = WheatLikeProperties::from_state_id(state_id, &Block::WHEAT);
+            assert_eq!(decoded.age, age);
+        }
+    }
+}

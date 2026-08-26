@@ -39,8 +39,7 @@ impl SpiderEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(1, Box::new(SwimGoal::default()));
-            // TODO: SpiderAttackGoal for jumping
-            goal_selector.add_goal(3, Box::new(MeleeAttackGoal::new(1.0, false)));
+            goal_selector.add_goal(3, Box::new(MeleeAttackGoal::new_spider(1.0)));
             goal_selector.add_goal(5, Box::new(WanderAroundGoal::new(0.8)));
             goal_selector.add_goal(
                 6,

@@ -28,23 +28,13 @@ impl FluidMetadata for FlowingLava {
 }
 
 impl FlowingLava {
-    fn can_spread_fire_around(world: &Arc<World>, pos: &BlockPos) -> bool {
-        let spread_radius = world
+    fn can_spread_fire_around(world: &Arc<World>, _pos: &BlockPos) -> bool {
+        world
             .level_info
             .load()
             .game_rules
-            .fire_spread_radius_around_player;
-
-        if spread_radius == 0 {
-            return false;
-        }
-        if spread_radius == -1 {
-            return true;
-        }
-
-        world
-            .get_closest_player(pos.to_centered_f64(), spread_radius as f64)
-            .is_some()
+            .fire_spread_radius_around_player
+            >= 0
     }
 
     fn is_flammable_state(block_state: &BlockState) -> bool {

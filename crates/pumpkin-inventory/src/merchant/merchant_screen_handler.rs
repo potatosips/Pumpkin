@@ -626,6 +626,18 @@ mod tests {
             false
         }
 
+        fn may_build(&self) -> bool {
+            true
+        }
+
+        fn can_interact_with_block_at(
+            &self,
+            _position: &pumpkin_util::math::position::BlockPos,
+            _additional_range: f64,
+        ) -> bool {
+            true
+        }
+
         fn experience_level(&self) -> i32 {
             0
         }

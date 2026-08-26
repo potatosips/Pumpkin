@@ -272,7 +272,23 @@ impl EntityBase for FireballEntity {
             }
 
             let hit_pos = hit.hit_pos();
-            world.explode(hit_pos, self.get_explosion_power()).await;
+            world
+                .explode_with_fire(hit_pos, self.get_explosion_power())
+                .await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fireball_physics_and_power_constants_parity() {
+        assert_eq!(INITIAL_ACCELERATION_POWER, 0.1);
+        assert_eq!(DEFLECTION_SCALE, 0.5);
+        assert_eq!(DEFAULT_EXPLOSION_POWER, 1.0);
+        assert_eq!(AIR_INERTIA, 0.95);
+        assert_eq!(WATER_INERTIA, 0.8);
     }
 }

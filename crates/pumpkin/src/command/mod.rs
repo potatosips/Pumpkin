@@ -35,6 +35,7 @@ pub mod commands;
 pub mod context;
 pub mod dispatcher;
 pub mod errors;
+pub mod nbt_path;
 pub mod node;
 pub mod parser;
 pub mod snbt;

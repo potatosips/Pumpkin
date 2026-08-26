@@ -22,19 +22,6 @@ use super::common::{
     update_flanking_rails_shape,
 };
 
-// TODO: Fix redstone rail power extension behavior
-// Currently, redstone sources (like redstone torch) can incorrectly extend rail power
-// when placed at any powered rail position. In Minecraft, power should only extend
-// when a redstone source is placed at the LAST powered rail or at an unpowered rail.
-//
-// Example of INCORRECT current behavior:
-// redstone_torch [powered_rail×9] [unpowered_rail×3]
-// If redstone torch is placed at 6th powered rail → power extends (WRONG)
-//
-// Example of CORRECT Minecraft behavior:
-// redstone_torch [powered_rail×9] [unpowered_rail×3]
-// Power should only extend when redstone source is at 9th rail (last powered) or unpowered rail
-
 #[pumpkin_block("minecraft:powered_rail")]
 pub struct PoweredRailBlock;
 
@@ -558,5 +545,55 @@ impl PoweredRailBlock {
             let rail_props = RailProperties::new(state_id, block);
             (block, rail_props)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, PoweredRailLikeProperties, RailShapeStraight,
+    };
+
+    #[test]
+    fn powered_rail_block_id_parity() {
+        assert_eq!(Block::POWERED_RAIL.name, "powered_rail");
+    }
+
+    #[test]
+    fn powered_rail_default_state_parity() {
+        assert_ne!(
+            Block::POWERED_RAIL.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn powered_rail_properties_roundtrip_parity() {
+        for shape in [
+            RailShapeStraight::NorthSouth,
+            RailShapeStraight::EastWest,
+            RailShapeStraight::AscendingEast,
+            RailShapeStraight::AscendingWest,
+            RailShapeStraight::AscendingNorth,
+            RailShapeStraight::AscendingSouth,
+        ] {
+            for powered in [true, false] {
+                for waterlogged in [true, false] {
+                    let props = PoweredRailLikeProperties {
+                        powered,
+                        shape,
+                        waterlogged,
+                    };
+                    let state_id = props.to_state_id(&Block::POWERED_RAIL);
+                    let rt =
+                        PoweredRailLikeProperties::from_state_id(state_id, &Block::POWERED_RAIL);
+                    assert_eq!(rt.shape, shape);
+                    assert_eq!(rt.powered, powered);
+                    assert_eq!(rt.waterlogged, waterlogged);
+                }
+            }
+        }
     }
 }

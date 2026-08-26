@@ -6,11 +6,11 @@ use crate::entity::{
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::{
+    Block,
     damage::DamageType,
     data_component_impl::{EquipmentSlot, EquipmentType},
     entity::EntityStatus,
     item::Item,
-    particle::Particle,
     sound::{Sound, SoundCategory},
 };
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
@@ -93,6 +93,22 @@ pub struct ArmorStandEntity {
     rotation: AtomicCell<PackedRotation>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArmorStandFireDamage {
+    Ignite,
+    Burn,
+}
+
+fn armor_stand_fire_damage(damage_type: DamageType) -> Option<ArmorStandFireDamage> {
+    if damage_type == DamageType::IN_FIRE || damage_type == DamageType::CAMPFIRE {
+        Some(ArmorStandFireDamage::Ignite)
+    } else if damage_type == DamageType::ON_FIRE {
+        Some(ArmorStandFireDamage::Burn)
+    } else {
+        None
+    }
+}
+
 impl ArmorStandEntity {
     pub fn new(entity: Entity) -> Self {
         let living_entity = LivingEntity::new(entity);
@@ -149,17 +165,39 @@ impl ArmorStandEntity {
         self.armor_stand_flags.store(new_value, Ordering::Relaxed);
     }
 
-    pub fn can_use_slot(&self, slot: &EquipmentSlot) -> bool {
+    pub fn can_use_slot_mask(
+        disabled_slots: i32,
+        should_show_arms: bool,
+        slot: &EquipmentSlot,
+    ) -> bool {
         !matches!(slot, EquipmentSlot::Body(_) | EquipmentSlot::Saddle(_))
-            && !self.is_slot_disabled(slot)
+            && !Self::is_slot_disabled_mask(disabled_slots, should_show_arms, slot)
+    }
+
+    pub fn is_slot_disabled_mask(
+        disabled_slots: i32,
+        should_show_arms: bool,
+        slot: &EquipmentSlot,
+    ) -> bool {
+        let slot_bit = 1 << slot.get_offset_entity_slot_id(0);
+        (disabled_slots & slot_bit) != 0
+            || (slot.slot_type() == EquipmentType::Hand && !should_show_arms)
+    }
+
+    pub fn can_use_slot(&self, slot: &EquipmentSlot) -> bool {
+        Self::can_use_slot_mask(
+            self.disabled_slots.load(Ordering::Relaxed),
+            self.should_show_arms(),
+            slot,
+        )
     }
 
     pub fn is_slot_disabled(&self, slot: &EquipmentSlot) -> bool {
-        let disabled_slots = self.disabled_slots.load(Ordering::Relaxed);
-        let slot_bit = 1 << slot.get_offset_entity_slot_id(0);
-
-        (disabled_slots & slot_bit) != 0
-            || (slot.slot_type() == EquipmentType::Hand && !self.should_show_arms())
+        Self::is_slot_disabled_mask(
+            self.disabled_slots.load(Ordering::Relaxed),
+            self.should_show_arms(),
+            slot,
+        )
     }
 
     pub fn set_slot_disabled(&self, slot: &EquipmentSlot, disabled: bool) {
@@ -187,18 +225,27 @@ impl ArmorStandEntity {
         self.rotation.store(packed.to_owned());
     }
 
+    async fn drop_all_equipment(&self) {
+        let entity = self.get_entity();
+        let world = entity.world.load();
+        let pos = entity.block_pos.load();
+        let mut equipment = self.living_entity.entity_equipment.lock().await;
+        for (_, item) in equipment.equipment.drain() {
+            if !item.is_empty() {
+                world.drop_stack(&pos, item).await;
+            }
+        }
+    }
+
     async fn break_and_drop_items(&self) {
         let entity = self.get_entity();
-        //let name = entity.custom_name.unwrap_or(entity.get_name());
+        let world = entity.world.load();
+        let pos = entity.block_pos.load();
 
-        //TODO: i am stupid! let armor_stand_item = ItemStack::new_with_component(1, &Item::ARMOR_STAND, vec![(DataComponent::CustomName, self.get_custom_name())]);
         let armor_stand_item = ItemStack::new(1, &Item::ARMOR_STAND);
-        entity
-            .world
-            .load()
-            .drop_stack(&entity.block_pos.load(), armor_stand_item)
-            .await;
+        world.drop_stack(&pos, armor_stand_item).await;
 
+        self.drop_all_equipment().await;
         Self::on_break(entity);
     }
 
@@ -209,25 +256,37 @@ impl ArmorStandEntity {
             SoundCategory::Neutral,
             &entity.pos.load(),
         );
-
-        // TODO: Implement equipment slots and make them drop all of their stored items.
     }
 
-    /// Spawns break particles at the armor stand's position.
-    // TODO: use oak plank block particles like vanilla (requires block state data in particle system)
+    async fn cause_environmental_damage(
+        &self,
+        entity: &Entity,
+        caller: &dyn EntityBase,
+        amount: f32,
+    ) {
+        let health = self.living_entity.health.load() - amount;
+        if health <= 0.5 {
+            self.drop_all_equipment().await;
+            Self::on_break(entity);
+            entity.kill(caller).await;
+        } else {
+            self.living_entity.set_health(health);
+        }
+    }
+
+    /// Spawns Vanilla's oak-plank block particles at the armor stand's position.
     fn spawn_break_particles(entity: &Entity) {
         let world = entity.world.load();
         let pos = entity.pos.load();
         let width = entity.width();
         let height = entity.height();
 
-        // Spawn particles similar to vanilla: 10 particles with offset based on entity size
-        world.spawn_particle(
-            Vector3::new(pos.x, pos.y + f64::from(height) * 0.6666, pos.z),
+        world.spawn_block_particle(
+            Vector3::new(pos.x, pos.y + f64::from(height) * (2.0 / 3.0), pos.z),
             Vector3::new(width / 4.0, height / 4.0, width / 4.0),
             0.05,
             10,
-            Particle::Poof,
+            Block::OAK_PLANKS.default_state.id,
         );
     }
 }
@@ -372,13 +431,27 @@ impl EntityBase for ArmorStandEntity {
                 || damage_type == DamageType::BAD_RESPAWN_POINT;
 
             if is_explosion {
+                self.drop_all_equipment().await;
                 Self::on_break(entity);
                 entity.kill(caller).await;
                 return false;
             }
 
-            // TODO: IGNITES_ARMOR_STANDS (in_fire, campfire) - set on fire
-            // TODO: BURNS_ARMOR_STANDS (on_fire) - reduce health
+            if armor_stand_fire_damage(damage_type) == Some(ArmorStandFireDamage::Ignite) {
+                if entity.fire_ticks.load(Ordering::Relaxed) > 0 {
+                    self.cause_environmental_damage(entity, caller, 0.15).await;
+                } else {
+                    entity.set_on_fire_for(5.0);
+                }
+                return false;
+            }
+
+            if armor_stand_fire_damage(damage_type) == Some(ArmorStandFireDamage::Burn) {
+                if self.living_entity.health.load() > 0.5 {
+                    self.cause_environmental_damage(entity, caller, 4.0).await;
+                }
+                return false;
+            }
 
             let can_break = damage_type == DamageType::PLAYER_EXPLOSION
                 || damage_type == DamageType::PLAYER_ATTACK
@@ -402,6 +475,7 @@ impl EntityBase for ArmorStandEntity {
                 if !player.abilities.lock().await.allow_modify_world {
                     return false;
                 } else if player.is_creative() {
+                    self.drop_all_equipment().await;
                     Self::spawn_break_particles(entity);
                     entity.kill(caller).await;
                     return true;
@@ -451,4 +525,56 @@ pub enum ArmorStandFlags {
     HideBasePlate = 8,
     /// Marker Flag
     Marker = 16,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_armor_stand_fire_damage_tags_are_classified() {
+        assert_eq!(
+            armor_stand_fire_damage(DamageType::IN_FIRE),
+            Some(ArmorStandFireDamage::Ignite)
+        );
+        assert_eq!(
+            armor_stand_fire_damage(DamageType::CAMPFIRE),
+            Some(ArmorStandFireDamage::Ignite)
+        );
+        assert_eq!(
+            armor_stand_fire_damage(DamageType::ON_FIRE),
+            Some(ArmorStandFireDamage::Burn)
+        );
+        assert_eq!(armor_stand_fire_damage(DamageType::PLAYER_ATTACK), None);
+    }
+
+    #[test]
+    fn vanilla_armor_stand_slot_usage_respects_arms_and_disabled_bits() {
+        // Without arms, main hand is disabled
+        assert!(!ArmorStandEntity::can_use_slot_mask(
+            0,
+            false,
+            &EquipmentSlot::MAIN_HAND
+        ));
+        // With arms, main hand is enabled
+        assert!(ArmorStandEntity::can_use_slot_mask(
+            0,
+            true,
+            &EquipmentSlot::MAIN_HAND
+        ));
+        // Head slot is enabled by default
+        assert!(ArmorStandEntity::can_use_slot_mask(
+            0,
+            false,
+            &EquipmentSlot::HEAD
+        ));
+
+        // Disable head slot via bitmask
+        let head_bit = 1 << EquipmentSlot::HEAD.get_offset_entity_slot_id(0);
+        assert!(!ArmorStandEntity::can_use_slot_mask(
+            head_bit,
+            false,
+            &EquipmentSlot::HEAD
+        ));
+    }
 }

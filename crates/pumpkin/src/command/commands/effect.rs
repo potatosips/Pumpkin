@@ -1,14 +1,13 @@
 use crate::TextComponent;
 use crate::command::args::bool::BoolArgConsumer;
 use crate::command::args::bounded_num::BoundedNumArgumentConsumer;
-use crate::command::args::players::PlayersArgumentConsumer;
+use crate::command::args::entities::EntitiesArgumentConsumer;
 use crate::command::args::resource::effect::EffectTypeArgumentConsumer;
 use crate::command::args::{Arg, ConsumedArgs, FindArgDefaultName};
 use crate::command::dispatcher::CommandError::{self, InvalidConsumption};
 use crate::command::tree::CommandTree;
 use crate::command::tree::builder::{argument, literal};
 use crate::command::{CommandExecutor, CommandResult, CommandSender};
-use crate::entity::EntityBase;
 use pumpkin_data::potion::Effect;
 
 const NAMES: [&str; 1] = ["effect"];
@@ -45,7 +44,7 @@ impl CommandExecutor for GiveExecutor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let Some(Arg::Players(targets)) = args.get(ARG_TARGET) else {
+            let Some(Arg::Entities(targets)) = args.get(ARG_TARGET) else {
                 return Err(InvalidConsumption(Some(ARG_TARGET.into())));
             };
             let Some(Arg::Effect(effect)) = args.get(ARG_EFFECT) else {
@@ -88,14 +87,16 @@ impl CommandExecutor for GiveExecutor {
             let mut successes = 0;
 
             for target in targets {
-                let should_skip = target
-                    .living_entity
+                let Some(living) = target.get_living_entity() else {
+                    continue;
+                };
+                let should_skip = living
                     .get_effect(effect)
                     .await
                     .is_some_and(|existing| existing.amplifier >= amplifier);
 
                 if !should_skip {
-                    target
+                    living
                         .add_effect(Effect {
                             effect_type: effect,
                             duration: second,
@@ -158,7 +159,7 @@ impl CommandExecutor for ClearExecutor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let Some(Arg::Players(targets)) = args.get(ARG_TARGET) else {
+            let Some(Arg::Entities(targets)) = args.get(ARG_TARGET) else {
                 return Err(InvalidConsumption(Some(ARG_TARGET.into())));
             };
 
@@ -167,7 +168,10 @@ impl CommandExecutor for ClearExecutor {
             if self.0 {
                 let mut succeeded_clears: i32 = 0;
                 for target in targets {
-                    if target.remove_all_effects().await {
+                    if let Some(living) = target.get_living_entity()
+                        && !living.active_effects.lock().await.is_empty()
+                    {
+                        living.reset_effects_and_attributes().await;
                         succeeded_clears += 1;
                     }
                 }
@@ -208,8 +212,10 @@ impl CommandExecutor for ClearExecutor {
 
                 let mut succeeded_clears: i32 = 0;
                 for target in targets {
-                    if target.living_entity.has_effect(effect).await {
-                        target.remove_effect(effect).await;
+                    if let Some(living) = target.get_living_entity()
+                        && living.has_effect(effect).await
+                    {
+                        living.remove_effect(effect).await;
                         succeeded_clears += 1;
                     }
                 }
@@ -261,7 +267,7 @@ pub fn init_command_tree() -> CommandTree {
     CommandTree::new(NAMES, DESCRIPTION)
         .then(
             literal(ARG_CLEAR).then(
-                argument(ARG_TARGET, PlayersArgumentConsumer)
+                argument(ARG_TARGET, EntitiesArgumentConsumer)
                     .execute(ClearExecutor(true))
                     .then(
                         argument(ARG_EFFECT, EffectTypeArgumentConsumer)
@@ -271,7 +277,7 @@ pub fn init_command_tree() -> CommandTree {
         )
         .then(
             literal(ARG_GIVE).then(
-                argument(ARG_TARGET, PlayersArgumentConsumer).then(
+                argument(ARG_TARGET, EntitiesArgumentConsumer).then(
                     argument(ARG_EFFECT, EffectTypeArgumentConsumer)
                         .execute(GiveExecutor(Time::Base, Amplifier::Base, true))
                         //for specified time

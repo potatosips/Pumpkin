@@ -83,6 +83,7 @@ pub mod vine;
 // Terrain / environment / physics
 pub mod bubble_column;
 pub mod cobweb;
+pub mod concrete_powder;
 pub mod dirt_path;
 pub mod dragon_egg;
 pub mod falling;
@@ -90,6 +91,7 @@ pub mod grass_block;
 pub mod infested;
 pub mod powder_snow;
 pub mod rooted_dirt;
+pub mod scaffolding;
 pub mod snow;
 pub mod sponge;
 

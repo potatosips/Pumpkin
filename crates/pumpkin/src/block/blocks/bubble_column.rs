@@ -354,4 +354,29 @@ mod tests {
             ReconcileAction::RestoreWater
         );
     }
+
+    #[test]
+    fn bubble_column_block_id_parity() {
+        assert_eq!(Block::BUBBLE_COLUMN.id, BlockId::BUBBLE_COLUMN);
+    }
+
+    #[test]
+    fn bubble_column_properties_encoding_decoding_parity() {
+        for drag in [false, true] {
+            let props = BubbleColumnLikeProperties { r#drag: drag };
+            let state_id = props.to_state_id(&Block::BUBBLE_COLUMN);
+            let decoded =
+                BubbleColumnLikeProperties::from_state_id(state_id, &Block::BUBBLE_COLUMN);
+            assert_eq!(decoded.r#drag, drag);
+        }
+    }
+
+    #[test]
+    fn bubble_column_default_state_parity() {
+        let default_props = BubbleColumnLikeProperties::from_state_id(
+            Block::BUBBLE_COLUMN.default_state.id,
+            &Block::BUBBLE_COLUMN,
+        );
+        assert_eq!(default_props.r#drag, true);
+    }
 }

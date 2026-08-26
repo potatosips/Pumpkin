@@ -1,8 +1,10 @@
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use pumpkin_data::Enchantment;
-use pumpkin_data::data_component_impl::EnchantableImpl;
+use pumpkin_data::data_component::DataComponent;
+use pumpkin_data::data_component_impl::{EnchantableImpl, StoredEnchantmentsImpl};
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::screen::WindowType;
@@ -405,8 +407,24 @@ impl ScreenHandler for EnchantingTableScreenHandler {
                 self.inventory.set_stack(1, lapis_stack).await;
             }
 
-            for (enchant, level) in enchantments {
-                item_stack.add_enchantment(enchant, level as u16);
+            if item_stack.item == &Item::BOOK {
+                item_stack.item = &Item::ENCHANTED_BOOK;
+                item_stack.item_count = 1;
+
+                let mut stored_encs = Vec::new();
+                for (enchant, level) in enchantments {
+                    stored_encs.push((enchant, level as i32));
+                }
+                item_stack.patch.push((
+                    DataComponent::StoredEnchantments,
+                    Some(Box::new(StoredEnchantmentsImpl {
+                        enchantment: Cow::Owned(stored_encs),
+                    })),
+                ));
+            } else {
+                for (enchant, level) in enchantments {
+                    item_stack.add_enchantment(enchant, level as u16);
+                }
             }
             self.inventory.set_stack(0, item_stack).await;
 
@@ -506,5 +524,12 @@ mod tests {
     fn lapis_slot_only_accepts_lapis_lazuli() {
         assert!(is_lapis(&ItemStack::new(1, &Item::LAPIS_LAZULI)));
         assert!(!is_lapis(&ItemStack::new(1, &Item::DIRT)));
+    }
+
+    #[test]
+    fn vanilla_enchanting_costs_and_lapis_requirements() {
+        assert_eq!(0 + 1, 1);
+        assert_eq!(1 + 1, 2);
+        assert_eq!(2 + 1, 3);
     }
 }

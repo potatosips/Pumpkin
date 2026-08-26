@@ -18,10 +18,11 @@ use crate::world_info::{
     DataPacks, MAXIMUM_SUPPORTED_LEVEL_VERSION, MAXIMUM_SUPPORTED_WORLD_DATA_VERSION,
     MINIMUM_SUPPORTED_LEVEL_VERSION, MINIMUM_SUPPORTED_WORLD_DATA_VERSION, WorldVersion,
     data_files::{
-        minecraft_data_dir, read_game_rules, read_wandering_trader, read_weather,
-        read_world_clocks, read_world_gen_settings, write_custom_boss_events_stub,
-        write_game_rules, write_scheduled_events_stub, write_wandering_trader, write_weather,
-        write_world_clocks, write_world_gen_settings,
+        apply_java_game_rules_from_nbt, java_game_rules_to_nbt, minecraft_data_dir,
+        read_game_rules, read_wandering_trader, read_weather, read_world_clocks,
+        read_world_gen_settings, write_custom_boss_events_stub, write_game_rules,
+        write_scheduled_events_stub, write_wandering_trader, write_weather, write_world_clocks,
+        write_world_gen_settings,
     },
     default_data_packs,
 };
@@ -251,6 +252,9 @@ fn level_data_from_nbt(data: &NbtCompound, seed: i64) -> LevelData {
     if let Some(clear_weather_time) = data.get_int("clearWeatherTime") {
         level_data.clear_weather_time = clear_weather_time;
     }
+    if let Some(game_rules) = data.get_compound("GameRules") {
+        apply_java_game_rules_from_nbt(&mut level_data.game_rules, game_rules);
+    }
 
     level_data
 }
@@ -280,6 +284,7 @@ fn level_data_to_nbt(info: &LevelData, data: &mut NbtCompound) {
     data.put_compound("Version", world_version_to_nbt(&info.world_version));
     data.put_int("version", info.level_version);
     data.put_int("map_id", info.map_id);
+    data.put_compound("GameRules", java_game_rules_to_nbt(&info.game_rules));
     put_world_gen_settings_seed(data, info.world_gen_settings.seed);
 }
 
@@ -318,10 +323,12 @@ impl WorldInfoReader for AnvilLevelInfo {
 
         let mut level_data = level_data_from_nbt(data, seed);
 
-        // game_rules.dat – prefer the new file; fall back to level.dat values
-        if minecraft_data_dir(level_folder)
-            .join("game_rules.dat")
-            .exists()
+        // Java's level.dat Data.GameRules is authoritative. Read Pumpkin's
+        // former separate file only when importing an older Pumpkin world.
+        if data.get_compound("GameRules").is_none()
+            && minecraft_data_dir(level_folder)
+                .join("game_rules.dat")
+                .exists()
         {
             level_data.game_rules = read_game_rules(level_folder);
         }

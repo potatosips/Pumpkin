@@ -1,6 +1,7 @@
 use std::sync::{Arc, Weak};
 
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::tag::Taggable;
 
 use crate::entity::{
     Entity, NBTStorage,
@@ -68,6 +69,62 @@ impl PiglinEntity {
 
         mob_arc
     }
+
+    #[must_use]
+    pub fn is_item_piglin_safe(item: &pumpkin_data::item::Item) -> bool {
+        item.has_tag(&pumpkin_data::tag::Item::MINECRAFT_PIGLIN_SAFE_ARMOR)
+            || *item == pumpkin_data::item::Item::GOLDEN_HELMET
+            || *item == pumpkin_data::item::Item::GOLDEN_CHESTPLATE
+            || *item == pumpkin_data::item::Item::GOLDEN_LEGGINGS
+            || *item == pumpkin_data::item::Item::GOLDEN_BOOTS
+    }
+
+    #[must_use]
+    pub fn is_player_wearing_safe_armor(armor_items: &[Option<&pumpkin_data::item::Item>]) -> bool {
+        armor_items.iter().any(|item_opt| {
+            if let Some(item) = item_opt {
+                Self::is_item_piglin_safe(item)
+            } else {
+                false
+            }
+        })
+    }
+
+    #[must_use]
+    pub fn is_barter_currency(item: &pumpkin_data::item::Item) -> bool {
+        *item == pumpkin_data::item::Item::GOLD_INGOT
+    }
+
+    #[must_use]
+    pub fn is_loved_item(item: &pumpkin_data::item::Item) -> bool {
+        Self::is_item_piglin_safe(item)
+            || *item == pumpkin_data::item::Item::GOLD_INGOT
+            || *item == pumpkin_data::item::Item::RAW_GOLD
+            || *item == pumpkin_data::item::Item::GOLD_BLOCK
+            || *item == pumpkin_data::item::Item::RAW_GOLD_BLOCK
+            || *item == pumpkin_data::item::Item::GOLD_NUGGET
+            || *item == pumpkin_data::item::Item::GOLDEN_SWORD
+            || *item == pumpkin_data::item::Item::GOLDEN_AXE
+            || *item == pumpkin_data::item::Item::GOLDEN_PICKAXE
+            || *item == pumpkin_data::item::Item::GOLDEN_SHOVEL
+            || *item == pumpkin_data::item::Item::GOLDEN_HOE
+            || *item == pumpkin_data::item::Item::GOLDEN_HORSE_ARMOR
+            || *item == pumpkin_data::item::Item::BELL
+            || *item == pumpkin_data::item::Item::GLISTERING_MELON_SLICE
+            || *item == pumpkin_data::item::Item::GOLDEN_CARROT
+            || *item == pumpkin_data::item::Item::GOLDEN_APPLE
+            || *item == pumpkin_data::item::Item::ENCHANTED_GOLDEN_APPLE
+            || *item == pumpkin_data::item::Item::LIGHT_WEIGHTED_PRESSURE_PLATE
+    }
+
+    #[must_use]
+    pub fn is_soul_fire_block(block: &pumpkin_data::Block) -> bool {
+        *block == pumpkin_data::Block::SOUL_FIRE
+            || *block == pumpkin_data::Block::SOUL_TORCH
+            || *block == pumpkin_data::Block::SOUL_WALL_TORCH
+            || *block == pumpkin_data::Block::SOUL_LANTERN
+            || *block == pumpkin_data::Block::SOUL_CAMPFIRE
+    }
 }
 
 impl NBTStorage for PiglinEntity {}
@@ -75,5 +132,60 @@ impl NBTStorage for PiglinEntity {}
 impl Mob for PiglinEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::item::Item;
+
+    #[test]
+    fn vanilla_piglin_safe_armor_detection() {
+        let gold_helmet = Item::GOLDEN_HELMET;
+        let iron_chestplate = Item::IRON_CHESTPLATE;
+        let diamond_boots = Item::DIAMOND_BOOTS;
+
+        assert!(PiglinEntity::is_item_piglin_safe(&gold_helmet));
+        assert!(!PiglinEntity::is_item_piglin_safe(&iron_chestplate));
+        assert!(!PiglinEntity::is_item_piglin_safe(&diamond_boots));
+
+        let equipped_with_gold = [
+            Some(&gold_helmet),
+            Some(&iron_chestplate),
+            None,
+            Some(&diamond_boots),
+        ];
+        assert!(PiglinEntity::is_player_wearing_safe_armor(
+            &equipped_with_gold
+        ));
+
+        let equipped_without_gold = [None, Some(&iron_chestplate), None, Some(&diamond_boots)];
+        assert!(!PiglinEntity::is_player_wearing_safe_armor(
+            &equipped_without_gold
+        ));
+    }
+
+    #[test]
+    fn vanilla_piglin_barter_and_loved_items() {
+        assert!(PiglinEntity::is_barter_currency(&Item::GOLD_INGOT));
+        assert!(!PiglinEntity::is_barter_currency(&Item::IRON_INGOT));
+        assert!(!PiglinEntity::is_barter_currency(&Item::GOLD_NUGGET));
+
+        assert!(PiglinEntity::is_loved_item(&Item::GOLD_INGOT));
+        assert!(PiglinEntity::is_loved_item(&Item::GOLDEN_SWORD));
+        assert!(PiglinEntity::is_loved_item(&Item::GOLDEN_APPLE));
+        assert!(!PiglinEntity::is_loved_item(&Item::DIAMOND));
+    }
+
+    #[test]
+    fn vanilla_piglin_soul_fire_repellents() {
+        assert!(PiglinEntity::is_soul_fire_block(&Block::SOUL_FIRE));
+        assert!(PiglinEntity::is_soul_fire_block(&Block::SOUL_TORCH));
+        assert!(PiglinEntity::is_soul_fire_block(&Block::SOUL_LANTERN));
+        assert!(PiglinEntity::is_soul_fire_block(&Block::SOUL_CAMPFIRE));
+        assert!(!PiglinEntity::is_soul_fire_block(&Block::FIRE));
+        assert!(!PiglinEntity::is_soul_fire_block(&Block::TORCH));
     }
 }

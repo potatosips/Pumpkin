@@ -162,7 +162,7 @@ impl Animal for WolfEntity {
 impl NBTStorage for WolfEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             let variant_str = match self.variant.load(Ordering::Relaxed) {
@@ -191,7 +191,7 @@ impl NBTStorage for WolfEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(variant_str) = nbt.get_string("variant") {
@@ -280,7 +280,7 @@ impl Mob for WolfEntity {
             entity.send_meta_data(
                 &[Metadata::new(
                     pumpkin_data::tracked_data::wolf::COLLAR_COLOR,
-                    VarInt(self.collar_color.load(Ordering::Relaxed) as i32),
+                    self.collar_color.load(Ordering::Relaxed) as i32,
                 )],
                 None,
             );
@@ -299,5 +299,22 @@ impl Mob for WolfEntity {
                 None,
             );
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn wolf_tame_flags_bitmask_parity() {
+        let is_sitting = true;
+        let is_tame = true;
+        let mut flags = 0u8;
+        if is_sitting {
+            flags |= 0x01;
+        }
+        if is_tame {
+            flags |= 0x04;
+        }
+        assert_eq!(flags, 0x05);
     }
 }

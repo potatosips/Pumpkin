@@ -3,20 +3,22 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
-use pumpkin_data::entity::EntityType;
+use pumpkin_data::entity::{EntityStatus, EntityType};
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::GameMode;
+use rand::RngExt;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ai::goal::{
-        active_target::ActiveTargetGoal, look_around::RandomLookAroundGoal,
-        look_at_entity::LookAtEntityGoal, melee_attack::MeleeAttackGoal, revenge::RevengeGoal,
-        wander_around::WanderAroundGoal,
+        defend_village_target::DefendVillageTargetGoal,
+        iron_golem_hostile_target::IronGolemHostileTargetGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, melee_attack::MeleeAttackGoal,
+        offer_flower::OfferFlowerGoal, revenge::RevengeGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -60,6 +62,7 @@ impl IronGolemEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(1, Box::new(MeleeAttackGoal::new(1.0, true)));
+            goal_selector.add_goal(5, Box::new(OfferFlowerGoal::new(mob_arc.clone())));
             goal_selector.add_goal(6, Box::new(WanderAroundGoal::new(0.6)));
             goal_selector.add_goal(
                 7,
@@ -67,15 +70,9 @@ impl IronGolemEntity {
             );
             goal_selector.add_goal(8, Box::new(RandomLookAroundGoal::default()));
 
-            target_selector.add_goal(1, Box::new(RevengeGoal::new(true)));
-            target_selector.add_goal(
-                2,
-                ActiveTargetGoal::with_default(&mob_arc.mob_entity, &EntityType::PLAYER, false),
-            );
-            target_selector.add_goal(
-                3,
-                ActiveTargetGoal::with_default(&mob_arc.mob_entity, &EntityType::ZOMBIE, true),
-            );
+            target_selector.add_goal(1, Box::new(DefendVillageTargetGoal::new(mob_arc.clone())));
+            target_selector.add_goal(2, Box::new(RevengeGoal::new(false)));
+            target_selector.add_goal(3, Box::new(IronGolemHostileTargetGoal::new()));
         };
 
         mob_arc
@@ -98,19 +95,48 @@ impl IronGolemEntity {
             None,
         );
     }
+
+    pub fn set_offering_flower(&self, offering: bool) {
+        let entity = self.get_entity();
+        if offering {
+            self.offer_flower_tick.store(400, Ordering::Relaxed);
+            entity
+                .world
+                .load()
+                .send_entity_status(entity, EntityStatus::OfferFlower, None);
+        } else {
+            self.offer_flower_tick.store(0, Ordering::Relaxed);
+            entity
+                .world
+                .load()
+                .send_entity_status(entity, EntityStatus::StopOfferFlower, None);
+        }
+    }
+}
+
+fn iron_golem_attack_damage(base_damage: f32, random_roll: i32) -> f32 {
+    if base_damage > 0.0 {
+        base_damage / 2.0 + random_roll as f32
+    } else {
+        base_damage
+    }
+}
+
+fn iron_golem_upward_knockback(knockback_resistance: f64) -> f64 {
+    0.4 * (1.0 - knockback_resistance).max(0.0)
 }
 
 impl NBTStorage for IronGolemEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             nbt.put_bool("PlayerCreated", self.is_player_created());
         })
     }
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(created) = nbt.get_bool("PlayerCreated") {
                 self.set_player_created(created);
             }
@@ -134,6 +160,50 @@ impl Mob for IronGolemEntity {
             if flower_tick > 0 {
                 self.offer_flower_tick.fetch_sub(1, Ordering::Relaxed);
             }
+        })
+    }
+
+    fn get_attack_damage(&self) -> f32 {
+        let base_damage = self
+            .mob_entity
+            .living_entity
+            .get_attribute_value(&pumpkin_data::attributes::Attributes::ATTACK_DAMAGE)
+            as f32;
+        let roll = if base_damage > 0.0 {
+            rand::rng().random_range(0..base_damage as i32)
+        } else {
+            0
+        };
+        iron_golem_attack_damage(base_damage, roll)
+    }
+
+    fn on_attack_attempt<'a>(&'a self, _target: &'a dyn EntityBase) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            self.attack_animation_tick.store(10, Ordering::Relaxed);
+
+            let entity = self.get_entity();
+            let world = entity.world.load();
+            world.send_entity_status(entity, EntityStatus::StartAttacking, None);
+            world.play_sound(
+                Sound::EntityIronGolemAttack,
+                SoundCategory::Neutral,
+                &entity.pos.load(),
+            );
+        })
+    }
+
+    fn on_successful_attack<'a>(&'a self, target: &'a dyn EntityBase) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let target_entity = target.get_entity();
+            let mut velocity = target_entity.velocity.load();
+            let knockback_resistance = target.get_living_entity().map_or(0.0, |living| {
+                living.get_attribute_value(
+                    &pumpkin_data::attributes::Attributes::KNOCKBACK_RESISTANCE,
+                )
+            });
+            velocity.y += iron_golem_upward_knockback(knockback_resistance);
+            target_entity.velocity.store(velocity);
+            target_entity.velocity_dirty.store(true, Ordering::Relaxed);
         })
     }
 
@@ -166,6 +236,9 @@ impl Mob for IronGolemEntity {
                     let entity = self.get_entity();
                     let world = entity.world.load();
                     let pos = entity.pos.load();
+                    // Status 11 is interpreted as repair particles for iron
+                    // golems (and as the offer-flower animation for villagers).
+                    world.send_entity_status(entity, EntityStatus::OfferFlower, None);
                     world.play_sound(Sound::EntityIronGolemRepair, SoundCategory::Neutral, &pos);
                     if player.gamemode.load() != GameMode::Creative {
                         item_stack.item_count = item_stack.item_count.saturating_sub(1);
@@ -175,5 +248,26 @@ impl Mob for IronGolemEntity {
             }
             false
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{iron_golem_attack_damage, iron_golem_upward_knockback};
+
+    #[test]
+    fn vanilla_iron_golem_damage_uses_half_base_plus_random_integer() {
+        assert_eq!(iron_golem_attack_damage(15.0, 0), 7.5);
+        assert_eq!(iron_golem_attack_damage(15.0, 7), 14.5);
+        assert_eq!(iron_golem_attack_damage(15.0, 14), 21.5);
+        assert_eq!(iron_golem_attack_damage(0.0, 0), 0.0);
+    }
+
+    #[test]
+    fn vanilla_iron_golem_launch_scales_with_knockback_resistance() {
+        assert!((iron_golem_upward_knockback(0.0) - 0.4).abs() < f64::EPSILON);
+        assert!((iron_golem_upward_knockback(0.5) - 0.2).abs() < f64::EPSILON);
+        assert_eq!(iron_golem_upward_knockback(1.0), 0.0);
+        assert_eq!(iron_golem_upward_knockback(2.0), 0.0);
     }
 }

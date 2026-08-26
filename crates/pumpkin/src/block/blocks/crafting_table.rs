@@ -5,7 +5,7 @@ use pumpkin_data::translation;
 use pumpkin_inventory::crafting::crafting_screen_handler::CraftingTableScreenHandler;
 use pumpkin_inventory::player::player_inventory::PlayerInventory;
 use pumpkin_inventory::screen_handler::{
-    BoxFuture, InventoryPlayer, ScreenHandlerFactory, SharedScreenHandler,
+    BoxFuture, InventoryPlayer, ScreenHandler, ScreenHandlerFactory, SharedScreenHandler,
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::text::TextComponent;
@@ -27,7 +27,11 @@ impl BlockBehaviour for CraftingTableBlock {
                 .await;
             args.player
                 .open_handled_screen(
-                    &CraftingTableScreenFactory(args.server.recipe_manager.clone()),
+                    &CraftingTableScreenFactory {
+                        recipe_manager: args.server.recipe_manager.clone(),
+                        position: *args.position,
+                        world: args.world.clone(),
+                    },
                     Some(*args.position),
                 )
                 .await;
@@ -37,7 +41,11 @@ impl BlockBehaviour for CraftingTableBlock {
     }
 }
 
-struct CraftingTableScreenFactory(Arc<crate::server::RecipeManager>);
+struct CraftingTableScreenFactory {
+    recipe_manager: Arc<crate::server::RecipeManager>,
+    position: pumpkin_util::math::position::BlockPos,
+    world: Arc<crate::world::World>,
+}
 
 impl ScreenHandlerFactory for CraftingTableScreenFactory {
     fn create_screen_handler<'a>(
@@ -47,9 +55,22 @@ impl ScreenHandlerFactory for CraftingTableScreenFactory {
         _player: &'a dyn InventoryPlayer,
     ) -> BoxFuture<'a, Option<SharedScreenHandler>> {
         Box::pin(async move {
-            let handler =
-                CraftingTableScreenHandler::new(sync_id, player_inventory, Some(self.0.clone()))
-                    .await;
+            let mut handler = CraftingTableScreenHandler::new(
+                sync_id,
+                player_inventory,
+                Some(self.recipe_manager.clone()),
+            )
+            .await;
+            let pos = self.position;
+            let world = self.world.clone();
+            handler
+                .get_behaviour_mut()
+                .set_validity_check(move |player| {
+                    let state_id = world.get_block_state(&pos).id;
+                    let block = pumpkin_data::Block::from_state_id(state_id);
+                    block == &pumpkin_data::Block::CRAFTING_TABLE
+                        && player.can_interact_with_block_at(&pos, 4.0)
+                });
             let concrete_arc = Arc::new(Mutex::new(handler));
 
             Some(concrete_arc as SharedScreenHandler)
@@ -61,5 +82,24 @@ impl ScreenHandlerFactory for CraftingTableScreenFactory {
             translation::java::CONTAINER_CRAFTING,
             translation::bedrock::CONTAINER_CRAFTING
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn crafting_table_block_id_parity() {
+        assert_eq!(Block::CRAFTING_TABLE.name, "crafting_table");
+    }
+
+    #[test]
+    fn crafting_table_default_state_parity() {
+        assert_ne!(
+            Block::CRAFTING_TABLE.default_state.id,
+            Block::AIR.default_state.id
+        );
     }
 }

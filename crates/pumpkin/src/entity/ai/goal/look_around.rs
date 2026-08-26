@@ -24,11 +24,21 @@ impl Default for RandomLookAroundGoal {
 
 impl Goal for RandomLookAroundGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
-        Box::pin(async { mob.get_random().random::<f32>() < 0.02 })
+        Box::pin(async {
+            if mob.get_mob_entity().target.lock().await.is_some() {
+                return false;
+            }
+            mob.get_random().random::<f32>() < 0.02
+        })
     }
 
-    fn should_continue<'a>(&'a self, _mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
-        Box::pin(async { self.look_time >= 0 })
+    fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
+        Box::pin(async {
+            if mob.get_mob_entity().target.lock().await.is_some() {
+                return false;
+            }
+            self.look_time >= 0
+        })
     }
 
     fn start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {

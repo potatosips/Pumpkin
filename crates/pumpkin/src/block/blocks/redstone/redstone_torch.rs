@@ -299,3 +299,27 @@ fn can_place_at(world: &dyn BlockAccessor, block_pos: &BlockPos, facing: BlockDi
         .get_block_state(&block_pos.offset(facing.to_offset()))
         .is_side_solid(facing.opposite())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn redstone_torch_ids_parity() {
+        assert_eq!(Block::REDSTONE_TORCH.name, "redstone_torch");
+        assert_eq!(Block::REDSTONE_WALL_TORCH.name, "redstone_wall_torch");
+    }
+
+    #[test]
+    fn redstone_torch_default_state_parity() {
+        assert_ne!(
+            Block::REDSTONE_TORCH.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::REDSTONE_WALL_TORCH.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

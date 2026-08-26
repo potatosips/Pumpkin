@@ -65,7 +65,10 @@ impl JigsawBlockEntity {
         let pool = self.pool.lock().await.clone();
         let target = self.target.lock().await.clone();
 
-        let block_state = world.get_block_state(&self.position);
+        let (block, block_state) = world.get_block_and_state(&self.position);
+        if block.id != pumpkin_data::Block::JIGSAW.id {
+            return;
+        }
         let props =
             JigsawLikeProperties::from_state_id(block_state.id, &pumpkin_data::Block::JIGSAW);
         let (front, _top) = Self::to_front_top(props.r#orientation);

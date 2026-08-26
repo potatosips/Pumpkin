@@ -3,11 +3,11 @@ use std::sync::Arc;
 use crate::block::entities::enchanting_table::EnchantingTableBlockEntity;
 use crate::block::registry::BlockActionResult;
 use crate::block::{BlockBehaviour, BlockFuture, NormalUseArgs, PlacedArgs};
-use pumpkin_data::{Block, BlockStateId, translation};
+use pumpkin_data::{Block, translation};
 use pumpkin_inventory::enchanting::enchanting_screen_handler::EnchantingTableScreenHandler;
 use pumpkin_inventory::player::player_inventory::PlayerInventory;
 use pumpkin_inventory::screen_handler::{
-    BoxFuture, InventoryPlayer, ScreenHandlerFactory, SharedScreenHandler,
+    BoxFuture, InventoryPlayer, ScreenHandler, ScreenHandlerFactory, SharedScreenHandler,
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
@@ -36,14 +36,11 @@ impl BlockBehaviour for EnchantingTableBlock {
                         && args
                             .world
                             .get_block_state(&args.position.add(off_x, 0, off_z))
-                            .id
-                            == BlockStateId::AIR
+                            .is_air()
                         && args
                             .world
                             .get_block_state(&args.position.add(off_x, 1, off_z))
-                            .id
-                            == BlockStateId::AIR
-                    // Air
+                            .is_air()
                     {
                         for off_y in 0..=1 {
                             if Self::is_bookshelf(
@@ -77,6 +74,8 @@ impl BlockBehaviour for EnchantingTableBlock {
                     &EnchantingTableScreenFactory {
                         bookshelf_count,
                         seed: args.player.enchantment_seed(),
+                        position: *args.position,
+                        world: args.world.clone(),
                     },
                     Some(*args.position),
                 )
@@ -88,15 +87,16 @@ impl BlockBehaviour for EnchantingTableBlock {
 
 impl EnchantingTableBlock {
     fn is_bookshelf(world: &Arc<crate::world::World>, pos: &BlockPos) -> bool {
-        let state = world.get_block_state(pos);
-        let block = pumpkin_data::Block::from_state_id(state.id);
-        block == &Block::BOOKSHELF
+        let block = world.get_block(pos);
+        block == &Block::BOOKSHELF || block == &Block::CHISELED_BOOKSHELF
     }
 }
 
 struct EnchantingTableScreenFactory {
     bookshelf_count: i32,
     seed: i32,
+    position: BlockPos,
+    world: Arc<crate::world::World>,
 }
 
 impl ScreenHandlerFactory for EnchantingTableScreenFactory {
@@ -108,13 +108,23 @@ impl ScreenHandlerFactory for EnchantingTableScreenFactory {
     ) -> BoxFuture<'a, Option<SharedScreenHandler>> {
         Box::pin(async move {
             let inventory: Arc<dyn Inventory> = Arc::new(SimpleInventory::new(2));
-            let handler = EnchantingTableScreenHandler::new(
+            let mut handler = EnchantingTableScreenHandler::new(
                 sync_id,
                 player_inventory,
                 &inventory,
                 self.seed,
                 self.bookshelf_count,
             );
+            let pos = self.position;
+            let world = self.world.clone();
+            handler
+                .get_behaviour_mut()
+                .set_validity_check(move |player| {
+                    let state_id = world.get_block_state(&pos).id;
+                    let block = pumpkin_data::Block::from_state_id(state_id);
+                    block == &pumpkin_data::Block::ENCHANTING_TABLE
+                        && player.can_interact_with_block_at(&pos, 4.0)
+                });
             let screen_handler_arc = Arc::new(Mutex::new(handler));
             Some(screen_handler_arc as SharedScreenHandler)
         })
@@ -125,5 +135,24 @@ impl ScreenHandlerFactory for EnchantingTableScreenFactory {
             translation::java::CONTAINER_ENCHANT,
             translation::bedrock::CONTAINER_ENCHANT
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn enchanting_table_block_id_parity() {
+        assert_eq!(Block::ENCHANTING_TABLE.name, "enchanting_table");
+    }
+
+    #[test]
+    fn enchanting_table_default_state_parity() {
+        assert_ne!(
+            Block::ENCHANTING_TABLE.default_state.id,
+            Block::AIR.default_state.id
+        );
     }
 }

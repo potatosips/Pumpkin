@@ -22,6 +22,7 @@ pub struct MeleeAttackGoal {
     attack_interval_ticks: i32,
     last_update_time: i64,
     last_target_position: Option<Vector3<f64>>,
+    spider_leap: bool,
 }
 
 impl MeleeAttackGoal {
@@ -37,7 +38,35 @@ impl MeleeAttackGoal {
             attack_interval_ticks: 20,
             last_update_time: 0,
             last_target_position: None,
+            spider_leap: false,
         }
+    }
+
+    #[must_use]
+    pub fn new_spider(speed: f64) -> Self {
+        Self {
+            spider_leap: true,
+            ..Self::new(speed, false)
+        }
+    }
+
+    fn spider_leap_velocity(
+        current_velocity: Vector3<f64>,
+        mob_pos: Vector3<f64>,
+        target_pos: Vector3<f64>,
+    ) -> Vector3<f64> {
+        let dx = target_pos.x - mob_pos.x;
+        let dz = target_pos.z - mob_pos.z;
+        let horizontal_length = dx.hypot(dz);
+        if horizontal_length < 1.0e-7 {
+            return Vector3::new(current_velocity.x, 0.4, current_velocity.z);
+        }
+
+        Vector3::new(
+            dx / horizontal_length * 0.4 + current_velocity.x * 0.2,
+            0.4,
+            dz / horizontal_length * 0.4 + current_velocity.z * 0.2,
+        )
     }
 
     #[must_use]
@@ -201,16 +230,53 @@ impl Goal for MeleeAttackGoal {
 
             self.cooldown = (self.cooldown - 1).max(0);
 
-            // TODO: Add visibility check (canSee) - requires world raycast
-            if self.cooldown <= 0
+            let mob_pos = mob.get_entity().pos.load();
+            let distance_squared = mob_pos.squared_distance_to_vec(&current_target_pos);
+            if self.spider_leap
+                && (4.0..=16.0).contains(&distance_squared)
                 && mob
-                    .get_mob_entity()
-                    .is_in_attack_range(target.as_ref())
-                    .await
+                    .get_entity()
+                    .on_ground
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                && mob.get_random().random_range(0..10) == 0
             {
+                let velocity = Self::spider_leap_velocity(
+                    mob.get_entity().velocity.load(),
+                    mob_pos,
+                    current_target_pos,
+                );
+                mob.get_entity().velocity.store(velocity);
+                mob.get_entity()
+                    .velocity_dirty
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+
+            let in_attack_range = mob
+                .get_mob_entity()
+                .is_in_attack_range(target.as_ref())
+                .await;
+            let has_line_of_sight = if self.cooldown <= 0 && in_attack_range {
+                let world = mob.get_entity().world.load();
+                world
+                    .raycast(
+                        mob.get_entity().get_eye_pos(),
+                        target.get_entity().get_eye_pos(),
+                        async |block_pos, world| world.get_block_state(block_pos).is_solid(),
+                    )
+                    .await
+                    .is_none()
+            } else {
+                false
+            };
+
+            if self.cooldown <= 0 && in_attack_range && has_line_of_sight {
                 self.cooldown = self.get_max_cooldown();
                 mob.get_mob_entity().living_entity.swing_hand().await;
-                mob.get_mob_entity().try_attack(mob, target.as_ref()).await;
+                mob.on_attack_attempt(target.as_ref()).await;
+                if mob.get_mob_entity().try_attack(mob, target.as_ref()).await {
+                    mob.on_successful_attack(target.as_ref()).await;
+                }
             }
         })
     }
@@ -221,5 +287,24 @@ impl Goal for MeleeAttackGoal {
 
     fn controls(&self) -> Controls {
         self.goal_control
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MeleeAttackGoal;
+    use pumpkin_util::math::vector3::Vector3;
+
+    #[test]
+    fn spider_leap_uses_vanilla_horizontal_and_vertical_velocity() {
+        let velocity = MeleeAttackGoal::spider_leap_velocity(
+            Vector3::new(0.5, 0.0, 0.0),
+            Vector3::new(0.0, 64.0, 0.0),
+            Vector3::new(3.0, 64.0, 4.0),
+        );
+
+        assert!((velocity.x - 0.34).abs() < 1.0e-9);
+        assert!((velocity.y - 0.4).abs() < 1.0e-9);
+        assert!((velocity.z - 0.32).abs() < 1.0e-9);
     }
 }

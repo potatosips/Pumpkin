@@ -1,5 +1,7 @@
-use crate::block::entities::{BlockEntity, block_entity_from_nbt};
-use dashmap::DashMap;
+use crate::block::entities::{
+    BlockEntity, block_entity_from_nbt, merge_external_block_entity_data,
+};
+use dashmap::{DashMap, DashSet};
 use pumpkin_data::attributes::Attributes;
 use pumpkin_data::chunk::Biome;
 use pumpkin_data::item::{BedrockItem, BedrockItemVersion};
@@ -87,7 +89,7 @@ use pumpkin_protocol::bedrock::client::set_actor_data::{CSetActorData, PropertyS
 use pumpkin_protocol::bedrock::client::start_game::{CStartGame, ServerTelemetryData};
 use pumpkin_protocol::java::client::play::{
     CBlockUpdate, CChunkBatchEnd, CChunkBatchStart, CChunkData, CDisguisedChatMessage, CExplosion,
-    CRespawn, CSetBlockDestroyStage, CWorldEvent, PlayerSpawnData,
+    CRespawn, CSetBlockDestroyStage, CSetExperience, CSetHealth, CWorldEvent, PlayerSpawnData,
 };
 use pumpkin_protocol::java::client::play::{
     CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CSystemChatMessage,
@@ -249,6 +251,11 @@ pub struct World {
     /// A map of active entities within the world, keyed by their unique UUID.
     /// This does not include players.
     pub entities: ArcSwap<Vec<Arc<dyn EntityBase>>>,
+    /// Atomically reserves live entity UUIDs before any spawn packet is broadcast.
+    entity_uuids: DashSet<Uuid>,
+    /// Last serialized chunk for each live entity, used to replace snapshots and
+    /// remove stale copies when an entity moves or is discarded.
+    saved_entity_chunks: DashMap<Uuid, Vector2<i32>>,
     /// The world's scoreboard, used for tracking scores, objectives, and display information.
     pub scoreboard: Mutex<Scoreboard>,
     /// The world's worldborder, defining the playable area and controlling its expansion or contraction.
@@ -299,6 +306,19 @@ impl PartialEq for World {
 }
 
 impl Eq for World {}
+
+fn remove_saved_entity_nbt(saved: &mut Vec<NbtCompound>, uuid: Uuid) -> bool {
+    let old_len = saved.len();
+    saved.retain(|nbt| nbt.get_uuid("UUID") != Some(uuid));
+    saved.len() != old_len
+}
+
+fn replace_saved_entity_nbt(saved: &mut Vec<NbtCompound>, nbt: NbtCompound) {
+    if let Some(uuid) = nbt.get_uuid("UUID") {
+        remove_saved_entity_nbt(saved, uuid);
+    }
+    saved.push(nbt);
+}
 
 impl World {
     pub async fn get_block_state_id_async(&self, position: &BlockPos) -> BlockStateId {
@@ -378,6 +398,8 @@ impl World {
             level_info,
             players: ArcSwap::new(Arc::new(Vec::new())),
             entities: ArcSwap::new(Arc::new(Vec::new())),
+            entity_uuids: DashSet::new(),
+            saved_entity_chunks: DashMap::new(),
             scoreboard: Mutex::new(Scoreboard::default()),
             worldborder: Mutex::new(Worldborder::new(0.0, 0.0, 5.999_996_8E7, 0, 5, 300)),
             level_time: Mutex::new(LevelTime::new()),
@@ -487,10 +509,22 @@ impl World {
             return;
         }
         let current_chunk = base_entity.block_pos.load().chunk_position();
+        let uuid = base_entity.entity_uuid;
+        if let Some(previous_chunk) = self.saved_entity_chunks.insert(uuid, current_chunk)
+            && previous_chunk != current_chunk
+        {
+            let previous = self.level.get_entity_chunk(previous_chunk).await;
+            let mut previous_data = previous.data.lock().await;
+            if remove_saved_entity_nbt(&mut previous_data, uuid) {
+                previous.mark_dirty(true);
+            }
+        }
         let mut nbt = NbtCompound::new();
         entity.write_nbt(&mut nbt).await;
         let chunk = self.level.get_entity_chunk(current_chunk).await;
-        chunk.data.lock().await.push(nbt);
+        let mut data = chunk.data.lock().await;
+        replace_saved_entity_nbt(&mut data, nbt);
+        drop(data);
         chunk.mark_dirty(true);
     }
 
@@ -961,18 +995,11 @@ impl World {
                 continue;
             }
             let mut buf = Vec::new();
-            for meta in [
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
-                    skin_parts,
-                ),
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMIZATION_ID,
-                    skin_parts,
-                ),
-            ] {
-                let _ = meta.write(&mut buf, &version);
-            }
+            let meta = Metadata::new(
+                pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
+                skin_parts,
+            );
+            let _ = meta.write(&mut buf, &version);
             buf.put_u8(255);
             let packet = CSetEntityMetadata::new(entity_id.into(), buf.into());
             if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version) {
@@ -1036,6 +1063,19 @@ impl World {
     ) {
         for player in self.players.load().iter() {
             player.spawn_particle(position, offset, max_speed, particle_count, particle);
+        }
+    }
+
+    pub fn spawn_block_particle(
+        &self,
+        position: Vector3<f64>,
+        offset: Vector3<f32>,
+        max_speed: f32,
+        particle_count: i32,
+        state_id: BlockStateId,
+    ) {
+        for player in self.players.load().iter() {
+            player.spawn_block_particle(position, offset, max_speed, particle_count, state_id);
         }
     }
 
@@ -3548,20 +3588,11 @@ impl World {
             if client.version.load() >= CURRENT_MC_VERSION {
                 let config = existing_player.config.load();
                 let mut buf = Vec::new();
-                {
-                    let meta = Metadata::new(
-                        pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
-                        config.skin_parts,
-                    );
-                    let _ = meta.write(&mut buf, &client.version.load());
-                };
-                {
-                    let meta = Metadata::new(
-                        pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMIZATION_ID,
-                        config.skin_parts,
-                    );
-                    let _ = meta.write(&mut buf, &client.version.load());
-                };
+                let meta = Metadata::new(
+                    pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
+                    config.skin_parts,
+                );
+                let _ = meta.write(&mut buf, &client.version.load());
                 drop(config);
                 // END
                 buf.put_u8(255);
@@ -3802,6 +3833,63 @@ impl World {
         self.run_explosion(explosion, position, power).await;
     }
 
+    pub async fn explode_with_fire(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
+        let explosion = Explosion::new(power, position).with_fire(true);
+        self.run_explosion(explosion, position, power).await;
+    }
+
+    pub async fn explode_mob(
+        self: &Arc<Self>,
+        position: Vector3<f64>,
+        power: f32,
+        source_entity_id: i32,
+    ) {
+        let destroy_blocks = self.level_info.load().game_rules.mob_griefing;
+        let explosion = Explosion::new(power, position)
+            .with_block_destruction(destroy_blocks)
+            .with_source_entity(source_entity_id);
+        self.run_explosion(explosion, position, power).await;
+    }
+
+    pub async fn explode_wind_charge(
+        self: &Arc<Self>,
+        position: Vector3<f64>,
+        power: f32,
+        knockback_multiplier: f64,
+    ) {
+        let explosion = Explosion::wind_charge(power, position, knockback_multiplier);
+        let mut event = crate::plugin::api::events::entity::entity_explode::EntityExplodeEvent::new(
+            0, position, power,
+        );
+        if let Some(server) = self.server.upgrade() {
+            server.plugin_manager.fire(&server, &mut event).await;
+        }
+        if event.cancelled {
+            return;
+        }
+
+        let _ = explosion.explode(self).await;
+        for player in self.players.load().iter() {
+            if player.position().squared_distance_to_vec(&position) > 4096.0 {
+                continue;
+            }
+            let mut sound_id = Sound::EntityWindChargeWindBurst as u16;
+            if let ClientPlatform::Java(java_client) = player.client.as_ref() {
+                sound_id = remap_sound_id_for_version(sound_id, java_client.version.load());
+            }
+            player
+                .send_client_packet(&CExplosion::new(
+                    position,
+                    power,
+                    0,
+                    None,
+                    VarInt(Particle::GustEmitterSmall as i32),
+                    IdOr::<SoundEvent>::Id(sound_id),
+                ))
+                .await;
+        }
+    }
+
     pub async fn explode_tnt_minecart(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
         let explosion = Explosion::new(power, position).preserving_rails();
         self.run_explosion(explosion, position, power).await;
@@ -3890,18 +3978,49 @@ impl World {
                     .send_client_packet(&CGameEvent::new(GameEvent::NoRespawnBlockAvailable, 0.0))
                     .await;
 
-                // FIXME: This spawn position calculation is incorrect. Should use vanilla's
-                // proper spawn position calculation (see #1381). The y-level calculation
-                // needs to account for spawn radius and find a safe spawn position.
-                let chunk_pos = Vector2::new(spawn_x >> 4, spawn_z >> 4);
+                // Vanilla spawn radius jitter & safe spawn search
+                let spawn_radius: i32 = 10;
+                let mut chosen_x = spawn_x;
+                let mut chosen_z = spawn_z;
+
+                if spawn_radius > 0 {
+                    let offsets: Vec<(i32, i32)> = {
+                        let mut rng = rand::rng();
+                        (0..10)
+                            .map(|_| {
+                                (
+                                    rng.random_range(-spawn_radius..=spawn_radius),
+                                    rng.random_range(-spawn_radius..=spawn_radius),
+                                )
+                            })
+                            .collect()
+                    };
+
+                    for (dx, dz) in offsets {
+                        let test_x = spawn_x + dx;
+                        let test_z = spawn_z + dz;
+                        let chunk_pos = Vector2::new(test_x >> 4, test_z >> 4);
+                        self.level.get_or_fetch_chunk(chunk_pos, |_| ()).await;
+                        let top = self.get_top_block(Vector2::new(test_x, test_z));
+                        let support_block =
+                            self.get_block(&BlockPos(Vector3::new(test_x, top, test_z)));
+                        if !support_block.default_state.is_liquid() && !support_block.is_air() {
+                            chosen_x = test_x;
+                            chosen_z = test_z;
+                            break;
+                        }
+                    }
+                }
+
+                let chunk_pos = Vector2::new(chosen_x >> 4, chosen_z >> 4);
                 self.level.get_or_fetch_chunk(chunk_pos, |_| ()).await;
-                let top = self.get_top_block(Vector2::new(spawn_x, spawn_z));
+                let top = self.get_top_block(Vector2::new(chosen_x, chosen_z));
 
                 (
                     Vector3::new(
-                        f64::from(spawn_x) + 0.5,
+                        f64::from(chosen_x) + 0.5,
                         (top + 1).into(),
-                        f64::from(spawn_z) + 0.5,
+                        f64::from(chosen_z) + 0.5,
                     ),
                     spawn_yaw,
                     spawn_pitch,
@@ -4101,13 +4220,33 @@ impl World {
             player.inventory.clear().await;
         }
 
+        player.send_abilities_update().await;
+
+        let health = player.living_entity.health.load();
+        let food = player.hunger_manager.level.load();
+        let saturation = player.hunger_manager.saturation.load();
+        player
+            .send_client_packet(&CSetHealth::new(health, VarInt(food.into()), saturation))
+            .await;
+
+        let (level, progress, points) = (
+            player.experience_level.load(Ordering::Relaxed),
+            player.experience_progress.load(),
+            player.experience_points.load(Ordering::Relaxed),
+        );
+        player
+            .send_client_packet(&CSetExperience::new(
+                progress.clamp(0.0, 1.0),
+                VarInt(level),
+                VarInt(points),
+            ))
+            .await;
+
         // Set entity position BEFORE loading chunks, so chunks load at the right location
         // This mirrors the initial spawn flow where update_position is called before teleport
         player.get_entity().set_pos(position);
         player.get_entity().set_rotation(yaw, pitch);
         player.get_entity().last_pos.store(position);
-
-        // TODO: difficulty, exp bar, status effect
 
         // Load chunks and send world info FIRST (before teleport packet)
         target_world
@@ -4244,9 +4383,10 @@ impl World {
                             continue;
                         };
 
-                        // Keep the persisted UUID so the entity keeps its identity
-                        // across reloads (matching vanilla); only fall back to a
-                        // fresh one if it is missing/corrupt.
+                        // Entity UUIDs are persistent Vanilla save data. Reusing the
+                        // serialized UUID preserves owner, leash, passenger and command
+                        // references across chunk unload/reload. Only malformed legacy
+                        // data without a UUID receives a fresh identity.
                         let uuid = entity_nbt.get_uuid("UUID").unwrap_or_else(Uuid::new_v4);
                         // Pos is zero since it will be read from nbt.
                         let entity =
@@ -4254,14 +4394,17 @@ impl World {
                         entity.read_nbt_non_mut(entity_nbt).await;
                         entity.init_data_tracker().await;
 
-                        let base_entity = entity.get_entity();
-                        // Clear velocity so the client does not replay the drop
-                        // animation; residual velocity from the original drop is
-                        // stale data.
-                        base_entity.velocity.store(Vector3::default());
+                        // Entity chunks can complete concurrently. Reserve the
+                        // persistent UUID before exposing the new runtime entity
+                        // to a client; another completed load may already have
+                        // made the same saved entity live.
+                        if !world.entity_uuids.insert(uuid) {
+                            continue;
+                        }
 
                         player.client.enqueue_spawn_packet(&entity).await;
                         player.try_restore_vehicle(&entity).await;
+                        world.spawn_state.load().add_entity(&world, entity.as_ref());
                         entities_to_add.push(entity);
                     }
 
@@ -4699,7 +4842,10 @@ impl World {
     }
 
     pub fn spawn_entity_non_save(&self, entity: &Arc<dyn EntityBase>) {
-        let _base_entity = entity.get_entity();
+        let base_entity = entity.get_entity();
+        if !self.entity_uuids.insert(base_entity.entity_uuid) {
+            return;
+        }
         self.broadcast_entity_spawn(entity);
         self.spawn_state.load().add_entity(self, entity.as_ref());
 
@@ -4711,6 +4857,11 @@ impl World {
     }
 
     pub async fn spawn_entity(self: &Arc<Self>, entity: Arc<dyn EntityBase>) {
+        let entity_uuid = entity.get_entity().entity_uuid;
+        if !self.entity_uuids.insert(entity_uuid) {
+            return;
+        }
+
         let mut event = crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent::new(
             entity.get_entity().entity_id,
             entity.get_entity().entity_type.id.to_string(),
@@ -4721,6 +4872,7 @@ impl World {
             server.plugin_manager.fire(&server, &mut event).await;
         }
         if event.cancelled {
+            self.entity_uuids.remove(&entity_uuid);
             return;
         }
 
@@ -4746,20 +4898,6 @@ impl World {
 
     #[allow(clippy::unused_async)]
     pub async fn add_entity_silent(&self, entity: Arc<dyn EntityBase>) {
-        let base_entity = entity.get_entity();
-
-        // Guard against duplicate entities with the same UUID.
-        // This can happen when chunk entity data is loaded while the entity
-        // already exists in the world (e.g. another player is still tracking it).
-        let already_exists = self
-            .entities
-            .load()
-            .iter()
-            .any(|e| e.get_entity().entity_uuid == base_entity.entity_uuid);
-        if already_exists {
-            return;
-        }
-
         // The entity stays live-only: it is written to its chunk's saved data on
         // unload (see `save_entity`), never at spawn, so it can't be both live and
         // serialized at once (which would double it on the next reload).
@@ -4783,6 +4921,16 @@ impl World {
             return;
         }
         base_entity.removed.store(true, Ordering::Release);
+        self.entity_uuids.remove(&base_entity.entity_uuid);
+
+        if let Some((uuid, saved_chunk)) = self.saved_entity_chunks.remove(&base_entity.entity_uuid)
+        {
+            let chunk = self.level.get_entity_chunk(saved_chunk).await;
+            let mut data = chunk.data.lock().await;
+            if remove_saved_entity_nbt(&mut data, uuid) {
+                chunk.mark_dirty(true);
+            }
+        }
 
         self.spawn_state.load().remove_entity(self, entity);
         self.entities.rcu(|current_entities| {
@@ -4826,6 +4974,13 @@ impl World {
 
         for entity in entities_to_remove {
             self.save_entity(&entity).await;
+            let base_entity = entity.get_entity();
+            self.broadcast_editioned(
+                &CRemoveEntities::new(&[base_entity.entity_id.into()]),
+                &CRemoveActor::new(VarLong(base_entity.entity_id as i64)),
+            )
+            .await;
+            self.entity_uuids.remove(&base_entity.entity_uuid);
             self.spawn_state.load().remove_entity(self, entity.as_ref());
         }
 
@@ -5004,6 +5159,17 @@ impl World {
 
             if flags.contains(BlockFlags::NOTIFY_NEIGHBORS) {
                 self.update_neighbors(position, None).await;
+                let mut new_flags = flags;
+                new_flags.remove(BlockFlags::NOTIFY_NEIGHBORS);
+                new_flags.remove(BlockFlags::NOTIFY_LISTENERS);
+                self.block_registry
+                    .update_neighbors(
+                        self,
+                        position,
+                        Block::from_state_id(block_state_id),
+                        new_flags,
+                    )
+                    .await;
                 // TODO: updateComparators
             }
 
@@ -5017,14 +5183,6 @@ impl World {
                         position,
                         Block::from_state_id(replaced_block_state_id),
                         replaced_block_state_id,
-                        new_flags,
-                    )
-                    .await;
-                self.block_registry
-                    .update_neighbors(
-                        self,
-                        position,
-                        Block::from_state_id(block_state_id),
                         new_flags,
                     )
                     .await;
@@ -5659,6 +5817,29 @@ impl World {
         }
     }
 
+    /// Notifies comparators reading an analog-output block, matching Vanilla's
+    /// `updateNeighbourForOutputSignal`: direct horizontal comparators are
+    /// updated, as are comparators one block farther away through a solid block.
+    pub async fn update_comparators(self: &Arc<Self>, block_pos: &BlockPos, source_block: &Block) {
+        for direction in [
+            BlockDirection::North,
+            BlockDirection::South,
+            BlockDirection::West,
+            BlockDirection::East,
+        ] {
+            let neighbor_pos = block_pos.offset(direction.to_offset());
+            let neighbor = self.get_block(&neighbor_pos);
+            if neighbor == &Block::COMPARATOR {
+                self.update_neighbor(&neighbor_pos, source_block).await;
+            } else if self.get_block_state(&neighbor_pos).is_solid_block() {
+                let farther_pos = neighbor_pos.offset(direction.to_offset());
+                if self.get_block(&farther_pos) == &Block::COMPARATOR {
+                    self.update_neighbor(&farther_pos, source_block).await;
+                }
+            }
+        }
+    }
+
     pub async fn update_from_neighbor_shapes(
         self: &Arc<Self>,
         state_id: BlockStateId,
@@ -5863,6 +6044,28 @@ impl World {
         });
     }
 
+    /// Shallow-merges external data into the block entity currently owned by
+    /// this position. The existing entity supplies the authoritative type and
+    /// the world position supplies authoritative coordinates.
+    pub async fn merge_block_entity_data(
+        &self,
+        block_pos: BlockPos,
+        external: &NbtCompound,
+    ) -> bool {
+        let Some(existing) = self.get_block_entity(&block_pos) else {
+            return false;
+        };
+        let resource_location = existing.resource_location();
+        let mut base = NbtCompound::new();
+        existing.write_internal(&mut base).await;
+        let merged = merge_external_block_entity_data(base, external, resource_location, block_pos);
+        let Some(updated) = block_entity_from_nbt(&merged) else {
+            return false;
+        };
+        self.add_block_entity(updated);
+        true
+    }
+
     pub(crate) fn add_block_entity_nbt(&self, block_pos: BlockPos, nbt: &NbtCompound) {
         self.level
             .read_chunk_sync(&block_pos.chunk_position(), |chunk| {
@@ -5951,7 +6154,7 @@ impl World {
         to: Vector3<f64>,
         min: Vector3<f64>,
         max: Vector3<f64>,
-    ) -> Option<BlockDirection> {
+    ) -> Option<(BlockDirection, f64)> {
         let dir = to.sub(&from);
         let mut tmin: f64 = 0.0;
         let mut tmax: f64 = 1.0;
@@ -5995,12 +6198,12 @@ impl World {
         check_axis!(z, z, z, z, BlockDirection::North, BlockDirection::South);
 
         match (hit_axis, hit_is_min) {
-            (Some("x"), true) => Some(BlockDirection::West),
-            (Some("x"), false) => Some(BlockDirection::East),
-            (Some("y"), true) => Some(BlockDirection::Down),
-            (Some("y"), false) => Some(BlockDirection::Up),
-            (Some("z"), true) => Some(BlockDirection::North),
-            (Some("z"), false) => Some(BlockDirection::South),
+            (Some("x"), true) => Some((BlockDirection::West, tmin)),
+            (Some("x"), false) => Some((BlockDirection::East, tmin)),
+            (Some("y"), true) => Some((BlockDirection::Down, tmin)),
+            (Some("y"), false) => Some((BlockDirection::Up, tmin)),
+            (Some("z"), true) => Some((BlockDirection::North, tmin)),
+            (Some("z"), false) => Some((BlockDirection::South, tmin)),
             _ => None,
         }
     }
@@ -6010,7 +6213,7 @@ impl World {
         block_pos: &BlockPos,
         from: Vector3<f64>,
         to: Vector3<f64>,
-    ) -> (bool, Option<BlockDirection>) {
+    ) -> (bool, Option<(BlockDirection, Vector3<f64>)>) {
         let state = self.get_block_state(block_pos);
 
         if state.outline_shapes.is_empty() {
@@ -6019,17 +6222,23 @@ impl World {
 
         let bounding_boxes = state.get_block_outline_shapes_at(block_pos);
 
+        let mut nearest = None;
         for shape in bounding_boxes {
             let world_min = shape.min.add(&block_pos.0.to_f64());
             let world_max = shape.max.add(&block_pos.0.to_f64());
 
-            let direction = Self::intersects_aabb_with_direction(from, to, world_min, world_max);
-            if direction.is_some() {
-                return (true, direction);
+            if let Some((direction, t)) =
+                Self::intersects_aabb_with_direction(from, to, world_min, world_max)
+                && nearest.is_none_or(|(_, nearest_t)| t < nearest_t)
+            {
+                nearest = Some((direction, t));
             }
         }
 
-        (false, None)
+        match nearest {
+            Some((direction, t)) => (true, Some((direction, from.lerp(&to, t)))),
+            None => (false, None),
+        }
     }
 
     pub async fn raycast(
@@ -6038,6 +6247,18 @@ impl World {
         end_pos: Vector3<f64>,
         hit_check: impl AsyncFn(&BlockPos, &Arc<Self>) -> bool,
     ) -> Option<(BlockPos, BlockDirection)> {
+        self.raycast_exact(start_pos, end_pos, hit_check)
+            .await
+            .map(|(position, direction, _)| (position, direction))
+    }
+
+    /// Raycasts blocks and also returns the exact world-space intersection point.
+    pub async fn raycast_exact(
+        self: &Arc<Self>,
+        start_pos: Vector3<f64>,
+        end_pos: Vector3<f64>,
+        hit_check: impl AsyncFn(&BlockPos, &Arc<Self>) -> bool,
+    ) -> Option<(BlockPos, BlockDirection, Vector3<f64>)> {
         if start_pos == end_pos {
             return None;
         }
@@ -6048,11 +6269,11 @@ impl World {
 
         let mut block = BlockPos::floored(from.x, from.y, from.z);
 
-        let (collision, direction) = self.ray_outline_check(&block, from, to);
-        if let Some(dir) = direction
+        let (collision, intersection) = self.ray_outline_check(&block, start_pos, end_pos);
+        if let Some((dir, hit_position)) = intersection
             && collision
         {
-            return Some((block, dir));
+            return Some((block, dir, hit_position));
         }
 
         let difference = to.sub(&from);
@@ -6099,43 +6320,55 @@ impl World {
         );
 
         while next.x <= 1.0 || next.y <= 1.0 || next.z <= 1.0 {
-            let block_direction = match (next.x, next.y, next.z) {
+            let (block_direction, hit_t) = match (next.x, next.y, next.z) {
                 (x, y, z) if x < y && x < z => {
+                    let hit_t = next.x;
                     block.0.x += step.x;
                     next.x += delta.x;
                     if step.x > 0 {
-                        BlockDirection::West
+                        (BlockDirection::West, hit_t)
                     } else {
-                        BlockDirection::East
+                        (BlockDirection::East, hit_t)
                     }
                 }
                 (_, y, z) if y < z => {
+                    let hit_t = next.y;
                     block.0.y += step.y;
                     next.y += delta.y;
                     if step.y > 0 {
-                        BlockDirection::Down
+                        (BlockDirection::Down, hit_t)
                     } else {
-                        BlockDirection::Up
+                        (BlockDirection::Up, hit_t)
                     }
                 }
                 _ => {
+                    let hit_t = next.z;
                     block.0.z += step.z;
                     next.z += delta.z;
                     if step.z > 0 {
-                        BlockDirection::North
+                        (BlockDirection::North, hit_t)
                     } else {
-                        BlockDirection::South
+                        (BlockDirection::South, hit_t)
                     }
                 }
             };
 
             if hit_check(&block, self).await {
-                let (collision, direction) = self.ray_outline_check(&block, from, to);
+                let (collision, intersection) = self.ray_outline_check(&block, start_pos, end_pos);
                 if collision {
-                    if let Some(dir) = direction {
-                        return Some((block, dir));
+                    if let Some((dir, hit_position)) = intersection {
+                        return Some((block, dir, hit_position));
                     }
-                    return Some((block, block_direction));
+                    let block_min = block.0.to_f64();
+                    let block_max = block_min.add_raw(1.0, 1.0, 1.0);
+                    let hit_position = Self::intersects_aabb_with_direction(
+                        start_pos, end_pos, block_min, block_max,
+                    )
+                    .map_or_else(
+                        || from.lerp(&to, hit_t),
+                        |(_, exact_t)| start_pos.lerp(&end_pos, exact_t),
+                    );
+                    return Some((block, block_direction, hit_position));
                 }
             }
         }
@@ -6680,12 +6913,83 @@ impl WorldPortalExt for WorldPortal {
 #[cfg(test)]
 mod tests {
     use pumpkin_data::{
-        Block,
+        Block, BlockDirection,
         block_properties::{BlockProperties, ChestLikeProperties, ChestType, HorizontalFacing},
     };
+    use pumpkin_nbt::compound::NbtCompound;
     use pumpkin_util::math::position::BlockPos;
+    use pumpkin_util::math::vector3::Vector3;
+    use uuid::Uuid;
 
-    use super::{bedrock_block_breaking_rate, bedrock_chest_block_actor};
+    use super::{
+        World, bedrock_block_breaking_rate, bedrock_chest_block_actor, remove_saved_entity_nbt,
+        replace_saved_entity_nbt,
+    };
+
+    fn saved_entity(uuid: Uuid, marker: i32) -> NbtCompound {
+        let mut nbt = NbtCompound::new();
+        nbt.put_uuid("UUID", uuid);
+        nbt.put_int("Marker", marker);
+        nbt
+    }
+
+    #[test]
+    fn saved_entity_snapshot_replaces_same_uuid_without_touching_others() {
+        let replaced_uuid = Uuid::new_v4();
+        let other_uuid = Uuid::new_v4();
+        let mut saved = vec![saved_entity(replaced_uuid, 1), saved_entity(other_uuid, 2)];
+
+        replace_saved_entity_nbt(&mut saved, saved_entity(replaced_uuid, 3));
+
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            saved
+                .iter()
+                .find(|nbt| nbt.get_uuid("UUID") == Some(replaced_uuid))
+                .and_then(|nbt| nbt.get_int("Marker")),
+            Some(3)
+        );
+        assert!(
+            saved
+                .iter()
+                .any(|nbt| nbt.get_uuid("UUID") == Some(other_uuid))
+        );
+    }
+
+    #[test]
+    fn removing_saved_entity_snapshot_removes_all_duplicate_uuid_copies() {
+        let removed_uuid = Uuid::new_v4();
+        let retained_uuid = Uuid::new_v4();
+        let mut saved = vec![
+            saved_entity(removed_uuid, 1),
+            saved_entity(retained_uuid, 2),
+            saved_entity(removed_uuid, 3),
+        ];
+
+        assert!(remove_saved_entity_nbt(&mut saved, removed_uuid));
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].get_uuid("UUID"), Some(retained_uuid));
+        assert!(!remove_saved_entity_nbt(&mut saved, removed_uuid));
+    }
+
+    #[test]
+    fn vanilla_raycast_intersection_preserves_exact_hit_position() {
+        let from = Vector3::new(1.25, 3.0, 1.75);
+        let to = Vector3::new(1.25, 0.0, 1.75);
+        let (face, t) = World::intersects_aabb_with_direction(
+            from,
+            to,
+            Vector3::new(1.0, 1.0, 1.0),
+            Vector3::new(2.0, 2.0, 2.0),
+        )
+        .unwrap();
+        let hit = from.lerp(&to, t);
+
+        assert_eq!(face, BlockDirection::Up);
+        assert!((hit.x - 1.25).abs() < f64::EPSILON);
+        assert!((hit.y - 2.0).abs() < f64::EPSILON);
+        assert!((hit.z - 1.75).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn bedrock_block_breaking_rate_uses_progress_per_tick() {

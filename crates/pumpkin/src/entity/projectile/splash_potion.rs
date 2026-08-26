@@ -6,6 +6,7 @@ use crate::{
     server::Server,
 };
 use pumpkin_data::item_stack::ItemStack;
+use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::{Block, BlockId};
 use pumpkin_protocol::java::client::play::CWorldEvent;
 use pumpkin_util::math::vector3::Vector3;
@@ -62,7 +63,7 @@ fn is_water_potion(stack: &ItemStack) -> bool {
         == Some(pumpkin_data::potion::Potion::WATER.id as i32)
 }
 
-/// Extinguishes fire (including soul fire) at the hit position and its four horizontal neighbors.
+/// Extinguishes fire (including soul fire, campfires, candles) at the hit position and its horizontal/vertical neighbors.
 async fn extinguish_fire(world: &Arc<crate::world::World>, hit_pos: Vector3<f64>) {
     let air_state_id = Block::AIR.default_state.id;
 
@@ -72,6 +73,7 @@ async fn extinguish_fire(world: &Arc<crate::world::World>, hit_pos: Vector3<f64>
         Vector3::new(hit_pos.x - 1.0, hit_pos.y, hit_pos.z),
         Vector3::new(hit_pos.x, hit_pos.y, hit_pos.z + 1.0),
         Vector3::new(hit_pos.x, hit_pos.y, hit_pos.z - 1.0),
+        Vector3::new(hit_pos.x, hit_pos.y - 1.0, hit_pos.z),
     ];
 
     for p in neighbors {
@@ -86,6 +88,20 @@ async fn extinguish_fire(world: &Arc<crate::world::World>, hit_pos: Vector3<f64>
             world
                 .set_block_state(&pos, air_state_id, BlockFlags::NOTIFY_ALL)
                 .await;
+        } else {
+            let block = world.get_block(&pos);
+            if let Some(unlit_state) =
+                crate::item::items::ignite::ignition::can_be_extinguished(block, state_id)
+            {
+                world
+                    .set_block_state(&pos, unlit_state, BlockFlags::NOTIFY_ALL)
+                    .await;
+                world.play_sound(
+                    Sound::BlockFireExtinguish,
+                    SoundCategory::Blocks,
+                    &pos.to_centered_f64(),
+                );
+            }
         }
     }
 }

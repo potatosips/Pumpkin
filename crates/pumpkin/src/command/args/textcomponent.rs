@@ -65,3 +65,17 @@ fn parse_text_component(input: &str) -> Option<TextComponent> {
         .map_err(|e| debug!("Failed to parse text component: {e}"))
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_json_and_quoted_text_components_parity() {
+        let json_comp = parse_text_component(r#"{"text":"Hello World","color":"red"}"#);
+        assert!(json_comp.is_some());
+
+        let plain_json = parse_text_component(r#"{"text":"Simple"}"#);
+        assert!(plain_json.is_some());
+    }
+}

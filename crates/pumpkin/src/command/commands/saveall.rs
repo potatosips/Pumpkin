@@ -4,7 +4,7 @@ use pumpkin_util::permission::{Permission, PermissionDefault, PermissionRegistry
 use pumpkin_util::text::TextComponent;
 use tracing::error;
 
-use crate::command::argument_builder::{ArgumentBuilder, command};
+use crate::command::argument_builder::{ArgumentBuilder, command, literal};
 use crate::command::context::command_context::CommandContext;
 use crate::command::errors::error_types::CommandErrorType;
 use crate::command::node::dispatcher::CommandDispatcher;
@@ -70,6 +70,7 @@ pub fn register(dispatcher: &mut CommandDispatcher, registry: &PermissionRegistr
     dispatcher.register(
         command("save-all", DESCRIPTION)
             .requires(PERMISSION)
-            .executes(SaveAllExecutor),
+            .executes(SaveAllExecutor)
+            .then(literal("flush").executes(SaveAllExecutor)),
     );
 }

@@ -21,7 +21,6 @@ use pumpkin_data::dimension::Dimension;
 use pumpkin_data::entity::EntityStatus;
 use pumpkin_data::fluid::Fluid;
 use pumpkin_data::item_stack::ItemStack;
-use pumpkin_data::packet::CURRENT_MC_VERSION;
 use pumpkin_data::tag::{self, Taggable};
 use pumpkin_data::tracked_data;
 use pumpkin_data::{Block, BlockDirection};
@@ -162,6 +161,12 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
 
     fn get_home_pos(&self) -> Option<pumpkin_util::math::position::BlockPos> {
         None
+    }
+
+    /// Wakes an entity that is currently occupying its home bed.
+    /// Returns whether this entity was a sleeping bed occupant.
+    fn wake_up_from_bed(&self) -> EntityBaseFuture<'_, bool> {
+        Box::pin(async { false })
     }
 
     fn as_any(&self) -> &dyn std::any::Any
@@ -341,15 +346,27 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
 
     fn send_java_spawn_packet<'a>(&'a self, client: &'a JavaClient) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
-            let spawn_packet = self.get_entity().create_spawn_packet();
+            let entity = self.get_entity();
+            let spawn_packet = entity.create_spawn_packet();
             if let Ok(data) = client.serialize_packet(&spawn_packet) {
                 client.enqueue_packet(data).await;
             }
+
+            let version = client.version.load();
+            let flags = entity.flags.load(Ordering::Relaxed);
+            let mut buf = Vec::new();
+            let m = Metadata::new(tracked_data::entity::DATA_SHARED_FLAGS_ID, flags);
+            let _ = m.write(&mut buf, &version);
+            buf.put_u8(255);
+            let meta_packet = CSetEntityMetadata::new(entity.entity_id.into(), buf.into());
+            if let Ok(meta_data) = client.serialize_packet(&meta_packet) {
+                client.enqueue_packet(meta_data).await;
+            }
+
             if let Some(mob) = self.get_mob()
-                && let Some(metadata) = mob.mob_java_spawn_metadata(client.version.load()).await
+                && let Some(metadata) = mob.mob_java_spawn_metadata(version).await
             {
-                let meta_packet =
-                    CSetEntityMetadata::new(self.get_entity().entity_id.into(), metadata);
+                let meta_packet = CSetEntityMetadata::new(entity.entity_id.into(), metadata);
                 if let Ok(meta_data) = client.serialize_packet(&meta_packet) {
                     client.enqueue_packet(meta_data).await;
                 }
@@ -396,24 +413,21 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
 
     fn set_on_fire_for_ticks(&self, ticks: u32) {
         let entity = self.get_entity();
-        let mut event = crate::plugin::api::events::entity::entity_combust::EntityCombustEvent::new(
-            entity.entity_id,
-            ticks as f32 / 20.0,
-        );
-        if let Some(server) = entity.world.load().server.upgrade() {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    server.plugin_manager.fire(&server, &mut event).await;
-                });
-            });
-            if event.cancelled {
-                return;
-            }
-        }
         if entity.fire_ticks.load(Ordering::Relaxed) < ticks as i32 {
             entity.fire_ticks.store(ticks as i32, Ordering::Relaxed);
+            entity.has_visual_fire.store(true, Ordering::Relaxed);
+            entity.set_flag(Flag::OnFire, true);
         }
-        // TODO: defrost
+        if let Some(server) = entity.world.load().server.upgrade() {
+            let mut event =
+                crate::plugin::api::events::entity::entity_combust::EntityCombustEvent::new(
+                    entity.entity_id,
+                    ticks as f32 / 20.0,
+                );
+            tokio::spawn(async move {
+                server.plugin_manager.fire(&server, &mut event).await;
+            });
+        }
     }
 
     /// Called when a player collides with a entity
@@ -626,17 +640,21 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
                     }
                 }
             } else {
-                let other_entities = world.get_entities_at_box(&entity_bb);
+                let push_bb = entity_bb.expand(0.05, 0.0, 0.05);
+                let other_entities = world.get_entities_at_box(&push_bb);
                 for other in other_entities {
-                    if other.get_entity().entity_id != self_entity.entity_id {
+                    if other.get_entity().entity_id != self_entity.entity_id && other.is_pushable()
+                    {
                         dyn_self.push(&other).await;
                         pushed = true;
                     }
                 }
 
-                let players = world.get_players_at_box(&entity_bb);
+                let players = world.get_players_at_box(&push_bb);
                 for player in players {
-                    if player.get_entity().entity_id != self_entity.entity_id {
+                    if player.get_entity().entity_id != self_entity.entity_id
+                        && player.is_pushable()
+                    {
                         let player_base: Arc<dyn EntityBase> = player.clone();
                         dyn_self.push(&player_base).await;
                         pushed = true;
@@ -879,6 +897,11 @@ pub struct Entity {
     pub portal_manager: Mutex<Option<Mutex<PortalProcessor>>>,
     /// Custom name for the entity
     pub custom_name: ArcSwap<Option<TextComponent>>,
+    /// Exact JSON text loaded from the `CustomName` NBT string. Components can
+    /// have multiple equivalent JSON shapes (for example `"Name"` and
+    /// `{"text":"Name"}`), and Vanilla preserves that shape across entity
+    /// data accessor round trips.
+    pub custom_name_nbt: ArcSwap<Option<String>>,
     /// Indicates whether the entity's custom name is visible
     pub custom_name_visible: AtomicBool,
     pub silent: AtomicBool,
@@ -1022,6 +1045,7 @@ impl Entity {
             portal_cooldown: AtomicU32::new(0),
             portal_manager: Mutex::new(None),
             custom_name: ArcSwap::new(Arc::new(None)),
+            custom_name_nbt: ArcSwap::new(Arc::new(None)),
             custom_name_visible: AtomicBool::new(false),
             silent: AtomicBool::new(false),
             has_no_gravity: AtomicBool::new(false),
@@ -1129,7 +1153,9 @@ impl Entity {
 
     /// Sets a custom name for the entity, typically used with nametags
     pub fn set_custom_name(&self, name: TextComponent) {
+        let name_json = pumpkin_util::serde_json::to_string(&name).ok();
         self.custom_name.store(Arc::new(Some(name.clone())));
+        self.custom_name_nbt.store(Arc::new(name_json));
         let mut bedrock_meta = EntityMetadata::new();
         bedrock_meta.set(
             entity_data_key::NAME,
@@ -2609,6 +2635,8 @@ impl Entity {
         if can_freeze
             && new_frozen_ticks >= Self::MAX_FROZEN_TICKS
             && self.age.load(Ordering::Relaxed) % Self::FREEZE_DAMAGE_INTERVAL == 0
+            && (caller.get_player().is_none()
+                || self.world.load().level_info.load().game_rules.freeze_damage)
         {
             caller.damage(caller, 1.0, DamageType::FREEZE).await;
         }
@@ -2961,9 +2989,6 @@ impl Entity {
             World::collect_java_recipients_by_version(java_recipients.into_iter());
 
         for (version, recipients) in recipients_by_version {
-            if version < CURRENT_MC_VERSION {
-                continue;
-            }
             let mut buf = Vec::new();
             for m in meta {
                 let _ = m.write(&mut buf, &version);
@@ -3798,10 +3823,10 @@ impl NBTStorage for Entity {
                 nbt.put_bool("HasVisualFire", true);
             }
             nbt.put_int("TicksFrozen", self.frozen_ticks.load(Relaxed));
-            if let Some(custom_name) = &**self.custom_name.load()
-                && let Ok(name_json) = pumpkin_util::serde_json::to_string(custom_name)
-            {
-                nbt.put_string("CustomName", name_json);
+            nbt.put_bool("Silent", self.silent.load(Relaxed));
+            nbt.put_bool("NoGravity", self.has_no_gravity.load(Relaxed));
+            if let Some(name_json) = &**self.custom_name_nbt.load() {
+                nbt.put_string("CustomName", name_json.clone());
             }
             nbt.put_bool("CustomNameVisible", self.custom_name_visible.load(Relaxed));
 
@@ -3865,29 +3890,37 @@ impl NBTStorage for Entity {
                 .store(nbt.get_bool("OnGround").unwrap_or(false), Relaxed);
             self.invulnerable
                 .store(nbt.get_bool("Invulnerable").unwrap_or(false), Relaxed);
-            self.portal_cooldown
-                .store(nbt.get_int("PortalCooldown").unwrap_or(0) as u32, Relaxed);
+            self.portal_cooldown.store(
+                nbt.get_int("PortalCooldown").unwrap_or(0).max(0) as u32,
+                Relaxed,
+            );
             self.has_visual_fire
                 .store(nbt.get_bool("HasVisualFire").unwrap_or(false), Relaxed);
             self.frozen_ticks
                 .store(nbt.get_int("TicksFrozen").unwrap_or(0), Relaxed);
-            if let Some(name_json) = nbt.get_string("CustomName")
-                && let Ok(component) = pumpkin_util::serde_json::from_str(name_json)
-            {
-                self.custom_name.store(Arc::new(Some(component)));
-            }
+            self.silent
+                .store(nbt.get_bool("Silent").unwrap_or(false), Relaxed);
+            self.has_no_gravity
+                .store(nbt.get_bool("NoGravity").unwrap_or(false), Relaxed);
+            let (custom_name, custom_name_nbt) = nbt
+                .get_string("CustomName")
+                .map_or((None, None), decode_custom_name_json);
+            self.custom_name.store(Arc::new(custom_name));
+            self.custom_name_nbt.store(Arc::new(custom_name_nbt));
             self.custom_name_visible
                 .store(nbt.get_bool("CustomNameVisible").unwrap_or(false), Relaxed);
 
-            if let Some(tag_list) = nbt.get_list("Tags") {
+            {
                 let mut tags = self.scoreboard_tags.lock().await;
                 tags.clear();
-                tags.extend(
-                    tag_list
-                        .iter()
-                        .filter_map(|tag| tag.extract_string().map(str::to_owned))
-                        .take(MAX_SCOREBOARD_TAGS),
-                );
+                if let Some(tag_list) = nbt.get_list("Tags") {
+                    tags.extend(
+                        tag_list
+                            .iter()
+                            .filter_map(|tag| tag.extract_string().map(str::to_owned))
+                            .take(MAX_SCOREBOARD_TAGS),
+                    );
+                }
             }
 
             if let Some(custom_data) = nbt
@@ -3900,6 +3933,13 @@ impl NBTStorage for Entity {
 
             // todo more...
         })
+    }
+}
+
+fn decode_custom_name_json(json: &str) -> (Option<TextComponent>, Option<String>) {
+    match pumpkin_util::serde_json::from_str(json) {
+        Ok(component) => (Some(component), Some(json.to_owned())),
+        Err(_) => (None, None),
     }
 }
 
@@ -4084,5 +4124,26 @@ mod tests {
                 "status mismatch at index {i}"
             );
         }
+    }
+
+    #[test]
+    fn custom_name_json_keeps_its_exact_valid_shape() {
+        for json in [
+            "\"After\"",
+            r#"{"text":"After"}"#,
+            r#"["After",{"text":"!","bold":true}]"#,
+            r#"{"translate":"entity.minecraft.cow","color":"gold"}"#,
+        ] {
+            let (component, retained) = decode_custom_name_json(json);
+            assert!(component.is_some(), "component should parse: {json}");
+            assert_eq!(retained.as_deref(), Some(json));
+        }
+    }
+
+    #[test]
+    fn invalid_custom_name_json_is_not_retained() {
+        let (component, retained) = decode_custom_name_json("{not json}");
+        assert!(component.is_none());
+        assert!(retained.is_none());
     }
 }

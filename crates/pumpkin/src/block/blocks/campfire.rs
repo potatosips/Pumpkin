@@ -30,7 +30,6 @@ impl BlockBehaviour for CampfireBlock {
         })
     }
 
-    // TODO: cooking food on campfire (CampfireBlockEntity)
     fn on_entity_collision<'a>(&'a self, args: OnEntityCollisionArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             if CampfireLikeProperties::from_state_id(args.state.id, args.block).lit
@@ -50,7 +49,6 @@ impl BlockBehaviour for CampfireBlock {
                     .await
                     .is_some();
                 if has_frost_walker_enchantment || has_fire_res {
-                    //campfire burning doesn't work if entity's boots has frost walker enchantment or entity has fire resistance. source: https://minecraft.wiki/w/Campfire#Damage
                     return;
                 }
                 let damage_amount = if args.block == &Block::SOUL_CAMPFIRE {
@@ -103,8 +101,6 @@ impl BlockBehaviour for CampfireBlock {
             props.to_state_id(args.block)
         })
     }
-
-    // TODO: onProjectileHit
 }
 
 fn is_signal_fire_base_block(block: &Block) -> bool {

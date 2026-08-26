@@ -69,3 +69,28 @@ impl BlockBehaviour for ShortPlantBlock {
 }
 
 impl PlantBlockBase for ShortPlantBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn short_plant_block_id_parity() {
+        assert_eq!(Block::SHORT_GRASS.name, "short_grass");
+        assert_eq!(Block::FERN.name, "fern");
+        assert_eq!(
+            ShortPlantBlock::ids().as_ref(),
+            &[BlockId::SHORT_GRASS, BlockId::FERN]
+        );
+    }
+
+    #[test]
+    fn short_plant_default_state_parity() {
+        assert_ne!(
+            Block::SHORT_GRASS.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(Block::FERN.default_state.id, Block::AIR.default_state.id);
+    }
+}

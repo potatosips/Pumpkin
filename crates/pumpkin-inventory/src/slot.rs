@@ -29,6 +29,7 @@ use std::{
 use crate::screen_handler::InventoryPlayer;
 
 use pumpkin_data::data_component_impl::EquipmentSlot;
+use pumpkin_data::enchantment::Enchantment;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_world::inventory::Inventory;
@@ -431,11 +432,28 @@ impl Slot for ArmorSlot {
         Box::pin(async move { 1 })
     }
 
-    /// TODO: Check for curse of binding enchantment.
-    fn can_take_items(&self, _player: &dyn InventoryPlayer) -> BoxFuture<'_, bool> {
-        Box::pin(async move {
-            // TODO: Check enchantments
-            true
-        })
+    fn can_take_items(&self, player: &dyn InventoryPlayer) -> BoxFuture<'_, bool> {
+        let creative = player.is_creative();
+        Box::pin(async move { bound_armor_can_be_taken(&self.get_stack().await, creative) })
+    }
+}
+
+fn bound_armor_can_be_taken(stack: &ItemStack, creative: bool) -> bool {
+    creative || stack.get_enchantment_level(&Enchantment::BINDING_CURSE) == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bound_armor_can_be_taken;
+    use pumpkin_data::{enchantment::Enchantment, item::Item, item_stack::ItemStack};
+
+    #[test]
+    fn vanilla_binding_curse_prevents_survival_armor_removal() {
+        let mut helmet = ItemStack::new(1, &Item::DIAMOND_HELMET);
+        assert!(bound_armor_can_be_taken(&helmet, false));
+
+        helmet.add_enchantment(&Enchantment::BINDING_CURSE, 1);
+        assert!(!bound_armor_can_be_taken(&helmet, false));
+        assert!(bound_armor_can_be_taken(&helmet, true));
     }
 }

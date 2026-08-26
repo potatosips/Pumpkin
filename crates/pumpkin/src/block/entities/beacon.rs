@@ -75,6 +75,16 @@ impl BeaconBlockEntity {
         self.mark_dirty();
     }
 
+    #[must_use]
+    pub const fn calculate_beacon_range(levels: i32) -> f64 {
+        (levels * 10 + 10) as f64
+    }
+
+    #[must_use]
+    pub const fn calculate_beacon_duration_ticks(levels: i32) -> u32 {
+        ((9 + levels * 2) * 20) as u32
+    }
+
     /// Replicates Java's `updateBase` logic
     fn update_base(&self, world: &Arc<World>) -> i32 {
         let mut levels = 0;
@@ -180,6 +190,25 @@ impl BeaconBlockEntity {
             }
         }
     }
+
+    /// Checks if the beacon beam has an unobstructed path upward to the sky (vanilla parity)
+    pub fn is_beam_unobstructed(&self, world: &World) -> bool {
+        let mut check_pos = self.position.up();
+        let max_y = world.dimension.min_y + world.dimension.height as i32;
+        while check_pos.0.y < max_y {
+            let state = world.get_block_state(&check_pos);
+            // In vanilla: blocks with opacity >= 15 block the beacon beam,
+            // while glass, water, and air allow the beam to pass through.
+            if state.opacity >= 15 && !state.is_liquid() {
+                let block = world.get_block(&check_pos);
+                if !block.name.contains("glass") {
+                    return false;
+                }
+            }
+            check_pos = check_pos.up();
+        }
+        true
+    }
 }
 
 impl BlockEntity for BeaconBlockEntity {
@@ -245,11 +274,13 @@ impl BlockEntity for BeaconBlockEntity {
         Box::pin(async move {
             // Check properties every 80 ticks matching Java
             if world.get_time_of_day().await % 80 == 0 {
-                let levels = self.update_base(world);
-                self.levels.store(levels, Ordering::Relaxed);
+                let mut levels = self.update_base(world);
 
-                // TODO: Beam Section validation (scanning upward to heightmap to check for sky visibility)
-                // is typically checked here before applying effects in Vanilla.
+                // Vanilla parity: check beam path to sky before activating
+                if levels > 0 && !self.is_beam_unobstructed(world) {
+                    levels = 0;
+                }
+                self.levels.store(levels, Ordering::Relaxed);
 
                 if levels > 0 {
                     self.apply_effects(world, levels).await;
@@ -365,5 +396,29 @@ impl Clearable for BeaconBlockEntity {
                 *payment = ItemStack::EMPTY.clone();
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BeaconBlockEntity;
+
+    #[test]
+    fn vanilla_beacon_pyramid_range_and_duration_scaling() {
+        // Level 1: 20 blocks, 11 seconds (220 ticks)
+        assert_eq!(BeaconBlockEntity::calculate_beacon_range(1), 20.0);
+        assert_eq!(BeaconBlockEntity::calculate_beacon_duration_ticks(1), 220);
+
+        // Level 2: 30 blocks, 13 seconds (260 ticks)
+        assert_eq!(BeaconBlockEntity::calculate_beacon_range(2), 30.0);
+        assert_eq!(BeaconBlockEntity::calculate_beacon_duration_ticks(2), 260);
+
+        // Level 3: 40 blocks, 15 seconds (300 ticks)
+        assert_eq!(BeaconBlockEntity::calculate_beacon_range(3), 40.0);
+        assert_eq!(BeaconBlockEntity::calculate_beacon_duration_ticks(3), 300);
+
+        // Level 4: 50 blocks, 17 seconds (340 ticks)
+        assert_eq!(BeaconBlockEntity::calculate_beacon_range(4), 50.0);
+        assert_eq!(BeaconBlockEntity::calculate_beacon_duration_ticks(4), 340);
     }
 }

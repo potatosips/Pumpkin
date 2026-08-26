@@ -823,3 +823,20 @@ impl Vector3Ext for Vector3<f64> {
         dx * dx + dy * dy + dz * dz
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dragon_node_count_and_adjacency_parity() {
+        assert_eq!(NODE_COUNT, 24);
+        assert_eq!(NODE_ADJACENCY.len(), 24);
+        assert_eq!(DEATH_TIMER_MAX, 200);
+
+        // Path between identical node returns empty
+        let nodes = [None; NODE_COUNT];
+        let path = find_path(&nodes, 0, 0, None);
+        assert!(path.is_empty());
+    }
+}

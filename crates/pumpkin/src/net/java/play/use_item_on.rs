@@ -83,8 +83,15 @@ impl JavaClient {
 
         let sneaking = player.get_entity().is_sneaking();
 
+        let slot_index = if matches!(hand, Hand::Right) {
+            inventory.get_selected_slot() as usize
+        } else {
+            PlayerInventory::OFF_HAND_SLOT
+        };
+
         // Code based on the java class ServerPlayerInteractionManager
         if !(sneaking && (!held_item_empty || !off_hand_item_empty)) {
+            let before_block_use = item.clone();
             let result = self
                 .call_use_item_on(
                     player,
@@ -101,18 +108,25 @@ impl JavaClient {
             if result.consumes_action() {
                 // TODO: Trigger ANY_BLOCK_USE Criteria
 
+                let after_block_use = item.clone();
+                if item_use_broke_stack(&before_block_use, &after_block_use) {
+                    player
+                        .handle_item_break(&equipment_slot, before_block_use.get_item())
+                        .await;
+                }
+                if !after_block_use.are_equal(&before_block_use) {
+                    player
+                        .sync_hand_slot(slot_index, after_block_use.clone())
+                        .await;
+                    inventory.set_stack_in_hand(hand, after_block_use).await;
+                }
+
                 if matches!(result, BlockActionResult::SuccessServer) {
                     player.swing_hand(hand, true).await;
                 }
                 return Ok(());
             }
         }
-
-        let slot_index = if matches!(hand, Hand::Right) {
-            inventory.get_selected_slot() as usize
-        } else {
-            PlayerInventory::OFF_HAND_SLOT
-        };
 
         if item.is_empty() {
             // TODO item cool down
@@ -147,17 +161,13 @@ impl JavaClient {
 
         // Broadcast the break entity status before the slot sync; the client
         // needs the old item texture in the slot for break particles.
-        if !before.is_empty() && after.is_empty() {
+        if item_use_broke_stack(&before, &after) {
             let slot = if slot_index == player.inventory.get_selected_slot() as usize {
                 &EquipmentSlot::MAIN_HAND
             } else {
                 &EquipmentSlot::OFF_HAND
             };
-            player.world().send_entity_status(
-                player.get_entity(),
-                equipment_break_status(slot),
-                None,
-            );
+            player.handle_item_break(slot, before.get_item()).await;
         }
 
         if !after.are_equal(&before) {
@@ -258,5 +268,31 @@ impl JavaClient {
     pub async fn send_sign_packet(&self, block_position: BlockPos, is_front_text: bool) {
         self.enqueue_client_packet(&COpenSignEditor::new(block_position, is_front_text))
             .await;
+    }
+}
+
+fn item_use_broke_stack(before: &ItemStack, after: &ItemStack) -> bool {
+    before.is_damageable() && after.is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::item_use_broke_stack;
+    use pumpkin_data::{item::Item, item_stack::ItemStack};
+
+    #[test]
+    fn consumed_block_stack_is_not_reported_as_item_breakage() {
+        let before = ItemStack::new(1, &Item::STONE);
+        assert!(!item_use_broke_stack(&before, &ItemStack::EMPTY));
+    }
+
+    #[test]
+    fn exhausted_tool_is_reported_as_item_breakage() {
+        let mut before = ItemStack::new(1, &Item::FLINT_AND_STEEL);
+        before.set_damage(before.get_max_damage().expect("damageable") - 1);
+        let mut after = before.clone();
+        let _ = after.damage_item(1);
+        assert!(after.is_empty());
+        assert!(item_use_broke_stack(&before, &after));
     }
 }

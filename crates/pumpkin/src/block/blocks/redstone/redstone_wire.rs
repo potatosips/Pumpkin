@@ -567,3 +567,41 @@ async fn calculate_power(world: &World, pos: &BlockPos) -> u8 {
 
     block_power.max(wire_power.saturating_sub(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, RedstoneWireLikeProperties};
+
+    #[test]
+    fn redstone_wire_id_parity() {
+        assert_eq!(Block::REDSTONE_WIRE.name, "redstone_wire");
+    }
+
+    #[test]
+    fn redstone_wire_default_state_parity() {
+        assert_ne!(
+            Block::REDSTONE_WIRE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn redstone_wire_properties_roundtrip_parity() {
+        let props = RedstoneWireLikeProperties {
+            east: EastRedstone::Side,
+            north: NorthRedstone::None,
+            power: 15,
+            south: SouthRedstone::Side,
+            west: WestRedstone::Up,
+        };
+        let state_id = props.to_state_id(&Block::REDSTONE_WIRE);
+        let rt = RedstoneWireLikeProperties::from_state_id(state_id, &Block::REDSTONE_WIRE);
+        assert_eq!(rt.east, EastRedstone::Side);
+        assert_eq!(rt.north, NorthRedstone::None);
+        assert_eq!(rt.power, 15);
+        assert_eq!(rt.south, SouthRedstone::Side);
+        assert_eq!(rt.west, WestRedstone::Up);
+    }
+}

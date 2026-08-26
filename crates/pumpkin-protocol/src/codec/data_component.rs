@@ -5,24 +5,28 @@ use crate::ser::{NetworkReadExt, NetworkWriteExt, ReadingError, WritingError};
 use pumpkin_data::Enchantment;
 use pumpkin_data::data_component::DataComponent;
 use pumpkin_data::data_component_impl::{
-    AxolotlVariantImpl, BundleContentsImpl, CatCollarImpl, CatSoundVariantImpl, CatVariantImpl,
-    ChickenSoundVariantImpl, ChickenVariantImpl, ConsumableImpl, ConsumeAnimation, ConsumeEffect,
-    CowSoundVariantImpl, CowVariantImpl, CustomDataImpl, CustomNameImpl, DamageImpl,
-    DataComponentImpl, DyedColorImpl, EnchantmentsImpl, EquipmentSlot, EquippableImpl,
-    FireworkExplosionImpl, FireworkExplosionShape, FireworksImpl, FoxVariantImpl, FrogVariantImpl,
-    HorseVariantImpl, IDSet, IDSetContent, IdOr, ItemModelImpl, ItemNameImpl, LlamaVariantImpl,
-    MapIdImpl, MaxStackSizeImpl, MooshroomVariantImpl, PaintingVariantImpl, ParrotVariantImpl,
-    PigSoundVariantImpl, PigVariantImpl, PotionContentsImpl, RabbitVariantImpl, SalmonSizeImpl,
-    SheepColorImpl, ShulkerColorImpl, SoundEvent, StatusEffectInstance, StoredEnchantmentsImpl,
-    SuspiciousStewEffect, SuspiciousStewEffectsImpl, TropicalFishBaseColorImpl,
-    TropicalFishPatternColorImpl, TropicalFishPatternImpl, UnbreakableImpl, UseCooldownImpl,
-    VillagerVariantImpl, WolfCollarImpl, WolfSoundVariantImpl, WolfVariantImpl,
-    ZombieNautilusVariantImpl, get,
+    AxolotlVariantImpl, BaseColorImpl, BundleContentsImpl, CatCollarImpl, CatSoundVariantImpl,
+    CatVariantImpl, ChickenSoundVariantImpl, ChickenVariantImpl, ConsumableImpl, ConsumeAnimation,
+    ConsumeEffect, CowSoundVariantImpl, CowVariantImpl, CustomDataImpl, CustomNameImpl, DamageImpl,
+    DamageResistantImpl, DamageResistantType, DataComponentImpl, DyedColorImpl, EnchantableImpl,
+    EnchantmentsImpl, EquipmentSlot, EquippableImpl, FireworkExplosionImpl, FireworkExplosionShape,
+    FireworksImpl, FoodImpl, FoxVariantImpl, FrogVariantImpl, GliderImpl, HorseVariantImpl, IDSet,
+    IDSetContent, IdOr, InstrumentImpl, IntangibleProjectileImpl, ItemModelImpl, ItemNameImpl,
+    LlamaVariantImpl, MapIdImpl, MaxDamageImpl, MaxStackSizeImpl, MooshroomVariantImpl,
+    NoteBlockSoundImpl, OminousBottleAmplifierImpl, PaintingVariantImpl, ParrotVariantImpl,
+    PigSoundVariantImpl, PigVariantImpl, PotionContentsImpl, PotionDurationScaleImpl,
+    RabbitVariantImpl, SalmonSizeImpl, SheepColorImpl, ShulkerColorImpl, SoundEvent,
+    StatusEffectInstance, StoredEnchantmentsImpl, SuspiciousStewEffect, SuspiciousStewEffectsImpl,
+    TooltipStyleImpl, TropicalFishBaseColorImpl, TropicalFishPatternColorImpl,
+    TropicalFishPatternImpl, UnbreakableImpl, UseCooldownImpl, VillagerVariantImpl, WeaponImpl,
+    WolfCollarImpl, WolfSoundVariantImpl, WolfVariantImpl, WritableBookContentImpl,
+    WrittenBookContentImpl, ZombieNautilusVariantImpl, get,
 };
 use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::sound::Sound;
 use pumpkin_nbt::{serializer::NbtWriteHelperJava, tag::NbtTag};
+use pumpkin_util::version::JavaMinecraftVersion;
 
 const MAX_STATUS_EFFECTS: usize = 128;
 
@@ -249,6 +253,152 @@ impl DataComponentCodec<Self> for MaxStackSizeImpl {
         let size = u8::try_from(seq.get_var_int()?.0)
             .map_err(|_| ReadingError::Message("No MaxStackSize VarInt!".into()))?;
         Ok(Self { size })
+    }
+}
+
+impl DataComponentCodec<Self> for MaxDamageImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt::from(self.max_damage))
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let max_damage = seq.get_var_int()?.0;
+        Ok(Self { max_damage })
+    }
+}
+
+impl DataComponentCodec<Self> for FoodImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt::from(self.nutrition))?;
+        seq.write_f32(self.saturation)?;
+        seq.write_bool(self.can_always_eat)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let nutrition = seq.get_var_int()?.0;
+        let saturation = seq.get_f32()?;
+        let can_always_eat = seq.get_bool()?;
+        Ok(Self {
+            nutrition,
+            saturation,
+            can_always_eat,
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for GliderImpl {
+    fn serialize(&self, _seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        Ok(())
+    }
+    fn deserialize(_seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        Ok(Self)
+    }
+}
+
+impl DataComponentCodec<Self> for IntangibleProjectileImpl {
+    fn serialize(&self, _seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        Ok(())
+    }
+    fn deserialize(_seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        Ok(Self)
+    }
+}
+
+impl DataComponentCodec<Self> for PotionDurationScaleImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_f32(self.scale)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let scale = seq.get_f32()?;
+        Ok(Self { scale })
+    }
+}
+
+impl DataComponentCodec<Self> for TooltipStyleImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(&self.id)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let id = seq.get_str()?;
+        Ok(Self { id: id.to_string() })
+    }
+}
+
+impl DataComponentCodec<Self> for NoteBlockSoundImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(&self.sound)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let sound = seq.get_str()?;
+        Ok(Self {
+            sound: sound.to_string(),
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for BaseColorImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(&self.color)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let color = seq.get_str()?;
+        Ok(Self {
+            color: color.to_string(),
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for EnchantableImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt::from(self.value))
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let value = seq.get_var_int()?.0;
+        Ok(Self { value })
+    }
+}
+
+impl DataComponentCodec<Self> for WeaponImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt::from(self.item_damage_per_attack as i32))
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let item_damage_per_attack = seq.get_var_int()?.0.max(0) as u32;
+        Ok(Self {
+            item_damage_per_attack,
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for OminousBottleAmplifierImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt::from(self.amplifier))
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let amplifier = seq.get_var_int()?.0;
+        Ok(Self { amplifier })
+    }
+}
+
+impl DataComponentCodec<Self> for DamageResistantImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(self.res_type.as_str())
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let tag = seq.get_str()?;
+        Ok(Self {
+            res_type: DamageResistantType::from_tag(&tag),
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for InstrumentImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(&self.instrument)
+    }
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let instrument = seq.get_str()?;
+        Ok(Self {
+            instrument: Cow::Owned(instrument.into()),
+        })
     }
 }
 
@@ -842,6 +992,154 @@ impl DataComponentCodec<Self> for StoredEnchantmentsImpl {
     }
 }
 
+fn write_anonymous_nbt(tag: &NbtTag, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+    let mut bytes = Vec::new();
+    tag.clone()
+        .serialize(&mut NbtWriteHelperJava::new(&mut bytes))
+        .map_err(|error| WritingError::Message(error.to_string()))?;
+    seq.write_slice(&bytes)
+}
+
+struct NetworkNbtSource<'a, R>(&'a mut R);
+
+impl<'nbt, R: NetworkReadExt> pumpkin_nbt::deserializer::NbtDataSource<'nbt>
+    for NetworkNbtSource<'_, R>
+{
+    fn read_u8(&mut self) -> pumpkin_nbt::deserializer::Result<u8> {
+        self.0.get_u8().map_err(|error| {
+            pumpkin_nbt::Error::Incomplete(std::io::Error::other(error.to_string()))
+        })
+    }
+
+    fn read_bytes(&mut self, buf: &mut [u8]) -> pumpkin_nbt::deserializer::Result<()> {
+        self.0.read_bytes_to_buf(buf).map_err(|error| {
+            pumpkin_nbt::Error::Incomplete(std::io::Error::other(error.to_string()))
+        })
+    }
+
+    fn seek_relative(&mut self, offset: i64) -> pumpkin_nbt::deserializer::Result<()> {
+        let count = usize::try_from(offset).map_err(|_| {
+            pumpkin_nbt::Error::Incomplete(std::io::Error::other(
+                "negative seek on network NBT source",
+            ))
+        })?;
+        let mut discard = vec![0; count];
+        self.read_bytes(&mut discard)
+    }
+
+    fn read_string(&mut self, len: usize) -> pumpkin_nbt::deserializer::Result<Cow<'nbt, str>> {
+        let mut bytes = vec![0; len];
+        self.read_bytes(&mut bytes)?;
+        cesu8::from_java_cesu8(&bytes)
+            .map(|text| Cow::Owned(text.into_owned()))
+            .map_err(|_| pumpkin_nbt::Error::Cesu8DecodingError)
+    }
+
+    fn read_byte_array(
+        &mut self,
+        len: usize,
+    ) -> pumpkin_nbt::deserializer::Result<Cow<'nbt, [i8]>> {
+        let mut bytes = vec![0; len];
+        self.read_bytes(&mut bytes)?;
+        Ok(Cow::Owned(
+            bytes.into_iter().map(|byte| byte as i8).collect(),
+        ))
+    }
+}
+
+fn read_anonymous_nbt(seq: &mut impl NetworkReadExt) -> Result<NbtTag, ReadingError> {
+    let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(NetworkNbtSource(seq));
+    NbtTag::deserialize(&mut reader)
+        .map_err(|error| ReadingError::Message(format!("Invalid book text NBT: {error}")))
+}
+
+impl DataComponentCodec<Self> for WritableBookContentImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_var_int(&VarInt(self.pages.len() as i32))?;
+        for (index, page) in self.pages.iter().enumerate() {
+            seq.write_string(page)?;
+            let filtered = self.filtered_pages.get(index).and_then(Option::as_ref);
+            seq.write_option(&filtered, |writer, text| writer.write_string(text))?;
+        }
+        Ok(())
+    }
+
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let count = seq.get_var_int()?.0;
+        if !(0..=100).contains(&count) {
+            return Err(ReadingError::Message(
+                "Invalid writable book page count".into(),
+            ));
+        }
+        let mut pages = Vec::with_capacity(count as usize);
+        let mut filtered_pages = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            pages.push(seq.get_str_bounded(1024)?.to_string());
+            filtered_pages.push(
+                seq.get_option(|reader| reader.get_str_bounded(1024))?
+                    .map(Into::into),
+            );
+        }
+        Ok(Self {
+            pages,
+            filtered_pages,
+        })
+    }
+}
+
+impl DataComponentCodec<Self> for WrittenBookContentImpl {
+    fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
+        seq.write_string(&self.title)?;
+        seq.write_option(&self.filtered_title, |writer, title| {
+            writer.write_string(title)
+        })?;
+        seq.write_string(&self.author)?;
+        seq.write_var_int(&VarInt(self.generation))?;
+        seq.write_var_int(&VarInt(self.pages.len() as i32))?;
+        for (index, page) in self.pages.iter().enumerate() {
+            write_anonymous_nbt(page, seq)?;
+            let filtered = self.filtered_pages.get(index).and_then(Option::as_ref);
+            if let Some(filtered) = filtered {
+                write_anonymous_nbt(filtered, seq)?;
+            } else {
+                write_anonymous_nbt(&NbtTag::End, seq)?;
+            }
+        }
+        seq.write_bool(self.resolved)
+    }
+
+    fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        let title = seq.get_str_bounded(32)?.to_string();
+        let filtered_title = seq
+            .get_option(|reader| reader.get_str_bounded(32))?
+            .map(Into::into);
+        let author = seq.get_str_bounded(16)?.to_string();
+        let generation = seq.get_var_int()?.0;
+        let count = seq.get_var_int()?.0;
+        if !(0..=100).contains(&count) {
+            return Err(ReadingError::Message(
+                "Invalid written book page count".into(),
+            ));
+        }
+        let mut pages = Vec::with_capacity(count as usize);
+        let mut filtered_pages = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            pages.push(read_anonymous_nbt(seq)?);
+            let filtered = read_anonymous_nbt(seq)?;
+            filtered_pages.push((filtered != NbtTag::End).then_some(filtered));
+        }
+        Ok(Self {
+            title,
+            filtered_title,
+            author,
+            generation,
+            pages,
+            filtered_pages,
+            resolved: seq.get_bool()?,
+        })
+    }
+}
+
 pub fn deserialize(
     id: DataComponent,
     seq: &mut impl NetworkReadExt,
@@ -870,6 +1168,70 @@ pub fn deserialize(
         DataComponent::UseCooldown => Ok(UseCooldownImpl::deserialize(seq)?.to_dyn()),
         DataComponent::MapId => Ok(MapIdImpl::deserialize(seq)?.to_dyn()),
         DataComponent::BundleContents => Ok(BundleContentsImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::WritableBookContent => {
+            Ok(WritableBookContentImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::WrittenBookContent => {
+            Ok(WrittenBookContentImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::MaxDamage => Ok(MaxDamageImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::Food => Ok(FoodImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::Glider => Ok(GliderImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::IntangibleProjectile => {
+            Ok(IntangibleProjectileImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::PotionDurationScale => {
+            Ok(PotionDurationScaleImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::TooltipStyle => Ok(TooltipStyleImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::NoteBlockSound => Ok(NoteBlockSoundImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::BaseColor => Ok(BaseColorImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::Enchantable => Ok(EnchantableImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::Weapon => Ok(WeaponImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::OminousBottleAmplifier => {
+            Ok(OminousBottleAmplifierImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::DamageResistant => Ok(DamageResistantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::Instrument => Ok(InstrumentImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::VillagerVariant => Ok(VillagerVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::WolfVariant => Ok(WolfVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::WolfSoundVariant => Ok(WolfSoundVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::WolfCollar => Ok(WolfCollarImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::FoxVariant => Ok(FoxVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::SalmonSize => Ok(SalmonSizeImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::ParrotVariant => Ok(ParrotVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::TropicalFishPattern => {
+            Ok(TropicalFishPatternImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::TropicalFishBaseColor => {
+            Ok(TropicalFishBaseColorImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::TropicalFishPatternColor => {
+            Ok(TropicalFishPatternColorImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::MooshroomVariant => Ok(MooshroomVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::RabbitVariant => Ok(RabbitVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::PigVariant => Ok(PigVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::PigSoundVariant => Ok(PigSoundVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::CowVariant => Ok(CowVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::CowSoundVariant => Ok(CowSoundVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::ChickenVariant => Ok(ChickenVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::ChickenSoundVariant => {
+            Ok(ChickenSoundVariantImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::ZombieNautilusVariant => {
+            Ok(ZombieNautilusVariantImpl::deserialize(seq)?.to_dyn())
+        }
+        DataComponent::FrogVariant => Ok(FrogVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::HorseVariant => Ok(HorseVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::PaintingVariant => Ok(PaintingVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::LlamaVariant => Ok(LlamaVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::AxolotlVariant => Ok(AxolotlVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::CatVariant => Ok(CatVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::CatSoundVariant => Ok(CatSoundVariantImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::CatCollar => Ok(CatCollarImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::SheepColor => Ok(SheepColorImpl::deserialize(seq)?.to_dyn()),
+        DataComponent::ShulkerColor => Ok(ShulkerColorImpl::deserialize(seq)?.to_dyn()),
         _ => Err(ReadingError::Message(format!("component_id_{} (TODO)", id.to_id()))),
     }
 }
@@ -900,10 +1262,203 @@ pub fn serialize(
         DataComponent::UseCooldown => get::<UseCooldownImpl>(value).serialize(seq),
         DataComponent::MapId => get::<MapIdImpl>(value).serialize(seq),
         DataComponent::BundleContents => get::<BundleContentsImpl>(value).serialize(seq),
+        DataComponent::WritableBookContent => get::<WritableBookContentImpl>(value).serialize(seq),
+        DataComponent::WrittenBookContent => get::<WrittenBookContentImpl>(value).serialize(seq),
+        DataComponent::MaxDamage => get::<MaxDamageImpl>(value).serialize(seq),
+        DataComponent::Food => get::<FoodImpl>(value).serialize(seq),
+        DataComponent::Glider => get::<GliderImpl>(value).serialize(seq),
+        DataComponent::IntangibleProjectile => {
+            get::<IntangibleProjectileImpl>(value).serialize(seq)
+        }
+        DataComponent::PotionDurationScale => get::<PotionDurationScaleImpl>(value).serialize(seq),
+        DataComponent::TooltipStyle => get::<TooltipStyleImpl>(value).serialize(seq),
+        DataComponent::NoteBlockSound => get::<NoteBlockSoundImpl>(value).serialize(seq),
+        DataComponent::BaseColor => get::<BaseColorImpl>(value).serialize(seq),
+        DataComponent::Enchantable => get::<EnchantableImpl>(value).serialize(seq),
+        DataComponent::Weapon => get::<WeaponImpl>(value).serialize(seq),
+        DataComponent::OminousBottleAmplifier => {
+            get::<OminousBottleAmplifierImpl>(value).serialize(seq)
+        }
+        DataComponent::DamageResistant => get::<DamageResistantImpl>(value).serialize(seq),
+        DataComponent::Instrument => get::<InstrumentImpl>(value).serialize(seq),
+        DataComponent::VillagerVariant => get::<VillagerVariantImpl>(value).serialize(seq),
+        DataComponent::WolfVariant => get::<WolfVariantImpl>(value).serialize(seq),
+        DataComponent::WolfSoundVariant => get::<WolfSoundVariantImpl>(value).serialize(seq),
+        DataComponent::WolfCollar => get::<WolfCollarImpl>(value).serialize(seq),
+        DataComponent::FoxVariant => get::<FoxVariantImpl>(value).serialize(seq),
+        DataComponent::SalmonSize => get::<SalmonSizeImpl>(value).serialize(seq),
+        DataComponent::ParrotVariant => get::<ParrotVariantImpl>(value).serialize(seq),
+        DataComponent::TropicalFishPattern => get::<TropicalFishPatternImpl>(value).serialize(seq),
+        DataComponent::TropicalFishBaseColor => {
+            get::<TropicalFishBaseColorImpl>(value).serialize(seq)
+        }
+        DataComponent::TropicalFishPatternColor => {
+            get::<TropicalFishPatternColorImpl>(value).serialize(seq)
+        }
+        DataComponent::MooshroomVariant => get::<MooshroomVariantImpl>(value).serialize(seq),
+        DataComponent::RabbitVariant => get::<RabbitVariantImpl>(value).serialize(seq),
+        DataComponent::PigVariant => get::<PigVariantImpl>(value).serialize(seq),
+        DataComponent::PigSoundVariant => get::<PigSoundVariantImpl>(value).serialize(seq),
+        DataComponent::CowVariant => get::<CowVariantImpl>(value).serialize(seq),
+        DataComponent::CowSoundVariant => get::<CowSoundVariantImpl>(value).serialize(seq),
+        DataComponent::ChickenVariant => get::<ChickenVariantImpl>(value).serialize(seq),
+        DataComponent::ChickenSoundVariant => get::<ChickenSoundVariantImpl>(value).serialize(seq),
+        DataComponent::ZombieNautilusVariant => {
+            get::<ZombieNautilusVariantImpl>(value).serialize(seq)
+        }
+        DataComponent::FrogVariant => get::<FrogVariantImpl>(value).serialize(seq),
+        DataComponent::HorseVariant => get::<HorseVariantImpl>(value).serialize(seq),
+        DataComponent::PaintingVariant => get::<PaintingVariantImpl>(value).serialize(seq),
+        DataComponent::LlamaVariant => get::<LlamaVariantImpl>(value).serialize(seq),
+        DataComponent::AxolotlVariant => get::<AxolotlVariantImpl>(value).serialize(seq),
+        DataComponent::CatVariant => get::<CatVariantImpl>(value).serialize(seq),
+        DataComponent::CatSoundVariant => get::<CatSoundVariantImpl>(value).serialize(seq),
+        DataComponent::CatCollar => get::<CatCollarImpl>(value).serialize(seq),
+        DataComponent::SheepColor => get::<SheepColorImpl>(value).serialize(seq),
+        DataComponent::ShulkerColor => get::<ShulkerColorImpl>(value).serialize(seq),
         _ => Err(WritingError::Message(format!(
             "{} not yet implemented",
             id.to_name()
         ))),
+    }
+}
+
+/// Serializes a component using the payload shape understood by the target
+/// Java protocol version.
+pub fn serialize_for_version(
+    id: DataComponent,
+    value: &dyn DataComponentImpl,
+    version: &JavaMinecraftVersion,
+    seq: &mut impl NetworkWriteExt,
+) -> Result<(), WritingError> {
+    if *version != JavaMinecraftVersion::V_1_21_4 {
+        return serialize(id, value, seq);
+    }
+
+    match id {
+        // These tooltip flags moved into TooltipDisplay after 1.21.4. Current
+        // component values no longer retain the old flag, whose Vanilla
+        // default was true (show the tooltip).
+        DataComponent::Unbreakable => seq.write_bool(true),
+        DataComponent::Enchantments => {
+            get::<EnchantmentsImpl>(value).serialize(seq)?;
+            seq.write_bool(true)
+        }
+        DataComponent::StoredEnchantments => {
+            get::<StoredEnchantmentsImpl>(value).serialize(seq)?;
+            seq.write_bool(true)
+        }
+        DataComponent::DyedColor => {
+            get::<DyedColorImpl>(value).serialize(seq)?;
+            seq.write_bool(true)
+        }
+        // 1.21.4 ends this codec after damage_on_hurt. equip_on_interact,
+        // can_be_sheared, and shearing_sound were added later.
+        DataComponent::Equippable => {
+            let equippable = get::<EquippableImpl>(value);
+            seq.write_var_int(&VarInt(equippable.slot.get_slot_index()))?;
+            crate::IdOr::<crate::SoundEvent>::write(
+                &data_to_proto_sound(&equippable.equip_sound),
+                seq,
+                |writer, sound| {
+                    writer.write_string(&sound.sound_name)?;
+                    writer.write_option(&sound.range, |writer, range| writer.write_f32(*range))
+                },
+            )?;
+
+            seq.write_bool(equippable.asset_id.is_some())?;
+            if let Some(asset) = &equippable.asset_id {
+                seq.write_string(asset)?;
+            }
+            seq.write_bool(equippable.camera_overlay.is_some())?;
+            if let Some(overlay) = &equippable.camera_overlay {
+                seq.write_string(overlay)?;
+            }
+            seq.write_bool(equippable.allowed_entities.is_some())?;
+            if let Some(allowed) = &equippable.allowed_entities {
+                serialize_idset(allowed, seq)?;
+            }
+            seq.write_bool(equippable.dispensable)?;
+            seq.write_bool(equippable.swappable)?;
+            seq.write_bool(equippable.damage_on_hurt)
+        }
+        _ => serialize(id, value, seq),
+    }
+}
+
+/// Deserializes component payloads whose shape differs in Minecraft 1.21.4.
+pub fn deserialize_for_version(
+    id: DataComponent,
+    version: &JavaMinecraftVersion,
+    seq: &mut impl NetworkReadExt,
+) -> Result<Box<dyn DataComponentImpl>, ReadingError> {
+    if *version != JavaMinecraftVersion::V_1_21_4 {
+        return deserialize(id, seq);
+    }
+
+    match id {
+        DataComponent::Unbreakable => {
+            let _show_in_tooltip = seq.get_bool()?;
+            Ok(UnbreakableImpl.to_dyn())
+        }
+        DataComponent::Enchantments => {
+            let value = EnchantmentsImpl::deserialize(seq)?;
+            let _show_in_tooltip = seq.get_bool()?;
+            Ok(value.to_dyn())
+        }
+        DataComponent::StoredEnchantments => {
+            let value = StoredEnchantmentsImpl::deserialize(seq)?;
+            let _show_in_tooltip = seq.get_bool()?;
+            Ok(value.to_dyn())
+        }
+        DataComponent::DyedColor => {
+            let value = DyedColorImpl::deserialize(seq)?;
+            let _show_in_tooltip = seq.get_bool()?;
+            Ok(value.to_dyn())
+        }
+        DataComponent::Equippable => {
+            let slot_index = seq.get_var_int()?.0;
+            let slot = EquipmentSlot::from_slot_index(slot_index).ok_or_else(|| {
+                ReadingError::Message(format!("Invalid equipment slot index {slot_index}"))
+            })?;
+            let equip_sound =
+                proto_to_data_sound(&crate::IdOr::<crate::SoundEvent>::read(seq, |reader| {
+                    let sound_name = reader.get_str()?.into();
+                    let range = reader.get_option(NetworkReadExt::get_f32)?;
+                    Ok(crate::SoundEvent { sound_name, range })
+                })?)
+                .ok_or_else(|| ReadingError::Message("Invalid equippable sound".into()))?;
+            let asset_id = seq
+                .get_option(NetworkReadExt::get_str)?
+                .map(|value| Cow::Owned(value.into()));
+            let camera_overlay = seq
+                .get_option(NetworkReadExt::get_str)?
+                .map(|value| Cow::Owned(value.into()));
+            let allowed_entities = if seq.get_bool()? {
+                Some(deserialize_idset(seq)?)
+            } else {
+                None
+            };
+            let dispensable = seq.get_bool()?;
+            let swappable = seq.get_bool()?;
+            let damage_on_hurt = seq.get_bool()?;
+
+            Ok(EquippableImpl {
+                slot,
+                equip_sound,
+                asset_id,
+                camera_overlay,
+                allowed_entities,
+                dispensable,
+                swappable,
+                damage_on_hurt,
+                equip_on_interact: false,
+                can_be_sheared: false,
+                shearing_sound: IdOr::Id(Sound::ItemShearsSnip),
+            }
+            .to_dyn())
+        }
+        _ => deserialize(id, seq),
     }
 }
 
@@ -1029,6 +1584,364 @@ fn serialize_item_stack_template(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod version_tests {
+    use pumpkin_data::data_component::DataComponent;
+    use pumpkin_data::data_component_impl::{
+        DyedColorImpl, EnchantmentsImpl, EquipmentSlot, EquippableImpl, IdOr, UnbreakableImpl,
+        WritableBookContentImpl, WrittenBookContentImpl, get,
+    };
+    use pumpkin_data::sound::Sound;
+    use pumpkin_nbt::{NbtCompound, tag::NbtTag};
+    use pumpkin_util::version::JavaMinecraftVersion;
+
+    use super::{deserialize_for_version, serialize, serialize_for_version};
+
+    #[test]
+    fn vanilla_1_21_4_restores_component_tooltip_flags() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+
+        let mut unbreakable = Vec::new();
+        serialize_for_version(
+            DataComponent::Unbreakable,
+            &UnbreakableImpl,
+            &version,
+            &mut unbreakable,
+        )
+        .unwrap();
+        assert_eq!(unbreakable, [1]);
+
+        let mut enchantments = Vec::new();
+        serialize_for_version(
+            DataComponent::Enchantments,
+            &EnchantmentsImpl::default(),
+            &version,
+            &mut enchantments,
+        )
+        .unwrap();
+        assert_eq!(enchantments, [0, 1]);
+
+        let mut dyed_color = Vec::new();
+        serialize_for_version(
+            DataComponent::DyedColor,
+            &DyedColorImpl { rgb: 0x12_34_56 },
+            &version,
+            &mut dyed_color,
+        )
+        .unwrap();
+        assert_eq!(dyed_color, [0, 0x12, 0x34, 0x56, 1]);
+    }
+
+    #[test]
+    fn vanilla_1_21_4_equippable_omits_newer_tail_fields() {
+        let value = EquippableImpl {
+            slot: &EquipmentSlot::HEAD,
+            equip_sound: IdOr::Id(Sound::ItemArmorEquipGeneric),
+            asset_id: None,
+            camera_overlay: None,
+            allowed_entities: None,
+            dispensable: true,
+            swappable: false,
+            damage_on_hurt: true,
+            equip_on_interact: true,
+            can_be_sheared: true,
+            shearing_sound: IdOr::Id(Sound::ItemShearsSnip),
+        };
+
+        let mut vanilla_1_21_4 = Vec::new();
+        serialize_for_version(
+            DataComponent::Equippable,
+            &value,
+            &JavaMinecraftVersion::V_1_21_4,
+            &mut vanilla_1_21_4,
+        )
+        .unwrap();
+
+        let mut current = Vec::new();
+        serialize(DataComponent::Equippable, &value, &mut current).unwrap();
+
+        assert!(current.starts_with(&vanilla_1_21_4));
+        assert!(current.len() > vanilla_1_21_4.len());
+        assert!(vanilla_1_21_4.ends_with(&[0, 0, 0, 1, 0, 1]));
+    }
+
+    #[test]
+    fn vanilla_1_21_4_writable_book_content_round_trips_filtered_pages() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        let expected = WritableBookContentImpl {
+            pages: vec!["plain page".into(), "second page".into()],
+            filtered_pages: vec![None, Some("filtered page".into())],
+        };
+        let mut encoded = Vec::new();
+        serialize_for_version(
+            DataComponent::WritableBookContent,
+            &expected,
+            &version,
+            &mut encoded,
+        )
+        .unwrap();
+
+        let mut input = encoded.as_slice();
+        let decoded =
+            deserialize_for_version(DataComponent::WritableBookContent, &version, &mut input)
+                .unwrap();
+
+        assert!(input.is_empty());
+        assert_eq!(get::<WritableBookContentImpl>(decoded.as_ref()), &expected);
+    }
+
+    #[test]
+    fn vanilla_1_21_4_written_book_content_round_trips_network_nbt() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        let mut rich_page = NbtCompound::new();
+        rich_page.put_string("text", "click me".into());
+        rich_page.put_string("color", "gold".into());
+        let mut click_event = NbtCompound::new();
+        click_event.put_string("action", "run_command".into());
+        click_event.put_string("command", "/say parity".into());
+        rich_page.put_compound("click_event", click_event);
+
+        let expected = WrittenBookContentImpl {
+            title: "Parity Book".into(),
+            filtered_title: Some("Filtered Title".into()),
+            author: "BookBot".into(),
+            generation: 2,
+            pages: vec![
+                NbtTag::Compound(rich_page),
+                NbtTag::String("emoji 🎃".into()),
+            ],
+            filtered_pages: vec![None, Some(NbtTag::String("filtered page".into()))],
+            resolved: true,
+        };
+        let mut encoded = Vec::new();
+        serialize_for_version(
+            DataComponent::WrittenBookContent,
+            &expected,
+            &version,
+            &mut encoded,
+        )
+        .unwrap();
+
+        let mut input = encoded.as_slice();
+        let decoded =
+            deserialize_for_version(DataComponent::WrittenBookContent, &version, &mut input)
+                .unwrap();
+
+        assert!(input.is_empty());
+        assert_eq!(get::<WrittenBookContentImpl>(decoded.as_ref()), &expected);
+    }
+
+    #[test]
+    fn vanilla_1_21_4_newly_supported_codecs_round_trip() {
+        use pumpkin_data::data_component_impl::{
+            BaseColorImpl, DamageResistantImpl, DamageResistantType, EnchantableImpl, FoodImpl,
+            GliderImpl, InstrumentImpl, IntangibleProjectileImpl, MaxDamageImpl,
+            NoteBlockSoundImpl, OminousBottleAmplifierImpl, PotionDurationScaleImpl,
+            SheepColorImpl, TooltipStyleImpl, VillagerVariantImpl, WeaponImpl,
+        };
+
+        let version = JavaMinecraftVersion::V_1_21_4;
+
+        // MaxDamage
+        let max_dmg = MaxDamageImpl { max_damage: 1561 };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::MaxDamage, &max_dmg, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::MaxDamage, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<MaxDamageImpl>(decoded.as_ref()), &max_dmg);
+
+        // Food
+        let food = FoodImpl {
+            nutrition: 8,
+            saturation: 12.8,
+            can_always_eat: true,
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::Food, &food, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::Food, &version, &mut buf.as_slice()).unwrap();
+        assert_eq!(get::<FoodImpl>(decoded.as_ref()), &food);
+
+        // Glider
+        let glider = GliderImpl;
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::Glider, &glider, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::Glider, &version, &mut buf.as_slice()).unwrap();
+        assert_eq!(get::<GliderImpl>(decoded.as_ref()), &glider);
+
+        // IntangibleProjectile
+        let intangible = IntangibleProjectileImpl;
+        let mut buf = Vec::new();
+        serialize_for_version(
+            DataComponent::IntangibleProjectile,
+            &intangible,
+            &version,
+            &mut buf,
+        )
+        .unwrap();
+        let decoded = deserialize_for_version(
+            DataComponent::IntangibleProjectile,
+            &version,
+            &mut buf.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(
+            get::<IntangibleProjectileImpl>(decoded.as_ref()),
+            &intangible
+        );
+
+        // PotionDurationScale
+        let scale = PotionDurationScaleImpl { scale: 0.125 };
+        let mut buf = Vec::new();
+        serialize_for_version(
+            DataComponent::PotionDurationScale,
+            &scale,
+            &version,
+            &mut buf,
+        )
+        .unwrap();
+        let decoded = deserialize_for_version(
+            DataComponent::PotionDurationScale,
+            &version,
+            &mut buf.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(get::<PotionDurationScaleImpl>(decoded.as_ref()), &scale);
+
+        // TooltipStyle
+        let style = TooltipStyleImpl {
+            id: "custom_style".into(),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::TooltipStyle, &style, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::TooltipStyle, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<TooltipStyleImpl>(decoded.as_ref()), &style);
+
+        // NoteBlockSound
+        let note = NoteBlockSoundImpl {
+            sound: "minecraft:block.note_block.harp".into(),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::NoteBlockSound, &note, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::NoteBlockSound, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<NoteBlockSoundImpl>(decoded.as_ref()), &note);
+
+        // BaseColor
+        let color = BaseColorImpl {
+            color: "red".into(),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::BaseColor, &color, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::BaseColor, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<BaseColorImpl>(decoded.as_ref()), &color);
+
+        // Enchantable
+        let enc = EnchantableImpl { value: 15 };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::Enchantable, &enc, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::Enchantable, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<EnchantableImpl>(decoded.as_ref()), &enc);
+
+        // Weapon
+        let weapon = WeaponImpl {
+            item_damage_per_attack: 2,
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::Weapon, &weapon, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::Weapon, &version, &mut buf.as_slice()).unwrap();
+        assert_eq!(get::<WeaponImpl>(decoded.as_ref()), &weapon);
+
+        // OminousBottleAmplifier
+        let ominous = OminousBottleAmplifierImpl { amplifier: 4 };
+        let mut buf = Vec::new();
+        serialize_for_version(
+            DataComponent::OminousBottleAmplifier,
+            &ominous,
+            &version,
+            &mut buf,
+        )
+        .unwrap();
+        let decoded = deserialize_for_version(
+            DataComponent::OminousBottleAmplifier,
+            &version,
+            &mut buf.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(
+            get::<OminousBottleAmplifierImpl>(decoded.as_ref()),
+            &ominous
+        );
+
+        // DamageResistant
+        let dmg_res = DamageResistantImpl {
+            res_type: DamageResistantType::Fire,
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::DamageResistant, &dmg_res, &version, &mut buf)
+            .unwrap();
+        let decoded = deserialize_for_version(
+            DataComponent::DamageResistant,
+            &version,
+            &mut buf.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(get::<DamageResistantImpl>(decoded.as_ref()), &dmg_res);
+
+        // Instrument
+        let inst = InstrumentImpl {
+            instrument: std::borrow::Cow::Borrowed("ponder_goat_horn"),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::Instrument, &inst, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::Instrument, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<InstrumentImpl>(decoded.as_ref()), &inst);
+
+        // VillagerVariant
+        let villager = VillagerVariantImpl {
+            value: std::borrow::Cow::Borrowed("plains"),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(
+            DataComponent::VillagerVariant,
+            &villager,
+            &version,
+            &mut buf,
+        )
+        .unwrap();
+        let decoded = deserialize_for_version(
+            DataComponent::VillagerVariant,
+            &version,
+            &mut buf.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(get::<VillagerVariantImpl>(decoded.as_ref()), &villager);
+
+        // SheepColor
+        let sheep = SheepColorImpl {
+            value: std::borrow::Cow::Borrowed("pink"),
+        };
+        let mut buf = Vec::new();
+        serialize_for_version(DataComponent::SheepColor, &sheep, &version, &mut buf).unwrap();
+        let decoded =
+            deserialize_for_version(DataComponent::SheepColor, &version, &mut buf.as_slice())
+                .unwrap();
+        assert_eq!(get::<SheepColorImpl>(decoded.as_ref()), &sheep);
+    }
 }
 
 impl DataComponentCodec<Self> for BundleContentsImpl {

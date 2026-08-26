@@ -108,6 +108,7 @@ impl BlockBehaviour for BambooBlock {
             if !<Self as PlantBlockBase>::can_place_at(self, args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
+                return Block::AIR.default_state.id;
             }
             let neighbor_block = args.world.get_block(args.neighbor_position);
             if args.direction == BlockDirection::Up && neighbor_block == &Block::BAMBOO {
@@ -159,13 +160,11 @@ async fn update_leaves_and_grow(world: Arc<World>, position: &BlockPos) {
     let (block_below, state_id_below) = world.get_block_and_state_id(&below_pos);
     let (block_two_below, state_id_two_below) = world.get_block_and_state_id(&two_below_pos);
 
-    let mut props_below = BambooLikeProperties::from_state_id(state_id_below, block_below);
-
-    if bamboo_count >= 1 {
-        let below_is_bamboo = block_below == &Block::BAMBOO;
+    if bamboo_count >= 1 && block_below == &Block::BAMBOO {
+        let mut props_below = BambooLikeProperties::from_state_id(state_id_below, block_below);
         let below_has_leaves = props_below.leaves != BambooLeaves::None;
 
-        props.leaves = if !below_is_bamboo || !below_has_leaves {
+        props.leaves = if !below_has_leaves {
             BambooLeaves::Small
         } else {
             BambooLeaves::Large
@@ -277,5 +276,51 @@ impl PlantBlockBase for BambooBlock {
 
     fn can_place_at(&self, block_accessor: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
         <Self as PlantBlockBase>::can_plant_on_top(self, block_accessor, &block_pos.down())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bamboo_block_id_parity() {
+        assert_eq!(Block::BAMBOO.name, "bamboo");
+        assert_eq!(Block::BAMBOO_SAPLING.name, "bamboo_sapling");
+    }
+
+    #[test]
+    fn bamboo_properties_encoding_decoding_parity() {
+        for age in 0..=1 {
+            for stage in 0..=1 {
+                for leaves in [BambooLeaves::None, BambooLeaves::Small, BambooLeaves::Large] {
+                    let props = BambooLikeProperties { age, stage, leaves };
+                    let state_id = props.to_state_id(&Block::BAMBOO);
+                    let decoded = BambooLikeProperties::from_state_id(state_id, &Block::BAMBOO);
+                    assert_eq!(decoded.age, age);
+                    assert_eq!(decoded.stage, stage);
+                    assert_eq!(decoded.leaves, leaves);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bamboo_default_state_parity() {
+        let default_props =
+            BambooLikeProperties::from_state_id(Block::BAMBOO.default_state.id, &Block::BAMBOO);
+        assert_eq!(default_props.age, 0);
+        assert_eq!(default_props.stage, 0);
+        assert_eq!(default_props.leaves, BambooLeaves::None);
+    }
+
+    #[test]
+    fn bamboo_supports_tag_parity() {
+        assert!(Block::GRASS_BLOCK.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::DIRT.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::RED_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::GRAVEL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::PODZOL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
     }
 }

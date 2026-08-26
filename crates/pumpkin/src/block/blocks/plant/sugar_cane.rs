@@ -72,6 +72,7 @@ impl BlockBehaviour for SugarCaneBlock {
             if !can_place_at(args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
+                return Block::AIR.default_state.id;
             }
             args.state_id
         })
@@ -91,10 +92,13 @@ fn can_place_at(block_accessor: &dyn BlockAccessor, block_pos: &BlockPos) -> boo
 
     if block_below.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE) {
         for direction in HorizontalFacing::all() {
-            let block = block_accessor.get_block(&block_pos.down().offset(direction.to_offset()));
-            // TODO: use fluid
-            if block.has_tag(&tag::Fluid::MINECRAFT_SUPPORTS_SUGAR_CANE_ADJACENTLY)
-                && block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE_ADJACENTLY)
+            let neighbor_pos = block_pos.down().offset(direction.to_offset());
+            let block = block_accessor.get_block(&neighbor_pos);
+            let state = block_accessor.get_block_state(&neighbor_pos);
+            if block == &Block::WATER
+                || block == &Block::FROSTED_ICE
+                || state.is_waterlogged()
+                || block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE_ADJACENTLY)
             {
                 return true;
             }
@@ -102,4 +106,41 @@ fn can_place_at(block_accessor: &dyn BlockAccessor, block_pos: &BlockPos) -> boo
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sugar_cane_block_id_parity() {
+        assert_eq!(Block::SUGAR_CANE.name, "sugar_cane");
+    }
+
+    #[test]
+    fn sugar_cane_properties_encoding_decoding_parity() {
+        for age in 0..=15 {
+            let props = CactusLikeProperties { age };
+            let state_id = props.to_state_id(&Block::SUGAR_CANE);
+            let decoded = CactusLikeProperties::from_state_id(state_id, &Block::SUGAR_CANE);
+            assert_eq!(decoded.age, age);
+        }
+    }
+
+    #[test]
+    fn sugar_cane_default_state_parity() {
+        let default_props = CactusLikeProperties::from_state_id(
+            Block::SUGAR_CANE.default_state.id,
+            &Block::SUGAR_CANE,
+        );
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn vanilla_sugar_cane_supports_tag_and_blocks() {
+        assert!(Block::GRASS_BLOCK.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE));
+        assert!(Block::DIRT.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE));
+        assert!(Block::SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE));
+        assert!(Block::RED_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SUGAR_CANE));
+    }
 }

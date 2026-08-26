@@ -100,8 +100,17 @@ const MAX_YAW_TURN_PER_TICK: f32 = 90.0;
 impl Navigator {
     pub fn set_progress(&mut self, goal: NavigatorGoal) {
         self.is_idle.store(false, Ordering::Relaxed);
+        if let Some(current) = &self.current_goal {
+            let dx = current.destination.x - goal.destination.x;
+            let dy = current.destination.y - goal.destination.y;
+            let dz = current.destination.z - goal.destination.z;
+            if dx * dx + dy * dy + dz * dz > 2.25 {
+                self.current_path = None;
+            }
+        } else {
+            self.current_path = None;
+        }
         self.current_goal = Some(goal);
-        self.current_path = None;
     }
 
     pub const fn set_speed(&mut self, speed: f64) {

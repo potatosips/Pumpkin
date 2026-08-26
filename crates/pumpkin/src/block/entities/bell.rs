@@ -2,8 +2,11 @@ use crate::block::entities::BlockEntity;
 use crate::world::World;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::block_properties::HorizontalFacing;
+use pumpkin_data::potion::Effect;
 use pumpkin_data::sound::{Sound, SoundCategory};
+use pumpkin_data::tag::{EntityType as EntityTypeTag, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::position::BlockPos;
 use std::any::Any;
 use std::pin::Pin;
@@ -20,6 +23,10 @@ pub struct BellBlockEntity {
 
 impl BellBlockEntity {
     pub const ID: &'static str = "minecraft:bell";
+    const HEARING_DISTANCE: f64 = 32.0;
+    const HIGHLIGHT_DISTANCE: f64 = 48.0;
+    const RESONATE_TICKS: i32 = 40;
+    const GLOWING_TICKS: i32 = 60;
     #[must_use]
     pub const fn new(position: BlockPos) -> Self {
         Self {
@@ -39,10 +46,53 @@ impl BellBlockEntity {
             self.ringing.store(true);
         }
     }
-    pub const fn raiders_hear_bell(&self) -> bool {
-        //TODO
+    fn raiders_in_range(
+        &self,
+        world: &Arc<World>,
+        radius: f64,
+    ) -> Vec<Arc<dyn crate::entity::EntityBase>> {
+        let center = self.position.to_f64().add_raw(0.5, 0.5, 0.5);
+        let bounds = BoundingBox::new(
+            center.add_raw(-radius, -radius, -radius),
+            center.add_raw(radius, radius, radius),
+        );
+        let radius_squared = radius * radius;
+        world
+            .get_entities_at_box(&bounds)
+            .into_iter()
+            .filter(|entity| {
+                entity
+                    .get_entity()
+                    .entity_type
+                    .has_tag(&EntityTypeTag::MINECRAFT_RAIDERS)
+                    && (entity.get_entity().pos.load() - center).length_squared() <= radius_squared
+                    && entity.get_entity().is_alive()
+            })
+            .collect()
+    }
 
-        false
+    fn raiders_hear_bell(&self, world: &Arc<World>) -> bool {
+        !self
+            .raiders_in_range(world, Self::HEARING_DISTANCE)
+            .is_empty()
+    }
+
+    async fn highlight_raiders(&self, world: &Arc<World>) {
+        for raider in self.raiders_in_range(world, Self::HIGHLIGHT_DISTANCE) {
+            if let Some(living) = raider.get_living_entity() {
+                living
+                    .add_effect(Effect {
+                        effect_type: &pumpkin_data::effect::StatusEffect::GLOWING,
+                        duration: Self::GLOWING_TICKS,
+                        amplifier: 0,
+                        ambient: false,
+                        show_particles: true,
+                        show_icon: true,
+                        blend: false,
+                    })
+                    .await;
+            }
+        }
     }
 }
 
@@ -70,9 +120,9 @@ impl BlockEntity for BellBlockEntity {
                 self.ringing.store(false);
                 self.ring_ticks.store(0);
             }
-            if self.ring_ticks.load() >= 5
+            if self.ring_ticks.load() == 5
                 && self.resonate_time.load() == 0
-                && self.raiders_hear_bell()
+                && self.raiders_hear_bell(world)
             {
                 self.resonating.store(true);
                 world.play_sound_fine(
@@ -85,10 +135,12 @@ impl BlockEntity for BellBlockEntity {
             }
 
             if self.resonating.load() {
-                if self.resonate_time.load() < 40 {
+                if self.resonate_time.load() < Self::RESONATE_TICKS {
                     self.resonate_time.fetch_add(1);
                 } else {
                     self.resonating.store(false);
+                    self.resonate_time.store(0);
+                    self.highlight_raiders(world).await;
                 }
             }
         })
@@ -104,5 +156,26 @@ impl BlockEntity for BellBlockEntity {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::entity::EntityType;
+
+    #[test]
+    fn vanilla_bell_raider_tag_excludes_unrelated_hostile_mobs() {
+        assert!(EntityType::VINDICATOR.has_tag(&EntityTypeTag::MINECRAFT_RAIDERS));
+        assert!(EntityType::RAVAGER.has_tag(&EntityTypeTag::MINECRAFT_RAIDERS));
+        assert!(!EntityType::CREEPER.has_tag(&EntityTypeTag::MINECRAFT_RAIDERS));
+    }
+
+    #[test]
+    fn vanilla_bell_distances_and_timing_are_preserved() {
+        assert_eq!(BellBlockEntity::HEARING_DISTANCE, 32.0);
+        assert_eq!(BellBlockEntity::HIGHLIGHT_DISTANCE, 48.0);
+        assert_eq!(BellBlockEntity::RESONATE_TICKS, 40);
+        assert_eq!(BellBlockEntity::GLOWING_TICKS, 60);
     }
 }

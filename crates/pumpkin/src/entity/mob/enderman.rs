@@ -1,11 +1,11 @@
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
 use crate::entity::attributes::Modifier;
 use crate::entity::attributes::ModifierOperation;
-use pumpkin_data::{BlockStateId, attributes::Attributes};
+use pumpkin_data::{Block, BlockStateId, attributes::Attributes};
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
@@ -54,12 +54,21 @@ fn is_projectile_damage(dt: DamageType) -> bool {
     names.contains(&dt.message_id)
 }
 
+fn sunlight_teleport_chance(brightness: f32) -> f32 {
+    ((brightness - 0.4) * 2.0 / 30.0).max(0.0)
+}
+
+fn carried_block_item(state: BlockStateId) -> Option<&'static Item> {
+    Item::from_id(Block::from_state_id(state).item_id)
+}
+
 pub struct EndermanEntity {
     pub mob_entity: MobEntity,
     carried_block: AtomicCell<Option<BlockStateId>>,
     angry: AtomicBool,
     provoked: AtomicBool,
     speed_boosted: AtomicBool,
+    target_change_time: AtomicI32,
 }
 
 impl EndermanEntity {
@@ -71,6 +80,7 @@ impl EndermanEntity {
             angry: AtomicBool::new(false),
             provoked: AtomicBool::new(false),
             speed_boosted: AtomicBool::new(false),
+            target_change_time: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(entity);
         let mob_weak: Weak<dyn Mob> = {
@@ -271,6 +281,10 @@ impl EndermanEntity {
         drop(mob_target);
 
         if target.is_some() {
+            self.target_change_time.store(
+                self.get_entity().age.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
             self.set_angry(true);
             // Use attribute modifier instead of direct speed arithmetic
             if !self.speed_boosted.swap(true, Ordering::Relaxed) {
@@ -415,7 +429,7 @@ impl EndermanEntity {
 impl NBTStorage for EndermanEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             if let Some(block_state) = self.carried_block.load() {
                 nbt.put_int("carriedBlockState", block_state.as_u16() as i32);
             }
@@ -424,7 +438,7 @@ impl NBTStorage for EndermanEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(block_state) = nbt.get_int("carriedBlockState") {
                 self.set_carried_block(BlockStateId::new(block_state as u16));
             }
@@ -443,7 +457,7 @@ impl Mob for EndermanEntity {
         })
     }
 
-    // TODO: sunlight avoidance, carried block drop on death, angerable system, ambient sound override
+    // TODO: angerable system, ambient sound override
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> GoalFuture<'a, ()> {
         Box::pin(async move {
             let entity = &self.mob_entity.living_entity.entity;
@@ -463,10 +477,47 @@ impl Mob for EndermanEntity {
                     .await;
             }
 
+            let target_age = entity.age.load(Ordering::Relaxed)
+                - self.target_change_time.load(Ordering::Relaxed);
+            if target_age >= 600 && self.mob_entity.target.lock().await.is_some() {
+                let time = world.get_time_of_day().await % 24_000;
+                let block_pos = entity.block_pos.load();
+                let brightness = f32::from(world.get_max_local_raw_brightness(&block_pos)) / 15.0;
+                let exposed = time < 12_000 && world.can_see_sky(&block_pos);
+                let teleport_chance = sunlight_teleport_chance(brightness);
+                if exposed
+                    && brightness > 0.5
+                    && self.get_random().random_range(0.0..1.0) < teleport_chance
+                    && self.teleport_randomly()
+                {
+                    self.set_target(None).await;
+                }
+            }
+
             // NOTE: Enderman ambient portal particles are intentionally NOT sent server-side.
             // The vanilla Minecraft client generates these particles locally in the entity
             // renderer. Sending them from the server would cause duplicate particles and
             // massive network overhead (2 packets/tick/enderman = 40 packets/sec/enderman).
+        })
+    }
+
+    fn mob_on_death<'a>(&'a self, _cause: Option<&'a dyn EntityBase>) -> GoalFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(state) = self.get_carried_block() else {
+                return;
+            };
+            let world = self.get_entity().world.load();
+            if world.level_info.load().game_rules.mob_drops
+                && let Some(item) = carried_block_item(state)
+            {
+                world
+                    .drop_stack(
+                        &self.get_entity().block_pos.load(),
+                        pumpkin_data::item_stack::ItemStack::new(1, item),
+                    )
+                    .await;
+            }
+            self.set_carried_block(None);
         })
     }
 
@@ -502,5 +553,24 @@ impl Mob for EndermanEntity {
                 self.teleport_randomly();
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{carried_block_item, sunlight_teleport_chance};
+    use pumpkin_data::{Block, item::Item};
+
+    #[test]
+    fn sunlight_teleport_probability_matches_vanilla_formula() {
+        assert_eq!(sunlight_teleport_chance(0.4), 0.0);
+        assert!((sunlight_teleport_chance(1.0) - 0.04).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn carried_block_state_maps_to_its_block_item() {
+        let item = carried_block_item(Block::GRASS_BLOCK.default_state.id)
+            .expect("grass block has a corresponding item");
+        assert_eq!(item.id, Item::GRASS_BLOCK.id);
     }
 }

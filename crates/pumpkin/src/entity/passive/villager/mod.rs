@@ -722,17 +722,7 @@ impl VillagerEntity {
 
     async fn update_special_prices(&self, player: &Player) {
         let player_uuid = player.get_entity().entity_uuid;
-        let reputation = self
-            .gossips
-            .lock()
-            .await
-            .get(&player_uuid)
-            .map_or(0, |gossips| {
-                gossips
-                    .iter()
-                    .map(|(kind, value)| kind.weight() * value)
-                    .sum()
-            });
+        let reputation = self.reputation_for(player_uuid).await;
         let hero_amplifier = player
             .living_entity
             .get_effect(&StatusEffect::HERO_OF_THE_VILLAGE)
@@ -749,6 +739,20 @@ impl VillagerEntity {
                 offer.special_price -= discount.max(1);
             }
         }
+    }
+
+    /// Returns Vanilla's weighted gossip reputation for one player.
+    pub async fn reputation_for(&self, player_uuid: Uuid) -> i32 {
+        self.gossips
+            .lock()
+            .await
+            .get(&player_uuid)
+            .map_or(0, |gossips| {
+                gossips
+                    .iter()
+                    .map(|(kind, value)| kind.weight() * value)
+                    .sum()
+            })
     }
 
     async fn reset_special_prices(&self) {
@@ -1800,6 +1804,34 @@ impl Mob for VillagerEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn mob_wake_up_from_bed(&self) -> crate::entity::EntityBaseFuture<'_, bool> {
+        Box::pin(async move {
+            if self.get_entity().pose.load() != EntityPose::Sleeping {
+                return false;
+            }
+            let Some(home_pos) = self.get_home() else {
+                return false;
+            };
+            let world = self.get_entity().world.load();
+            let (block, state) = world.get_block_and_state(&home_pos);
+            if block.has_tag(&pumpkin_data::tag::Block::MINECRAFT_BEDS) {
+                let properties = BedProperties::from_state_id(state.id, block);
+                if properties.occupied {
+                    BedBlock::set_occupied(false, &world, block, &home_pos, state.id).await;
+                }
+            }
+            self.get_entity().set_pose(EntityPose::Standing);
+            self.get_entity().send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::villager::SLEEPING_POS_ID,
+                    None::<BlockPos>,
+                )],
+                None,
+            );
+            true
+        })
+    }
+
     fn mob_init_data_tracker(&self) -> crate::entity::EntityBaseFuture<'_, ()> {
         Box::pin(async move {
             let entity = self.get_entity();
@@ -2155,7 +2187,7 @@ mod tests {
     #[test]
     fn villager_data_metadata_uses_the_villager_tracker_slot() {
         let data = VillagerData::new(VillagerType::Plains, VillagerProfession::Librarian, 1);
-        let metadata = Metadata::new(tracked_data::villager::VILLAGER_DATA, data);
+        let metadata = Metadata::new(tracked_data::villager::VILLAGER_DATA, data.clone());
         let mut bytes = Vec::new();
 
         metadata
@@ -2163,6 +2195,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(bytes, [19, 18, 2, 9, 1]);
+
+        let mut legacy_bytes = Vec::new();
+        Metadata::new(tracked_data::villager::VILLAGER_DATA, data)
+            .write(&mut legacy_bytes, &JavaMinecraftVersion::V_1_21_4)
+            .unwrap();
+        assert_eq!(legacy_bytes, [18, 19, 2, 9, 1]);
     }
 
     #[test]
@@ -2204,6 +2242,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(bytes, [18, 1, 40]);
+
+        let mut legacy_bytes = Vec::new();
+        metadata
+            .write(&mut legacy_bytes, &JavaMinecraftVersion::V_1_21_4)
+            .unwrap();
+        assert_eq!(legacy_bytes, [17, 1, 40]);
     }
 
     #[test]

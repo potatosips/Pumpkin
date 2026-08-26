@@ -56,3 +56,47 @@ impl PlantBlockBase for FlowerbedBlock {}
 impl Segmented for FlowerbedBlock {
     type Properties = FlowerbedProperties;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, HorizontalFacing, PinkPetalsLikeProperties,
+    };
+
+    #[test]
+    fn flowerbed_block_id_parity() {
+        assert_eq!(Block::PINK_PETALS.name, "pink_petals");
+        assert_eq!(
+            FlowerbedBlock::ids().as_ref(),
+            &[BlockId::PINK_PETALS, BlockId::WILDFLOWERS]
+        );
+    }
+
+    #[test]
+    fn flowerbed_properties_parity() {
+        let facings = [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ];
+        let mut count = 0;
+        for facing in facings {
+            for flower_amount in 1..=4u8 {
+                let props = PinkPetalsLikeProperties {
+                    facing,
+                    flower_amount,
+                };
+                let state_id = props.to_state_id(&Block::PINK_PETALS);
+                let roundtrip =
+                    PinkPetalsLikeProperties::from_state_id(state_id, &Block::PINK_PETALS);
+                assert_eq!(roundtrip.facing, facing);
+                assert_eq!(roundtrip.flower_amount, flower_amount);
+                count += 1;
+            }
+        }
+        assert_eq!(count, 16, "Expected 16 flowerbed states");
+    }
+}

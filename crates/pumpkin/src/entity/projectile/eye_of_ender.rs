@@ -220,3 +220,16 @@ impl EntityBase for EyeOfEnder {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eye_of_ender_constants_parity() {
+        assert_eq!(TOO_FAR_DISTANCE, 12.0);
+        assert_eq!(TOO_FAR_SIGNAL_HEIGHT, 8.0);
+        assert_eq!(MAX_LIFE, 80);
+        assert_eq!(SURVIVE_CHANCE, 5);
+    }
+}

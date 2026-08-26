@@ -61,3 +61,34 @@ impl<'a> FindArg<'a> for GamemodeArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamemode_parsing_by_name_and_numeric_id_parity() {
+        assert_eq!(
+            GameMode::from_str("survival").ok(),
+            Some(GameMode::Survival)
+        );
+        assert_eq!(
+            GameMode::from_str("creative").ok(),
+            Some(GameMode::Creative)
+        );
+        assert_eq!(
+            GameMode::from_str("adventure").ok(),
+            Some(GameMode::Adventure)
+        );
+        assert_eq!(
+            GameMode::from_str("spectator").ok(),
+            Some(GameMode::Spectator)
+        );
+
+        assert_eq!(GameMode::try_from(0i8).ok(), Some(GameMode::Survival));
+        assert_eq!(GameMode::try_from(1i8).ok(), Some(GameMode::Creative));
+        assert_eq!(GameMode::try_from(2i8).ok(), Some(GameMode::Adventure));
+        assert_eq!(GameMode::try_from(3i8).ok(), Some(GameMode::Spectator));
+        assert!(GameMode::try_from(4i8).is_err());
+    }
+}

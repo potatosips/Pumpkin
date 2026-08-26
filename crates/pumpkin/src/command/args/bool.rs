@@ -49,3 +49,24 @@ impl<'a> FindArg<'a> for BoolArgConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn vanilla_bool_arg_lookup_parity() {
+        let mut true_args = HashMap::new();
+        true_args.insert("flag", Arg::Bool(true));
+        let res = BoolArgConsumer::find_arg(&true_args, "flag");
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), true);
+
+        let mut false_args = HashMap::new();
+        false_args.insert("flag", Arg::Bool(false));
+        let res_false = BoolArgConsumer::find_arg(&false_args, "flag");
+        assert!(res_false.is_ok());
+        assert_eq!(res_false.unwrap(), false);
+    }
+}

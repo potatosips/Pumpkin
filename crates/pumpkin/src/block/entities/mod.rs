@@ -177,6 +177,25 @@ pub fn block_entity_from_generic<T: BlockEntity>(nbt: &NbtCompound) -> T {
     T::from_nbt(nbt, BlockPos::new(x, y, z))
 }
 
+/// Applies falling-block or command-provided block-entity data as Vanilla's
+/// shallow field merge while keeping world-owned type and coordinates canonical.
+#[must_use]
+pub fn merge_external_block_entity_data(
+    mut base: NbtCompound,
+    external: &NbtCompound,
+    resource_location: &str,
+    position: BlockPos,
+) -> NbtCompound {
+    for (key, value) in &external.child_tags {
+        base.child_tags.insert(key.clone(), value.clone());
+    }
+    base.put_string("id", resource_location.to_owned());
+    base.put_int("x", position.0.x);
+    base.put_int("y", position.0.y);
+    base.put_int("z", position.0.z);
+    base
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn block_entity_from_nbt(nbt: &NbtCompound) -> Option<Arc<dyn BlockEntity>> {
@@ -448,7 +467,10 @@ pub fn create_block_entity(
 
 #[cfg(test)]
 mod test {
-    use super::{BlockEntity, block_entity_from_nbt, furnace::FurnaceBlockEntity};
+    use super::{
+        BlockEntity, block_entity_from_nbt, chest::ChestBlockEntity, furnace::FurnaceBlockEntity,
+        merge_external_block_entity_data,
+    };
     use pumpkin_data::{item::Item, item_stack::ItemStack};
     use pumpkin_nbt::compound::NbtCompound;
     use pumpkin_util::math::position::BlockPos;
@@ -480,5 +502,51 @@ mod test {
             assert_eq!(stack.get_item().id, Item::DIAMOND.id);
             assert_eq!(stack.item_count, 5);
         }
+    }
+
+    #[tokio::test]
+    async fn chest_custom_name_survives_a_chunk_round_trip() {
+        let position = BlockPos::new(1, 100, 2);
+        let mut source = NbtCompound::new();
+        source.put_string("id", ChestBlockEntity::ID.to_owned());
+        source.put_int("x", position.0.x);
+        source.put_int("y", position.0.y);
+        source.put_int("z", position.0.z);
+        source.put_string("CustomName", "\"Parity Chest\"".to_owned());
+
+        let chest = block_entity_from_nbt(&source).expect("chest NBT should load");
+        let mut serialized = NbtCompound::new();
+        chest.write_internal(&mut serialized).await;
+
+        assert_eq!(
+            serialized.get_string("CustomName"),
+            Some("\"Parity Chest\"")
+        );
+    }
+
+    #[test]
+    fn external_block_entity_data_cannot_forge_type_or_coordinates() {
+        let position = BlockPos::new(4, 70, -3);
+        let mut base = NbtCompound::new();
+        base.put_string("id", "minecraft:barrel".to_owned());
+        base.put_int("x", position.0.x);
+        base.put_int("y", position.0.y);
+        base.put_int("z", position.0.z);
+        base.put_string("CustomName", "old".to_owned());
+
+        let mut external = NbtCompound::new();
+        external.put_string("id", "minecraft:chest".to_owned());
+        external.put_int("x", 999);
+        external.put_int("y", -999);
+        external.put_int("z", 999);
+        external.put_string("CustomName", "new".to_owned());
+
+        let merged =
+            merge_external_block_entity_data(base, &external, "minecraft:barrel", position);
+        assert_eq!(merged.get_string("id"), Some("minecraft:barrel"));
+        assert_eq!(merged.get_int("x"), Some(4));
+        assert_eq!(merged.get_int("y"), Some(70));
+        assert_eq!(merged.get_int("z"), Some(-3));
+        assert_eq!(merged.get_string("CustomName"), Some("new"));
     }
 }

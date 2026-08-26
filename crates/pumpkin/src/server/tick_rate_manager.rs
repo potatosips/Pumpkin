@@ -221,3 +221,37 @@ impl ServerTickRateManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tick_rate_manager_freeze_step_and_runs_normally_parity() {
+        let manager = ServerTickRateManager::new(20.0);
+
+        // Default state
+        assert_eq!(manager.tickrate(), 20.0);
+        assert!(!manager.is_frozen());
+        assert!(manager.runs_normally());
+
+        // Freeze
+        manager.is_frozen.store(true, Ordering::Relaxed);
+        manager.tick();
+        assert!(!manager.runs_normally());
+
+        // Step 2 ticks
+        manager.frozen_ticks_to_run.store(2, Ordering::Relaxed);
+        manager.tick();
+        assert!(manager.runs_normally());
+        assert_eq!(manager.frozen_ticks_to_run.load(Ordering::Relaxed), 1);
+
+        manager.tick();
+        assert!(manager.runs_normally());
+        assert_eq!(manager.frozen_ticks_to_run.load(Ordering::Relaxed), 0);
+
+        // Next tick after step exhausted -> frozen again
+        manager.tick();
+        assert!(!manager.runs_normally());
+    }
+}

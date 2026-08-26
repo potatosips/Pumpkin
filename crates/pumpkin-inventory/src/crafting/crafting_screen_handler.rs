@@ -25,7 +25,7 @@ use crate::crafting::crafting_inventory::CraftingInventory;
 use crate::player::player_inventory::PlayerInventory;
 use crate::screen_handler::{
     InventoryPlayer, ItemStackFuture, ScreenHandler, ScreenHandlerBehaviour, ScreenHandlerFuture,
-    ScreenHandlerListener,
+    ScreenHandlerListener, offer_or_drop_stack,
 };
 use crate::slot::{BoxFuture, NormalSlot, Slot};
 
@@ -54,6 +54,42 @@ pub struct ResultSlot {
 pub struct RecipeResult {
     pub item_id: String,
     pub count: u8,
+}
+
+/// Returns the crafting remainder item (e.g. empty bucket when using milk/water/lava,
+/// glass bottle when using honey/potion/dragon breath, bowl when using stew/soup).
+fn get_recipe_remainder(
+    item: &pumpkin_data::item::Item,
+) -> Option<&'static pumpkin_data::item::Item> {
+    use pumpkin_data::item::Item;
+    if item.id == Item::MILK_BUCKET.id
+        || item.id == Item::WATER_BUCKET.id
+        || item.id == Item::LAVA_BUCKET.id
+        || item.id == Item::POWDER_SNOW_BUCKET.id
+        || item.id == Item::AXOLOTL_BUCKET.id
+        || item.id == Item::COD_BUCKET.id
+        || item.id == Item::PUFFERFISH_BUCKET.id
+        || item.id == Item::SALMON_BUCKET.id
+        || item.id == Item::TADPOLE_BUCKET.id
+        || item.id == Item::TROPICAL_FISH_BUCKET.id
+    {
+        Some(&Item::BUCKET)
+    } else if item.id == Item::HONEY_BOTTLE.id
+        || item.id == Item::POTION.id
+        || item.id == Item::SPLASH_POTION.id
+        || item.id == Item::LINGERING_POTION.id
+        || item.id == Item::DRAGON_BREATH.id
+    {
+        Some(&Item::GLASS_BOTTLE)
+    } else if item.id == Item::BEETROOT_SOUP.id
+        || item.id == Item::MUSHROOM_STEW.id
+        || item.id == Item::RABBIT_STEW.id
+        || item.id == Item::SUSPICIOUS_STEW.id
+    {
+        Some(&Item::BOWL)
+    } else {
+        None
+    }
 }
 
 /// Checks if a recipe pattern is symmetrical horizontally.
@@ -248,6 +284,27 @@ async fn recipe_matches(
                 count: 1,
             })
         }
+        GenericRecipe::Vanilla(CraftingRecipeTypes::CraftingSpecial) => {
+            if count == 2 {
+                let mut items = Vec::new();
+                for i in 0..inventory.size() {
+                    let slot = inventory.get_stack(i).await;
+                    if !slot.is_empty() {
+                        items.push(slot);
+                    }
+                }
+                if items.len() == 2
+                    && items[0].item.id == items[1].item.id
+                    && items[0].is_damageable()
+                {
+                    return Some(RecipeResult {
+                        item_id: items[0].item.registry_key.to_string(),
+                        count: 1,
+                    });
+                }
+            }
+            None
+        }
         GenericRecipe::Dynamic(OwnedCraftingRecipe::Shaped {
             pattern,
             key,
@@ -327,7 +384,6 @@ async fn recipe_matches(
                 count: result.count,
             })
         }
-        _ => None,
     }
 }
 
@@ -404,6 +460,25 @@ impl ResultSlot {
                 }
             }
         }
+
+        // Special recipe fallback: 2-item damaged tool/armor repair in crafting grid
+        if count == 2 {
+            let mut items = Vec::new();
+            for i in 0..self.inventory.size() {
+                let slot = self.inventory.get_stack(i).await;
+                if !slot.is_empty() {
+                    items.push(slot);
+                }
+            }
+            if items.len() == 2 && items[0].item.id == items[1].item.id && items[0].is_damageable()
+            {
+                return Some(RecipeResult {
+                    item_id: items[0].item.registry_key.to_string(),
+                    count: 1,
+                });
+            }
+        }
+
         None
     }
 
@@ -415,7 +490,29 @@ impl ResultSlot {
                 .unwrap_or(&matched.item_id);
             let item = pumpkin_data::item::Item::from_registry_key(key)
                 .unwrap_or(&pumpkin_data::item::Item::AIR);
-            ItemStack::new(matched.count, item)
+            let mut stack = ItemStack::new(matched.count, item);
+            if stack.is_damageable() {
+                // Check if this is a 2-item repair in the crafting grid
+                let mut damaged_items = Vec::new();
+                for i in 0..self.inventory.size() {
+                    let s = self.inventory.get_stack(i).await;
+                    if !s.is_empty() && s.item.id == item.id {
+                        damaged_items.push(s);
+                    }
+                }
+                if damaged_items.len() == 2 {
+                    let a_max = damaged_items[0].get_max_damage().unwrap_or(0);
+                    let a_damage = damaged_items[0].get_damage();
+                    let a_remaining = a_max - a_damage;
+                    let b_damage = damaged_items[1].get_damage();
+                    let b_remaining = a_max - b_damage;
+                    let bonus = (a_max as f32 * 0.05).floor() as i32;
+                    let new_remaining = a_remaining + b_remaining + bonus;
+                    let new_damage = a_max - new_remaining.min(a_max);
+                    stack.set_damage(new_damage.max(0));
+                }
+            }
+            stack
         } else {
             ItemStack::EMPTY.clone()
         };
@@ -457,7 +554,20 @@ impl Slot for ResultSlot {
                 )
                 .await;
             for i in 0..self.inventory.size() {
-                self.inventory.remove_stack_specific(i, 1).await;
+                let current_stack = self.inventory.get_stack(i).await;
+                if !current_stack.is_empty() {
+                    let remainder = get_recipe_remainder(current_stack.item);
+                    self.inventory.remove_stack_specific(i, 1).await;
+                    if let Some(remainder_item) = remainder {
+                        let after_stack = self.inventory.get_stack(i).await;
+                        let remainder_stack = ItemStack::new(1, remainder_item);
+                        if after_stack.is_empty() {
+                            self.inventory.set_stack(i, remainder_stack).await;
+                        } else {
+                            offer_or_drop_stack(player, remainder_stack).await;
+                        }
+                    }
+                }
             }
             self.mark_dirty().await;
         })
@@ -474,14 +584,22 @@ impl Slot for ResultSlot {
     fn has_stack(&self) -> BoxFuture<'_, bool> {
         Box::pin(async move { !self.result.lock().await.is_empty() })
     }
-    fn set_stack(&self, _stack: ItemStack) -> BoxFuture<'_, ()> {
+    fn set_stack(&self, stack: ItemStack) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            self.refill_output().await;
+            if stack.is_empty() {
+                *self.result.lock().await = ItemStack::EMPTY.clone();
+            } else {
+                self.refill_output().await;
+            }
         })
     }
-    fn set_stack_prev(&self, _stack: ItemStack, _previous_stack: ItemStack) -> BoxFuture<'_, ()> {
+    fn set_stack_prev(&self, stack: ItemStack, _previous_stack: ItemStack) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            self.refill_output().await;
+            if stack.is_empty() {
+                *self.result.lock().await = ItemStack::EMPTY.clone();
+            } else {
+                self.refill_output().await;
+            }
         })
     }
     fn mark_dirty(&self) -> BoxFuture<'_, ()> {
@@ -669,3 +787,30 @@ impl ScreenHandler for CraftingTableScreenHandler {
 }
 
 impl CraftingScreenHandler<CraftingInventory> for CraftingTableScreenHandler {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::item::Item;
+
+    #[test]
+    fn vanilla_crafting_grid_repair_durability_calculation() {
+        let mut item_a = ItemStack::new(1, &Item::DIAMOND_SWORD);
+        let mut item_b = ItemStack::new(1, &Item::DIAMOND_SWORD);
+        let max_damage = item_a.get_max_damage().unwrap(); // 1561 for Diamond Sword
+
+        // Item A has 500 damage (1061 remaining), Item B has 600 damage (961 remaining)
+        item_a.set_damage(500);
+        item_b.set_damage(600);
+
+        let a_max = max_damage;
+        let a_remaining = a_max - item_a.get_damage();
+        let b_remaining = a_max - item_b.get_damage();
+        let bonus = (a_max as f32 * 0.05).floor() as i32; // 5% bonus = 78
+        let new_remaining = a_remaining + b_remaining + bonus;
+        let new_damage = a_max - new_remaining.min(a_max);
+
+        assert_eq!(bonus, 78);
+        assert_eq!(new_damage, 0); // Exceeds max durability, so fully repaired (0 damage)
+    }
+}

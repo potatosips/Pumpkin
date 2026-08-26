@@ -75,3 +75,36 @@ impl EntityEquipment {
 
     // TODO: tick - Equipment updates, durability damage, etc.
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::item::Item;
+
+    #[test]
+    fn entity_equipment_put_get_clear() {
+        let mut eq = EntityEquipment::new();
+        assert!(eq.is_empty());
+
+        let helmet = ItemStack::new(1, &Item::DIAMOND_HELMET);
+        let old = eq.put(&EquipmentSlot::HEAD, helmet.clone());
+        assert!(old.is_empty());
+        assert!(!eq.is_empty());
+        assert_eq!(
+            eq.get(&EquipmentSlot::HEAD).item.id,
+            Item::DIAMOND_HELMET.id
+        );
+
+        let netherite_helmet = ItemStack::new(1, &Item::NETHERITE_HELMET);
+        let old = eq.put(&EquipmentSlot::HEAD, netherite_helmet);
+        assert_eq!(old.item.id, Item::DIAMOND_HELMET.id);
+        assert_eq!(
+            eq.get(&EquipmentSlot::HEAD).item.id,
+            Item::NETHERITE_HELMET.id
+        );
+
+        eq.clear();
+        assert!(eq.is_empty());
+        assert!(eq.get(&EquipmentSlot::HEAD).is_empty());
+    }
+}

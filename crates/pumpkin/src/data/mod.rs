@@ -12,6 +12,7 @@ pub mod advancement_data;
 pub mod banlist_serializer;
 pub mod banned_ip;
 pub mod banned_player;
+pub mod command_storage;
 pub mod player_server;
 pub mod usercache;
 pub mod whitelist;

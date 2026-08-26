@@ -1,4 +1,4 @@
-use crate::block::blocks::amethyst::AmethystBlock;
+use crate::block::blocks::amethyst::{AmethystBlock, BuddingAmethystBlock};
 use crate::block::blocks::anvil::AnvilBlock;
 use crate::block::blocks::banners::BannerBlock;
 use crate::block::blocks::barrel::BarrelBlock;
@@ -21,6 +21,7 @@ use crate::block::blocks::chests::{ChestBlock, CopperChestBlock, TrappedChestBlo
 use crate::block::blocks::chiseled_bookshelf::ChiseledBookshelfBlock;
 use crate::block::blocks::command::CommandBlock;
 use crate::block::blocks::composter::ComposterBlock;
+use crate::block::blocks::concrete_powder::ConcretePowderBlock;
 use crate::block::blocks::conduit::ConduitBlock;
 use crate::block::blocks::coral::coral_block::CoralBlock;
 use crate::block::blocks::coral::coral_fan::CoralFanBlock;
@@ -199,6 +200,7 @@ use crate::block::blocks::lanterns::LanternBlock;
 use crate::block::blocks::lectern::LecternBlock;
 use crate::block::blocks::respawn_anchor::RespawnAnchorBlock;
 use crate::block::blocks::rooted_dirt::RootedDirtBlock;
+use crate::block::blocks::scaffolding::ScaffoldingBlock;
 use crate::block::blocks::shulker_box::ShulkerBoxBlock;
 use crate::block::blocks::skull_block::SkullBlock;
 use crate::block::blocks::smoker::SmokerBlock;
@@ -336,6 +338,7 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(DripstoneBlock);
     manager.register(TwistingVinesBlock);
     manager.register(WeepingVinesBlock);
+    manager.register(CactusBlock);
     manager.register(CactusFlowerBlock);
     manager.register(SmallDripleafBlock);
     manager.register(BigDripleafStemBlock);
@@ -344,11 +347,19 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(CoralPlantBlock);
     manager.register(CoralBlock);
     manager.register(AmethystBlock);
+    manager.register(BuddingAmethystBlock);
     manager.register(GrassBlock);
     manager.register(RootedDirtBlock);
+    manager.register(ScaffoldingBlock);
     manager.register(BubbleColumnBlock);
+    manager.register(SugarCaneBlock);
+    manager.register(BambooBlock);
+    manager.register(BambooSaplingBlock);
+    manager.register(KelpBlock);
 
     manager.register(FallingBlock);
+    manager.register(ConcretePowderBlock);
+    manager.register(DragonEggBlock);
 
     // Fire
     manager.register(SoulFireBlock);

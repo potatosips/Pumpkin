@@ -195,6 +195,11 @@ fn select_parse_error(
     if syntax_errors.len() == 1 {
         return syntax_errors[0].clone();
     }
+    if let Some(first) = syntax_errors.first()
+        && syntax_errors.iter().all(|error| error == first)
+    {
+        return first.clone();
+    }
 
     let matched_any_node = finalists.iter().any(|failure| failure.matched_any_node);
     if matched_any_node || known_command {
@@ -889,7 +894,9 @@ mod test {
     }
 
     #[test]
-    fn parse_error_selection_synthesizes_unknown_argument_for_tied_syntax_errors() {
+    fn parse_error_selection_preserves_identical_tied_syntax_errors() {
+        let not_found =
+            crate::command::argument_types::entity::NO_ENTITIES_ERROR_TYPE.create_without_context();
         let selected = select_parse_error(
             "alpha beta gamma",
             &[
@@ -897,19 +904,19 @@ mod test {
                     cursor: 12,
                     consumed_tokens: 2,
                     matched_any_node: true,
-                    syntax_error: Some(unknown_argument_syntax_error("alpha beta gamma", 12)),
+                    syntax_error: Some(not_found.clone()),
                 },
                 PathParsingFailure {
                     cursor: 12,
                     consumed_tokens: 2,
                     matched_any_node: true,
-                    syntax_error: Some(unknown_argument_syntax_error("alpha beta gamma", 12)),
+                    syntax_error: Some(not_found),
                 },
             ],
             true,
         );
 
-        assert!(selected.is(&error_types::DISPATCHER_UNKNOWN_ARGUMENT));
+        assert!(selected.is(&crate::command::argument_types::entity::NO_ENTITIES_ERROR_TYPE));
     }
 
     #[test]

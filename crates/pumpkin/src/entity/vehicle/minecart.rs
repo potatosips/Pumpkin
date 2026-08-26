@@ -417,7 +417,9 @@ impl EntityBase for MinecartEntity {
 
                 velocity.y = 0.0;
                 self.vehicle.entity.velocity.store(velocity);
-            } else if !self.vehicle.entity.on_ground.load(Ordering::Relaxed) {
+            } else if !self.vehicle.entity.on_ground.load(Ordering::Relaxed)
+                && !self.vehicle.entity.has_no_gravity()
+            {
                 velocity.y -= GRAVITY;
                 self.vehicle.entity.velocity.store(velocity);
             }

@@ -69,11 +69,11 @@ impl SkeletonEntityBase {
 
 impl NBTStorage for SkeletonEntityBase {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
-        self.mob_entity.living_entity.write_nbt(nbt)
+        self.mob_entity.write_nbt(nbt)
     }
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
-        self.mob_entity.living_entity.read_nbt_non_mut(nbt)
+        self.mob_entity.read_nbt_non_mut(nbt)
     }
 }
 

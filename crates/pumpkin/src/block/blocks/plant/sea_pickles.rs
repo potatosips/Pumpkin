@@ -149,3 +149,71 @@ impl BlockBehaviour for SeaPickleBlock {
 }
 
 impl PlantBlockBase for SeaPickleBlock {}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::BlockProperties;
+
+    type SeaPickleProperties = pumpkin_data::block_properties::SeaPickleLikeProperties;
+
+    #[test]
+    fn sea_pickle_block_id_parity() {
+        assert_eq!(Block::SEA_PICKLE.name, "sea_pickle");
+    }
+
+    #[test]
+    fn sea_pickle_properties_encoding_decoding_parity() {
+        // Sea pickle has 8 states: pickles 1..=4 × waterlogged true/false
+        let mut count = 0;
+        for pickles in 1..=4u8 {
+            for waterlogged in [true, false] {
+                let props = SeaPickleProperties {
+                    pickles,
+                    waterlogged,
+                };
+                let state_id = props.to_state_id(&Block::SEA_PICKLE);
+                let roundtrip = SeaPickleProperties::from_state_id(state_id, &Block::SEA_PICKLE);
+                assert_eq!(
+                    roundtrip.pickles, pickles,
+                    "Pickles roundtrip failed for pickles={pickles}, waterlogged={waterlogged}"
+                );
+                assert_eq!(
+                    roundtrip.waterlogged, waterlogged,
+                    "Waterlogged roundtrip failed for pickles={pickles}, waterlogged={waterlogged}"
+                );
+                count += 1;
+            }
+        }
+        assert_eq!(count, 8, "Expected 8 sea pickle states");
+    }
+
+    #[test]
+    fn sea_pickle_default_state_parity() {
+        // Vanilla default: pickles=1, waterlogged=true
+        let default_props = SeaPickleProperties::from_state_id(
+            Block::SEA_PICKLE.default_state.id,
+            &Block::SEA_PICKLE,
+        );
+        assert_eq!(default_props.pickles, 1, "Default pickles should be 1");
+        assert!(
+            default_props.waterlogged,
+            "Default waterlogged should be true"
+        );
+    }
+
+    #[test]
+    fn sea_pickle_support_requires_center_solid_up() {
+        // Sea pickles require is_center_solid(Up) on the block below
+        assert!(
+            Block::STONE
+                .default_state
+                .is_center_solid(pumpkin_data::BlockDirection::Up)
+        );
+        assert!(
+            Block::DIRT
+                .default_state
+                .is_center_solid(pumpkin_data::BlockDirection::Up)
+        );
+    }
+}

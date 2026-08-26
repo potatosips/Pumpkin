@@ -76,3 +76,26 @@ impl CropBlockBase for BeetrootBlock {
         props.to_state_id(block)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beetroot_block_id_and_default_state_parity() {
+        assert_eq!(Block::BEETROOTS.name, "beetroots");
+        let default_props =
+            BeetrootProperties::from_state_id(Block::BEETROOTS.default_state.id, &Block::BEETROOTS);
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn beetroot_properties_encoding_decoding_parity() {
+        for age in 0..=3 {
+            let props = BeetrootProperties { age };
+            let state_id = props.to_state_id(&Block::BEETROOTS);
+            let decoded = BeetrootProperties::from_state_id(state_id, &Block::BEETROOTS);
+            assert_eq!(decoded.age, age);
+        }
+    }
+}

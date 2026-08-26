@@ -29,6 +29,7 @@ pub struct BarrelBlockEntity {
     pub position: BlockPos,
     pub items: tokio::sync::RwLock<[ItemStack; Self::INVENTORY_SIZE]>,
     pub dirty: AtomicBool,
+    pub custom_name: Option<String>,
 
     // Viewer
     viewers: ViewerCountTracker,
@@ -51,6 +52,7 @@ impl BlockEntity for BarrelBlockEntity {
             position,
             items: tokio::sync::RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
             dirty: AtomicBool::new(false),
+            custom_name: nbt.get_string("CustomName").map(str::to_owned),
             viewers: ViewerCountTracker::new(),
         };
 
@@ -63,7 +65,12 @@ impl BlockEntity for BarrelBlockEntity {
         &'a self,
         nbt: &'a mut NbtCompound,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
-        self.write_inventory_nbt(nbt, true)
+        Box::pin(async move {
+            self.write_inventory_nbt(nbt, true).await;
+            if let Some(custom_name) = &self.custom_name {
+                nbt.put_string("CustomName", custom_name.clone());
+            }
+        })
     }
 
     fn tick<'a>(&'a self, world: &'a Arc<World>) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
@@ -90,6 +97,9 @@ impl BlockEntity for BarrelBlockEntity {
         let mut nbt = NbtCompound::new();
         if let Ok(guard) = self.items.try_read() {
             sync_write_items_to_nbt(&*guard, &mut nbt);
+        }
+        if let Some(custom_name) = &self.custom_name {
+            nbt.put_string("CustomName", custom_name.clone());
         }
         Some(nbt)
     }
@@ -133,12 +143,16 @@ impl BarrelBlockEntity {
             position,
             items: tokio::sync::RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
             dirty: AtomicBool::new(false),
+            custom_name: None,
             viewers: ViewerCountTracker::new(),
         }
     }
 
     async fn set_open(&self, world: &Arc<World>, open: bool) {
-        let state = world.get_block_state(&self.position);
+        let (block, state) = world.get_block_and_state(&self.position);
+        if block.id != Block::BARREL.id {
+            return;
+        }
         let mut properties = BarrelLikeProperties::from_state_id(state.id, &Block::BARREL);
 
         properties.open = open;
@@ -156,7 +170,10 @@ impl BarrelBlockEntity {
     fn play_sound(&self, world: &Arc<World>, sound: Sound) {
         let mut rng = Xoroshiro::from_seed(get_seed());
 
-        let state = world.get_block_state(&self.position);
+        let (block, state) = world.get_block_and_state(&self.position);
+        if block.id != Block::BARREL.id {
+            return;
+        }
         let properties = BarrelLikeProperties::from_state_id(state.id, &Block::BARREL);
         let direction = properties.facing.to_block_direction().to_offset();
         let position = Vector3::new(

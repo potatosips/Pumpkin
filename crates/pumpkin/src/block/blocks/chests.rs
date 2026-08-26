@@ -685,13 +685,32 @@ fn get_chest_properties_if_can_connect(
 }
 
 fn is_chest_blocked(world: &World, block_pos: &BlockPos) -> bool {
-    // TODO: Block opening when a cat is sitting on top.
-    has_block_on_top(world, block_pos)
+    has_block_on_top(world, block_pos) || has_cat_on_top(world, block_pos)
 }
+
 fn has_block_on_top(world: &World, block_pos: &BlockPos) -> bool {
     let above_pos = block_pos.up();
     let above_state = world.get_block_state(&above_pos);
     above_state.is_solid_block()
+}
+
+fn has_cat_on_top(world: &World, block_pos: &BlockPos) -> bool {
+    let above_pos = block_pos.up();
+    let aabb = pumpkin_util::math::boundingbox::BoundingBox::from_block(&above_pos);
+    let entities = world.get_entities_at_box(&aabb);
+    for entity in entities {
+        let entity_type = entity.get_entity().entity_type;
+        if entity_type == &pumpkin_data::entity::EntityType::CAT
+            || entity_type == &pumpkin_data::entity::EntityType::OCELOT
+        {
+            if let Some(mob) = entity.get_mob() {
+                if mob.is_sitting() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 trait ChestTypeExt {
@@ -704,6 +723,55 @@ impl ChestTypeExt for ChestType {
             Self::Single => Self::Single,
             Self::Left => Self::Right,
             Self::Right => Self::Left,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, ChestLikeProperties, ChestType, HorizontalFacing,
+    };
+
+    #[test]
+    fn chest_ids_parity() {
+        assert_eq!(Block::CHEST.name, "chest");
+        assert_eq!(Block::TRAPPED_CHEST.name, "trapped_chest");
+    }
+
+    #[test]
+    fn chest_default_state_parity() {
+        assert_ne!(Block::CHEST.default_state.id, Block::AIR.default_state.id);
+        assert_ne!(
+            Block::TRAPPED_CHEST.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn chest_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for r#type in [ChestType::Single, ChestType::Left, ChestType::Right] {
+                for waterlogged in [true, false] {
+                    let props = ChestLikeProperties {
+                        facing,
+                        r#type,
+                        waterlogged,
+                    };
+                    let state_id = props.to_state_id(&Block::CHEST);
+                    let rt = ChestLikeProperties::from_state_id(state_id, &Block::CHEST);
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.r#type, r#type);
+                    assert_eq!(rt.waterlogged, waterlogged);
+                }
+            }
         }
     }
 }

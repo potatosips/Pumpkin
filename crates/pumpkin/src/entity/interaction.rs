@@ -168,25 +168,28 @@ impl NBTStorage for InteractionEntity {
         Box::pin(async move {
             self.entity.read_nbt_non_mut(nbt).await;
 
-            let width = nbt.get_float("width").unwrap_or(1.0);
-            let height = nbt.get_float("height").unwrap_or(1.0);
-            let response = nbt.get_bool("response").unwrap_or(false);
-
-            *self.width.lock().await = width;
-            *self.height.lock().await = height;
-            self.response.store(response, Ordering::Relaxed);
-            self.update_dimensions().await;
+            let mut dimensions_changed = false;
+            if let Some(width) = nbt.get_float("width") {
+                *self.width.lock().await = width;
+                dimensions_changed = true;
+            }
+            if let Some(height) = nbt.get_float("height") {
+                *self.height.lock().await = height;
+                dimensions_changed = true;
+            }
+            if let Some(response) = nbt.get_bool("response") {
+                self.response.store(response, Ordering::Relaxed);
+            }
+            if dimensions_changed {
+                self.update_dimensions().await;
+            }
 
             if let Some(attack_compound) = nbt.get_compound("attack") {
                 *self.attack.lock().await = PlayerAction::from_nbt(attack_compound);
-            } else {
-                *self.attack.lock().await = None;
             }
 
             if let Some(interaction_compound) = nbt.get_compound("interaction") {
                 *self.interaction.lock().await = PlayerAction::from_nbt(interaction_compound);
-            } else {
-                *self.interaction.lock().await = None;
             }
         })
     }

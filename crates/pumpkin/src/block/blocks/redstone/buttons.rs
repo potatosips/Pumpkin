@@ -173,3 +173,59 @@ impl ButtonBlock {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        AttachFace, BlockProperties, HorizontalFacing, LeverLikeProperties,
+    };
+
+    #[test]
+    fn button_block_ids_parity() {
+        assert_eq!(Block::STONE_BUTTON.name, "stone_button");
+        assert_eq!(Block::OAK_BUTTON.name, "oak_button");
+        assert_eq!(
+            Block::POLISHED_BLACKSTONE_BUTTON.name,
+            "polished_blackstone_button"
+        );
+    }
+
+    #[test]
+    fn button_default_state_parity() {
+        assert_ne!(
+            Block::STONE_BUTTON.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::OAK_BUTTON.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn button_properties_roundtrip_parity() {
+        for face in [AttachFace::Floor, AttachFace::Wall, AttachFace::Ceiling] {
+            for facing in [
+                HorizontalFacing::North,
+                HorizontalFacing::South,
+                HorizontalFacing::East,
+                HorizontalFacing::West,
+            ] {
+                for powered in [true, false] {
+                    let props = LeverLikeProperties {
+                        face,
+                        facing,
+                        powered,
+                    };
+                    let state_id = props.to_state_id(&Block::STONE_BUTTON);
+                    let rt = LeverLikeProperties::from_state_id(state_id, &Block::STONE_BUTTON);
+                    assert_eq!(rt.face, face);
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.powered, powered);
+                }
+            }
+        }
+    }
+}

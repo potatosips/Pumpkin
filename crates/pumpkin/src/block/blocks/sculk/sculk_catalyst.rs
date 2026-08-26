@@ -21,3 +21,22 @@ impl BlockBehaviour for SculkCatalystBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn sculk_catalyst_block_id_parity() {
+        assert_eq!(Block::SCULK_CATALYST.name, "sculk_catalyst");
+    }
+
+    #[test]
+    fn sculk_catalyst_default_state_parity() {
+        assert_ne!(
+            Block::SCULK_CATALYST.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

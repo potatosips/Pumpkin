@@ -1,4 +1,10 @@
-use std::{any::Any, sync::Arc};
+use std::{
+    any::Any,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 use pumpkin_data::{item_stack::ItemStack, screen::WindowType};
 use pumpkin_world::inventory::Inventory;
@@ -9,8 +15,62 @@ use crate::{
         InventoryPlayer, ItemStackFuture, ScreenHandler, ScreenHandlerBehaviour,
         ScreenHandlerFuture,
     },
-    slot::NormalSlot,
+    slot::{BoxFuture, Slot},
 };
+
+pub struct BeaconPaymentSlot {
+    pub inventory: Arc<dyn Inventory>,
+    pub index: usize,
+    pub id: AtomicU8,
+}
+
+impl BeaconPaymentSlot {
+    pub fn new(inventory: Arc<dyn Inventory>, index: usize) -> Self {
+        Self {
+            inventory,
+            index,
+            id: AtomicU8::new(0),
+        }
+    }
+}
+
+impl Slot for BeaconPaymentSlot {
+    fn get_inventory(&self) -> Arc<dyn Inventory> {
+        self.inventory.clone()
+    }
+
+    fn get_index(&self) -> usize {
+        self.index
+    }
+
+    fn set_id(&self, id: usize) {
+        self.id.store(id as u8, Ordering::Relaxed);
+    }
+
+    fn can_insert<'a>(&'a self, stack: &'a ItemStack) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            stack.item == &pumpkin_data::item::Item::NETHERITE_INGOT
+                || stack.item == &pumpkin_data::item::Item::EMERALD
+                || stack.item == &pumpkin_data::item::Item::DIAMOND
+                || stack.item == &pumpkin_data::item::Item::GOLD_INGOT
+                || stack.item == &pumpkin_data::item::Item::IRON_INGOT
+        })
+    }
+
+    fn get_max_item_count_for_stack<'a>(&'a self, _stack: &'a ItemStack) -> BoxFuture<'a, u8> {
+        Box::pin(async move { 1 })
+    }
+
+    fn get_max_item_count(&self) -> BoxFuture<'_, u8> {
+        Box::pin(async move { 1 })
+    }
+
+    fn mark_dirty(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.inventory.mark_dirty();
+        })
+    }
+}
 
 /// Creates a beacon container screen handler.
 ///
@@ -46,7 +106,10 @@ impl BeaconScreenHandler {
         inventory.on_open().await;
 
         // Add the single payment slot for the beacon (slot 0)
-        handler.add_slot(Arc::new(NormalSlot::new(handler.inventory.clone(), 0)));
+        handler.add_slot(Arc::new(BeaconPaymentSlot::new(
+            handler.inventory.clone(),
+            0,
+        )));
 
         // Add the player's inventory slots (27 slots + 9 hotbar)
         let player_inventory_arc: Arc<dyn Inventory> = player_inventory.clone();
@@ -83,7 +146,7 @@ impl ScreenHandler for BeaconScreenHandler {
     /// Quick move logic specifically for the beacon UI.
     ///
     /// - From beacon payment slot (0): Move to player inventory
-    /// - From player inventory (1+): Move to beacon payment slot
+    /// - From player inventory (1+): Move to beacon payment slot if valid payment item
     fn quick_move<'a>(
         &'a mut self,
         _player: &'a dyn InventoryPlayer,
@@ -112,7 +175,16 @@ impl ScreenHandler for BeaconScreenHandler {
                     }
                 } else {
                     // Move from player inventory into the beacon payment slot (slot 0)
-                    if !self.insert_item(&mut slot_stack, 0, 1, false).await {
+                    let is_payment = slot_stack.item == &pumpkin_data::item::Item::NETHERITE_INGOT
+                        || slot_stack.item == &pumpkin_data::item::Item::EMERALD
+                        || slot_stack.item == &pumpkin_data::item::Item::DIAMOND
+                        || slot_stack.item == &pumpkin_data::item::Item::GOLD_INGOT
+                        || slot_stack.item == &pumpkin_data::item::Item::IRON_INGOT;
+                    if is_payment {
+                        if !self.insert_item(&mut slot_stack, 0, 1, false).await {
+                            return ItemStack::EMPTY.clone();
+                        }
+                    } else {
                         return ItemStack::EMPTY.clone();
                     }
                 }
@@ -126,5 +198,33 @@ impl ScreenHandler for BeaconScreenHandler {
 
             stack_left
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::item::Item;
+    use pumpkin_world::inventory::SimpleInventory;
+
+    #[tokio::test]
+    async fn beacon_payment_slot_filter() {
+        let inv = Arc::new(SimpleInventory::new(1));
+        let slot = BeaconPaymentSlot::new(inv.clone(), 0);
+
+        let diamond = ItemStack::new(1, &Item::DIAMOND);
+        let emerald = ItemStack::new(1, &Item::EMERALD);
+        let netherite = ItemStack::new(1, &Item::NETHERITE_INGOT);
+        let iron = ItemStack::new(1, &Item::IRON_INGOT);
+        let gold = ItemStack::new(1, &Item::GOLD_INGOT);
+        let dirt = ItemStack::new(1, &Item::DIRT);
+
+        assert!(slot.can_insert(&diamond).await);
+        assert!(slot.can_insert(&emerald).await);
+        assert!(slot.can_insert(&netherite).await);
+        assert!(slot.can_insert(&iron).await);
+        assert!(slot.can_insert(&gold).await);
+        assert!(!slot.can_insert(&dirt).await);
+        assert_eq!(slot.get_max_item_count().await, 1);
     }
 }

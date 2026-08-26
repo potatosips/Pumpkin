@@ -83,6 +83,16 @@ impl JavaClient {
                             player.attack(event.target).await;
                         }
                         ActionType::Interact | ActionType::InteractAt => {
+                            let Some(hand_id) = interact.hand else {
+                                self.kick(TextComponent::text("Invalid interaction hand"))
+                                    .await;
+                                return;
+                            };
+                            let Ok(hand) = Hand::from_packet_id(hand_id.0) else {
+                                self.kick(TextComponent::text("Invalid interaction hand"))
+                                    .await;
+                                return;
+                            };
                             if event.action == ActionType::InteractAt
                                 && let Some(pos) = interact.target_position
                             {
@@ -99,7 +109,9 @@ impl JavaClient {
                                     return;
                                 }
                             }
-                            let mut stack = player.inventory().held_item().await;
+                            let inventory = player.inventory();
+                            let mut stack = inventory.get_stack_in_hand(hand).await;
+                            let before = stack.clone();
                             let target_entity = event.target.get_entity();
                             if target_entity.entity_type.resource_name == "zombie_villager"
                                 && stack.item.registry_key == "golden_apple"
@@ -114,7 +126,49 @@ impl JavaClient {
                                     .use_on_entity(&mut stack, player, event.target)
                                     .await;
                             }
-                            player.inventory().set_held_item(stack).await;
+
+                            let damage = stack.get_damage() - before.get_damage();
+                            if damage > 0 {
+                                let mut damage_event = crate::plugin::api::events::player::player_item_damage::PlayerItemDamageEvent::new(
+                                    player.clone(),
+                                    before.item.registry_key.to_string(),
+                                    damage,
+                                );
+                                server.plugin_manager.fire(server, &mut damage_event).await;
+                            }
+
+                            if !before.is_empty() && stack.is_empty() {
+                                let slot = match hand {
+                                    Hand::Right => &EquipmentSlot::MAIN_HAND,
+                                    Hand::Left => &EquipmentSlot::OFF_HAND,
+                                };
+                                let mut break_event = crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent::new(
+                                    player.clone(),
+                                    before.item.registry_key.to_string(),
+                                );
+                                server.plugin_manager.fire(server, &mut break_event).await;
+                                player
+                                    .increment_stat(
+                                        StatisticCategory::Broken,
+                                        before.item.id as i32,
+                                        1,
+                                    )
+                                    .await;
+                                player.world().send_entity_status(
+                                    player.get_entity(),
+                                    equipment_break_status(slot),
+                                    None,
+                                );
+                            }
+
+                            let slot_index = match hand {
+                                Hand::Right => inventory.get_selected_slot() as usize,
+                                Hand::Left => pumpkin_inventory::player::player_inventory::PlayerInventory::OFF_HAND_SLOT,
+                            };
+                            if !stack.are_equal(&before) {
+                                player.sync_hand_slot(slot_index, stack.clone()).await;
+                                inventory.set_stack_in_hand(hand, stack).await;
+                            }
                         }
                     }
                 }

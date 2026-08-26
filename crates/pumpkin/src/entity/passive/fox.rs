@@ -242,7 +242,7 @@ impl Animal for FoxEntity {
 impl NBTStorage for FoxEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_string("Type", self.get_variant().as_str().to_string());
@@ -254,7 +254,7 @@ impl NBTStorage for FoxEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(variant_str) = nbt.get_string("Type") {
@@ -304,7 +304,7 @@ impl Mob for FoxEntity {
             entity.send_meta_data(
                 &[Metadata::new(
                     pumpkin_data::tracked_data::fox::TYPE_ID,
-                    VarInt(self.get_variant().id()),
+                    self.get_variant().id() as i32,
                 )],
                 None,
             );
@@ -327,5 +327,19 @@ impl Mob for FoxEntity {
             self.animal_interact(player, item_stack, Sound::EntityFoxAmbient)
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fox_variant_mappings() {
+        assert_eq!(FoxVariant::from_id(0), FoxVariant::Red);
+        assert_eq!(FoxVariant::from_id(1), FoxVariant::Snow);
+        assert_eq!(FoxVariant::from_name("snow"), FoxVariant::Snow);
+        assert_eq!(FoxVariant::from_name("minecraft:snow"), FoxVariant::Snow);
+        assert_eq!(FoxVariant::from_name("red"), FoxVariant::Red);
     }
 }

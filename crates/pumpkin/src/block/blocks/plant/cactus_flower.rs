@@ -59,3 +59,38 @@ fn supports_cactus_flower(block: &Block, block_state: &BlockState) -> bool {
     block.has_tag(&tag::Block::MINECRAFT_SUPPORT_OVERRIDE_CACTUS_FLOWER)
         || block_state.is_center_solid(BlockDirection::Up)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn cactus_flower_block_id_parity() {
+        assert_eq!(Block::CACTUS_FLOWER.name, "cactus_flower");
+    }
+
+    #[test]
+    fn cactus_flower_default_state_parity() {
+        assert_ne!(
+            Block::CACTUS_FLOWER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn cactus_flower_supports_cactus_top() {
+        assert!(supports_cactus_flower(
+            &Block::CACTUS,
+            &Block::CACTUS.default_state
+        ));
+        assert!(supports_cactus_flower(
+            &Block::STONE,
+            &Block::STONE.default_state
+        ));
+        assert!(supports_cactus_flower(
+            &Block::SAND,
+            &Block::SAND.default_state
+        ));
+    }
+}

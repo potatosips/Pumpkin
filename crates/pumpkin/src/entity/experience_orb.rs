@@ -9,11 +9,11 @@ use pumpkin_util::math::vector3::Vector3;
 
 use crate::{entity::EntityBaseFuture, server::Server, world::World};
 
-use super::{Entity, EntityBase, NBTStorage, living::LivingEntity, player::Player};
+use super::{Entity, EntityBase, NBTStorage, NbtFuture, living::LivingEntity, player::Player};
 
 pub struct ExperienceOrbEntity {
     entity: Entity,
-    amount: u32,
+    amount: AtomicU32,
     orb_age: AtomicU32,
 }
 
@@ -22,7 +22,7 @@ impl ExperienceOrbEntity {
         entity.yaw.store(rand::random::<f32>() * 360.0);
         Self {
             entity,
-            amount,
+            amount: AtomicU32::new(amount),
             orb_age: AtomicU32::new(0),
         }
     }
@@ -65,7 +65,34 @@ impl ExperienceOrbEntity {
     }
 }
 
-impl NBTStorage for ExperienceOrbEntity {}
+impl NBTStorage for ExperienceOrbEntity {
+    fn write_nbt<'a>(
+        &'a self,
+        nbt: &'a mut pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.entity.write_nbt(nbt).await;
+            nbt.put_short("Age", self.orb_age.load(Ordering::Relaxed) as i16);
+            nbt.put_short("Value", self.amount.load(Ordering::Relaxed) as i16);
+        })
+    }
+
+    fn read_nbt_non_mut<'a>(
+        &'a self,
+        nbt: &'a pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.entity.read_nbt_non_mut(nbt).await;
+            self.orb_age.store(
+                nbt.get_short("Age").unwrap_or(0).max(0) as u32,
+                Ordering::Relaxed,
+            );
+            if let Some(value) = nbt.get_short("Value") {
+                self.amount.store(value.max(0) as u32, Ordering::Relaxed);
+            }
+        })
+    }
+}
 
 impl EntityBase for ExperienceOrbEntity {
     fn tick<'a>(
@@ -82,15 +109,36 @@ impl EntityBase for ExperienceOrbEntity {
 
             let mut velo = original_velo;
 
-            let no_clip = !self
-                .entity
-                .world
-                .load()
-                .is_space_empty(bounding_box.expand(-1.0e-7, -1.0e-7, -1.0e-7));
-            // TODO: isSubmergedIn
-            if !no_clip {
+            let pos = entity.pos.load();
+            let world = entity.world.load();
+
+            if let Some(target) = world.get_closest_player(pos, 8.0) {
+                if !target.is_spectator() {
+                    let target_pos = target.get_entity().pos.load();
+                    let eye_height = f64::from(target.get_entity().entity_type.eye_height);
+                    let delta_x = target_pos.x - pos.x;
+                    let delta_y = target_pos.y + (eye_height / 2.0) - pos.y;
+                    let delta_z = target_pos.z - pos.z;
+                    let dist_sq = delta_x * delta_x + delta_y * delta_y + delta_z * delta_z;
+                    if dist_sq < 64.0 && dist_sq > 1.0e-4 {
+                        let dist = dist_sq.sqrt();
+                        let factor = 1.0 - (dist / 8.0);
+                        let accel = (factor * factor * 0.1) / dist;
+                        velo.x += delta_x * accel;
+                        velo.y += delta_y * accel;
+                        velo.z += delta_z * accel;
+                    }
+                }
+            }
+
+            let no_clip = !world.is_space_empty(bounding_box.expand(-1.0e-7, -1.0e-7, -1.0e-7));
+            if !no_clip && !entity.has_no_gravity() {
                 velo.y -= self.get_gravity();
             }
+
+            velo.x *= 0.98;
+            velo.y *= 0.98;
+            velo.z *= 0.98;
 
             entity.velocity.store(velo);
 
@@ -116,11 +164,17 @@ impl EntityBase for ExperienceOrbEntity {
                 if *delay == 0 {
                     *delay = 2;
                     player.living_entity.pickup(&self.entity, 1);
-                    let remaining = player.apply_mending_from_xp(self.amount as i32).await;
+                    player.world().play_sound(
+                        pumpkin_data::sound::Sound::EntityExperienceOrbPickup,
+                        pumpkin_data::sound::SoundCategory::Players,
+                        &player.get_entity().pos.load(),
+                    );
+                    let remaining = player
+                        .apply_mending_from_xp(self.amount.load(Ordering::Relaxed) as i32)
+                        .await;
                     if remaining > 0 {
                         player.add_experience_points(remaining).await;
                     }
-                    // TODO: pickingCount for merging
                     self.entity.remove().await;
                 }
             }
@@ -141,5 +195,27 @@ impl EntityBase for ExperienceOrbEntity {
 
     fn cast_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_experience_orb_size_tiers() {
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(3000), 2477);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(2477), 2477);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(1500), 1237);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(700), 617);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(500), 307);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(200), 149);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(100), 73);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(50), 37);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(20), 17);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(10), 7);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(5), 3);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(2), 1);
+        assert_eq!(ExperienceOrbEntity::round_to_orb_size(1), 1);
     }
 }

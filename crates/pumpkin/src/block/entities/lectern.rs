@@ -133,9 +133,9 @@ impl LecternBlockEntity {
         Self::page_count_of(&*self.book.lock().await)
     }
 
-    /// Vanilla comparator output: `floor(page / (page_count - 1) * 14) + 1`,
-    /// or `0` without a book. Single-page books emit `1` (`0 / 0` is `NaN`,
-    /// which vanilla's `MathHelper.floor` turns into `0`).
+    /// Vanilla comparator output: `floor(progress * 14) + 1`, or `0` without
+    /// a book. Progress is `page / (page_count - 1)` for multi-page books and
+    /// explicitly `1.0` for books with one page or fewer.
     pub async fn comparator_output(&self) -> u8 {
         let book = self.book.lock().await;
         if book.is_empty() {
@@ -143,10 +143,13 @@ impl LecternBlockEntity {
         }
 
         let page = self.page.load(Ordering::Relaxed) as f32;
-        let page_count = Self::page_count_of(&book) as f32;
-        let fraction = page / (page_count - 1.0) * 14.0;
-        // `NaN as u8` is 0, matching vanilla's cast of NaN to int.
-        fraction.floor() as u8 + 1
+        let page_count = Self::page_count_of(&book);
+        let progress = if page_count > 1 {
+            page / (page_count - 1) as f32
+        } else {
+            1.0
+        };
+        (progress * 14.0).floor() as u8 + 1
     }
 }
 
@@ -198,6 +201,22 @@ impl Inventory for LecternBlockEntity {
         self.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// Vanilla does not expose the lectern's internal book container to
+    /// hopper automation. The inventory remains available to its menu, but
+    /// automated insertion and extraction must both be rejected.
+    fn is_valid_slot_for(&self, _slot: usize, _stack: &ItemStack) -> bool {
+        false
+    }
+
+    fn can_transfer_to(
+        &self,
+        _hopper_inventory: &dyn Inventory,
+        _slot: usize,
+        _stack: &ItemStack,
+    ) -> bool {
+        false
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -209,5 +228,72 @@ impl Clearable for LecternBlockEntity {
             *self.book.lock().await = ItemStack::EMPTY.clone();
             self.mark_dirty();
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::{
+        data_component::DataComponent,
+        data_component_impl::{DataComponentImpl, WritableBookContentImpl},
+        item::Item,
+    };
+
+    use super::*;
+
+    #[test]
+    fn hopper_insertion_and_extraction_are_rejected() {
+        let lectern = LecternBlockEntity::new(BlockPos::new(0, 0, 0));
+        let book = ItemStack::new(1, &Item::WRITABLE_BOOK);
+
+        assert!(!lectern.is_valid_slot_for(0, &book));
+        assert!(!lectern.can_transfer_to(&lectern, 0, &book));
+    }
+
+    #[tokio::test]
+    async fn menu_inventory_can_still_store_and_remove_a_book() {
+        let lectern = LecternBlockEntity::new(BlockPos::new(0, 0, 0));
+        let book = ItemStack::new(1, &Item::WRITABLE_BOOK);
+
+        lectern.set_stack(0, book).await;
+        assert_eq!(lectern.get_stack(0).await.item_count, 1);
+        assert_eq!(lectern.remove_stack(0).await.item_count, 1);
+        assert!(lectern.is_empty().await);
+    }
+
+    fn writable_book_with_pages(pages: usize) -> ItemStack {
+        let mut book = ItemStack::new(1, &Item::WRITABLE_BOOK);
+        book.patch.push((
+            DataComponent::WritableBookContent,
+            Some(
+                WritableBookContentImpl {
+                    pages: (0..pages).map(|page| format!("page {page}")).collect(),
+                    filtered_pages: vec![None; pages],
+                }
+                .to_dyn(),
+            ),
+        ));
+        book
+    }
+
+    #[tokio::test]
+    async fn comparator_is_zero_without_a_book_and_fifteen_for_one_page() {
+        let lectern = LecternBlockEntity::new(BlockPos::new(0, 0, 0));
+        assert_eq!(lectern.comparator_output().await, 0);
+
+        lectern.set_stack(0, writable_book_with_pages(1)).await;
+        assert_eq!(lectern.comparator_output().await, 15);
+    }
+
+    #[tokio::test]
+    async fn comparator_scales_from_one_to_fifteen_across_pages() {
+        let lectern = LecternBlockEntity::new(BlockPos::new(0, 0, 0));
+        lectern.set_stack(0, writable_book_with_pages(3)).await;
+
+        assert_eq!(lectern.comparator_output().await, 1);
+        lectern.page.store(1, Ordering::Relaxed);
+        assert_eq!(lectern.comparator_output().await, 8);
+        lectern.page.store(2, Ordering::Relaxed);
+        assert_eq!(lectern.comparator_output().await, 15);
     }
 }

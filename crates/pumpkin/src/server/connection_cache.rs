@@ -204,7 +204,7 @@ impl CachedStatus {
         StatusResponse {
             version: Some(Version {
                 name: format!("{LOWEST_SUPPORTED_MC_VERSION}-{CURRENT_MC_VERSION}"),
-                protocol: LOWEST_SUPPORTED_MC_VERSION.protocol_version() as u32,
+                protocol: CURRENT_MC_VERSION.protocol_version() as u32,
             }),
             players: Some(Players {
                 max: max_players,
@@ -227,5 +227,33 @@ impl Default for CachedStatus {
             "A blazingly fast Pumpkin server!",
             1000,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_branding_plugin_message_format_parity() {
+        let branding = CachedBranding::new();
+        let msg = branding.get_branding();
+        assert_eq!(msg.channel, "minecraft:brand");
+        // Length 7 followed by "Pumpkin"
+        assert_eq!(msg.data, &[7, b'P', b'u', b'm', b'p', b'k', b'i', b'n']);
+    }
+
+    #[test]
+    fn cached_status_dynamic_protocol_reflection() {
+        let status = CachedStatus::default();
+
+        // 769 (1.21.4)
+        let resp_769 = status.get_status_response(769);
+        assert_eq!(resp_769.version.unwrap().protocol, 769);
+
+        // Unknown future protocol -> keeps default protocol
+        let default_proto = CURRENT_MC_VERSION.protocol_version() as u32;
+        let resp_future = status.get_status_response(9999);
+        assert_eq!(resp_future.version.unwrap().protocol, default_proto);
     }
 }

@@ -71,3 +71,27 @@ impl BlockBehaviour for RedstoneLamp {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn vanilla_redstone_lamp_states() {
+        let unlit_props = RedstoneLampProperties { lit: false };
+        let lit_props = RedstoneLampProperties { lit: true };
+
+        let unlit_state = unlit_props.to_state_id(&Block::REDSTONE_LAMP);
+        let lit_state = lit_props.to_state_id(&Block::REDSTONE_LAMP);
+
+        assert_ne!(unlit_state, lit_state);
+
+        let roundtrip_unlit =
+            RedstoneLampProperties::from_state_id(unlit_state, &Block::REDSTONE_LAMP);
+        assert!(!roundtrip_unlit.lit);
+
+        let roundtrip_lit = RedstoneLampProperties::from_state_id(lit_state, &Block::REDSTONE_LAMP);
+        assert!(roundtrip_lit.lit);
+    }
+}

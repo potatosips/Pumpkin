@@ -205,7 +205,7 @@ impl CopperGolemEntity {
 impl NBTStorage for CopperGolemEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             nbt.put_long(
                 "next_weather_age",
                 self.next_weathering_tick.load(Ordering::Relaxed),
@@ -216,7 +216,7 @@ impl NBTStorage for CopperGolemEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(next) = nbt.get_long("next_weather_age") {
                 self.next_weathering_tick.store(next, Ordering::Relaxed);
             }
@@ -306,5 +306,31 @@ impl Mob for CopperGolemEntity {
 
             false
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weather_state_transitions_and_id() {
+        assert_eq!(WeatherState::Unaffected.next(), WeatherState::Exposed);
+        assert_eq!(WeatherState::Exposed.next(), WeatherState::Weathered);
+        assert_eq!(WeatherState::Weathered.next(), WeatherState::Oxidized);
+        assert_eq!(WeatherState::Oxidized.next(), WeatherState::Oxidized);
+
+        assert_eq!(WeatherState::Oxidized.previous(), WeatherState::Weathered);
+        assert_eq!(WeatherState::Weathered.previous(), WeatherState::Exposed);
+        assert_eq!(WeatherState::Exposed.previous(), WeatherState::Unaffected);
+        assert_eq!(
+            WeatherState::Unaffected.previous(),
+            WeatherState::Unaffected
+        );
+
+        assert_eq!(WeatherState::from_id(0), WeatherState::Unaffected);
+        assert_eq!(WeatherState::from_id(1), WeatherState::Exposed);
+        assert_eq!(WeatherState::from_id(2), WeatherState::Weathered);
+        assert_eq!(WeatherState::from_id(3), WeatherState::Oxidized);
     }
 }

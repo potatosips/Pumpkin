@@ -35,7 +35,7 @@ impl EntityPredicate<'_> {
                 }
                 EntityPredicate::ExceptCreativeOrSpectator => entity
                     .get_player()
-                    .is_some_and(|player| player.is_spectator() || player.is_creative()),
+                    .is_none_or(|player| !player.is_spectator() && !player.is_creative()),
                 EntityPredicate::ExceptSpectator => !entity.is_spectator(),
                 EntityPredicate::CanCollide => {
                     EntityPredicate::ExceptSpectator.test(entity).await

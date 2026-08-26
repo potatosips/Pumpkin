@@ -97,3 +97,33 @@ impl PlantBlockBase for WeepingVinesBlock {
         block_state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::WeepingVinesBlock;
+    use crate::block::BlockMetadata;
+    use pumpkin_data::Block;
+    use pumpkin_data::BlockId;
+
+    #[test]
+    fn weeping_vines_block_id_parity() {
+        assert_eq!(Block::WEEPING_VINES.name, "weeping_vines");
+        assert_eq!(Block::WEEPING_VINES_PLANT.name, "weeping_vines_plant");
+        assert_eq!(
+            WeepingVinesBlock::ids().as_ref(),
+            &[BlockId::WEEPING_VINES, BlockId::WEEPING_VINES_PLANT]
+        );
+    }
+
+    #[test]
+    fn weeping_vines_default_state_parity() {
+        assert_ne!(
+            Block::WEEPING_VINES.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::WEEPING_VINES_PLANT.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

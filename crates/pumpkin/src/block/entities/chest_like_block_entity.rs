@@ -26,6 +26,7 @@ macro_rules! impl_block_entity_for_chest {
                     position,
                     items: tokio::sync::RwLock::new(std::array::from_fn(|_| ItemStack::EMPTY.clone())),
                     dirty: std::sync::atomic::AtomicBool::new(false),
+                    custom_name: nbt.get_string("CustomName").map(str::to_owned),
                     viewers: $crate::block::viewer::ViewerCountTracker::new(),
                     loot_table: StdMutex::new(loot_table_key),
                     loot_table_seed,
@@ -66,6 +67,9 @@ macro_rules! impl_block_entity_for_chest {
                     } else {
                         // Loot has already been generated, so persist the actual items.
                         self.write_inventory_nbt(nbt, true).await;
+                    }
+                    if let Some(custom_name) = &self.custom_name {
+                        nbt.put_string("CustomName", custom_name.clone());
                     }
                 })
             }
@@ -109,6 +113,9 @@ macro_rules! impl_block_entity_for_chest {
                 } else {
                     let items = futures::executor::block_on(self.items.read());
                     pumpkin_world::inventory::sync_write_items_to_nbt(&*items, &mut nbt);
+                }
+                if let Some(custom_name) = &self.custom_name {
+                    nbt.put_string("CustomName", custom_name.clone());
                 }
                 Some(nbt)
             }
@@ -324,6 +331,7 @@ macro_rules! impl_chest_helper_methods {
                     position,
                     items: tokio::sync::RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
                     dirty: AtomicBool::new(false),
+                    custom_name: None,
                     viewers: $crate::block::viewer::ViewerCountTracker::new(),
                     loot_table: StdMutex::new(None),
                     loot_table_seed: 0,
@@ -340,6 +348,12 @@ macro_rules! impl_chest_helper_methods {
                 );
 
                 let (block, state) = world.get_block_and_state(&self.position);
+                if block.id != pumpkin_data::Block::CHEST.id
+                    && block.id != pumpkin_data::Block::TRAPPED_CHEST.id
+                    && block.id != pumpkin_data::Block::ENDER_CHEST.id
+                {
+                    return;
+                }
                 let properties = pumpkin_data::block_properties::ChestLikeProperties::from_state_id(
                     state.id, block,
                 );

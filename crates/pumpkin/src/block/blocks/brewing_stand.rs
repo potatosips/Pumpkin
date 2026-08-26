@@ -101,3 +101,44 @@ impl BlockBehaviour for BrewingStandBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, BrewingStandLikeProperties};
+
+    #[test]
+    fn brewing_stand_block_id_parity() {
+        assert_eq!(Block::BREWING_STAND.name, "brewing_stand");
+    }
+
+    #[test]
+    fn brewing_stand_default_state_parity() {
+        assert_ne!(
+            Block::BREWING_STAND.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn brewing_stand_properties_roundtrip_parity() {
+        for has_bottle_0 in [true, false] {
+            for has_bottle_1 in [true, false] {
+                for has_bottle_2 in [true, false] {
+                    let props = BrewingStandLikeProperties {
+                        has_bottle_0,
+                        has_bottle_1,
+                        has_bottle_2,
+                    };
+                    let state_id = props.to_state_id(&Block::BREWING_STAND);
+                    let rt =
+                        BrewingStandLikeProperties::from_state_id(state_id, &Block::BREWING_STAND);
+                    assert_eq!(rt.has_bottle_0, has_bottle_0);
+                    assert_eq!(rt.has_bottle_1, has_bottle_1);
+                    assert_eq!(rt.has_bottle_2, has_bottle_2);
+                }
+            }
+        }
+    }
+}

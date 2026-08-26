@@ -32,6 +32,9 @@ impl ItemBehaviour for EnderPearlItem {
         player: &'a Player,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
+            player
+                .start_cooldown(Item::ENDER_PEARL.registry_key.to_string(), 20)
+                .await;
             let position = player.position();
             let world = player.world();
             world.play_sound_fine(

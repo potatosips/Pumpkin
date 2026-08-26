@@ -55,6 +55,7 @@ pub enum GameRule {
     SpawnPhantoms,
     SpawnWanderingTraders,
     SpawnWardens,
+    SpawnChunkRadius,
     SpawnerBlocksWork,
     SpectatorsGenerateChunks,
     SpreadVines,
@@ -118,6 +119,7 @@ impl GameRule {
             Self::SpawnPhantoms,
             Self::SpawnWanderingTraders,
             Self::SpawnWardens,
+            Self::SpawnChunkRadius,
             Self::SpawnerBlocksWork,
             Self::SpectatorsGenerateChunks,
             Self::SpreadVines,
@@ -189,6 +191,7 @@ impl fmt::Display for GameRule {
             Self::SpawnPhantoms => write!(f, "spawn_phantoms"),
             Self::SpawnWanderingTraders => write!(f, "spawn_wandering_traders"),
             Self::SpawnWardens => write!(f, "spawn_wardens"),
+            Self::SpawnChunkRadius => write!(f, "spawn_chunk_radius"),
             Self::SpawnerBlocksWork => write!(f, "spawner_blocks_work"),
             Self::SpectatorsGenerateChunks => write!(f, "spectators_generate_chunks"),
             Self::SpreadVines => write!(f, "spread_vines"),
@@ -409,6 +412,10 @@ pub struct GameRuleRegistry {
     #[serde(default = "default_spawn_wardens")]
     #[serde(with = "as_string")]
     pub spawn_wardens: bool,
+    #[serde(rename = "spawn_chunk_radius")]
+    #[serde(default = "default_spawn_chunk_radius")]
+    #[serde(with = "as_string")]
+    pub spawn_chunk_radius: i64,
     #[serde(rename = "spawner_blocks_work")]
     #[serde(default = "default_spawner_blocks_work")]
     #[serde(with = "as_string")]
@@ -529,6 +536,7 @@ impl GameRuleRegistry {
             GameRule::SpawnPhantoms => GameRuleValue::Bool(&self.spawn_phantoms),
             GameRule::SpawnWanderingTraders => GameRuleValue::Bool(&self.spawn_wandering_traders),
             GameRule::SpawnWardens => GameRuleValue::Bool(&self.spawn_wardens),
+            GameRule::SpawnChunkRadius => GameRuleValue::Int(&self.spawn_chunk_radius),
             GameRule::SpawnerBlocksWork => GameRuleValue::Bool(&self.spawner_blocks_work),
             GameRule::SpectatorsGenerateChunks => {
                 GameRuleValue::Bool(&self.spectators_generate_chunks)
@@ -624,6 +632,7 @@ impl GameRuleRegistry {
                 GameRuleValue::Bool(&mut self.spawn_wandering_traders)
             }
             GameRule::SpawnWardens => GameRuleValue::Bool(&mut self.spawn_wardens),
+            GameRule::SpawnChunkRadius => GameRuleValue::Int(&mut self.spawn_chunk_radius),
             GameRule::SpawnerBlocksWork => GameRuleValue::Bool(&mut self.spawner_blocks_work),
             GameRule::SpectatorsGenerateChunks => {
                 GameRuleValue::Bool(&mut self.spectators_generate_chunks)
@@ -695,6 +704,7 @@ impl Default for GameRuleRegistry {
             spawn_phantoms: true,
             spawn_wandering_traders: true,
             spawn_wardens: true,
+            spawn_chunk_radius: 2i64,
             spawner_blocks_work: true,
             spectators_generate_chunks: true,
             spread_vines: true,
@@ -860,6 +870,9 @@ fn default_spawn_wandering_traders() -> bool {
 }
 fn default_spawn_wardens() -> bool {
     GameRuleRegistry::default().spawn_wardens
+}
+fn default_spawn_chunk_radius() -> i64 {
+    GameRuleRegistry::default().spawn_chunk_radius
 }
 fn default_spawner_blocks_work() -> bool {
     GameRuleRegistry::default().spawner_blocks_work

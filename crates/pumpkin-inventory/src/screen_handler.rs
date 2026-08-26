@@ -48,6 +48,7 @@ use pumpkin_protocol::{
         server::play::SlotActionType,
     },
 };
+use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::text::TextComponent;
 use pumpkin_world::{
     block::entities::PropertyDelegate,
@@ -138,6 +139,17 @@ pub trait InventoryPlayer: Send + Sync {
 
     /// Checks if the player is in creative mode.
     fn is_creative(&self) -> bool;
+
+    /// Checks if the player can modify world blocks (Vanilla `mayBuild`).
+    /// Returns true for Survival and Creative, false for Adventure and Spectator.
+    fn may_build(&self) -> bool {
+        true
+    }
+
+    /// Checks if the player is within interaction distance of a block position.
+    fn can_interact_with_block_at(&self, _position: &BlockPos, _additional_range: f64) -> bool {
+        true
+    }
 
     /// Gets the player's experience level.
     fn experience_level(&self) -> i32;
@@ -287,8 +299,11 @@ pub trait ScreenHandler: Send + Sync {
     }
 
     /// Checks if the player can use this container.
-    fn can_use(&self, _player: &dyn InventoryPlayer) -> bool {
-        true
+    fn can_use(&self, player: &dyn InventoryPlayer) -> bool {
+        self.get_behaviour()
+            .validity_check
+            .as_ref()
+            .is_none_or(|check| check(player))
     }
 
     /// Gets a reference to the screen handler behaviour.
@@ -1280,7 +1295,22 @@ pub trait ScreenHandler: Send + Sync {
                                 .await;
                             source_slot.set_stack(button_stack).await;
                         }
+                    } else if source_slot.can_take_items(player).await
+                        && source_slot.can_insert(&button_stack).await
+                    {
+                        let max_count = source_slot
+                            .get_max_item_count_for_stack(&button_stack)
+                            .await;
+                        if button_stack.item_count <= max_count {
+                            player
+                                .get_inventory()
+                                .set_stack(button as usize, source_stack.clone())
+                                .await;
+                            source_slot.set_stack(button_stack).await;
+                            source_slot.on_take_item(player, &source_stack).await;
+                        }
                     }
+                    source_slot.mark_dirty().await;
                 }
             }
         })
@@ -1356,7 +1386,11 @@ pub struct ScreenHandlerBehaviour {
     pub allow_put_items: bool,
     /// Number of slots that belong to the container (not the player inventory).
     pub container_slots: usize,
+    /// Custom validity check callback evaluating if the player can still use this container.
+    pub validity_check: Option<ContainerValidityCheck>,
 }
+
+pub type ContainerValidityCheck = Box<dyn Fn(&dyn InventoryPlayer) -> bool + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClickType {
@@ -1393,11 +1427,262 @@ impl ScreenHandlerBehaviour {
             allow_grab_items: true,
             allow_put_items: true,
             container_slots: 0,
+            validity_check: None,
         }
+    }
+
+    pub fn set_validity_check<F>(&mut self, check: F)
+    where
+        F: Fn(&dyn InventoryPlayer) -> bool + Send + Sync + 'static,
+    {
+        self.validity_check = Some(Box::new(check));
     }
 
     pub fn next_revision(&self) -> u32 {
         self.revision.fetch_add(1, Ordering::Relaxed);
         self.revision.fetch_and(32767, Ordering::Relaxed) & 32767
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use pumpkin_data::data_component_impl::EquipmentSlot;
+    use pumpkin_data::item_stack::ItemStack;
+    use std::sync::atomic::AtomicBool;
+
+    pub struct DummyPlayer {
+        pub inventory: Arc<PlayerInventory>,
+        pub within_range: bool,
+    }
+
+    impl DummyPlayer {
+        pub fn new(within_range: bool) -> Self {
+            Self {
+                inventory: Arc::new(PlayerInventory::new(
+                    Arc::new(Mutex::new(EntityEquipment::new())),
+                    Arc::new(HashMap::new()),
+                )),
+                within_range,
+            }
+        }
+    }
+
+    impl InventoryPlayer for DummyPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn drop_item(&self, _item: ItemStack, _retain_ownership: bool) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+
+        fn is_creative(&self) -> bool {
+            false
+        }
+
+        fn experience_level(&self) -> i32 {
+            0
+        }
+
+        fn add_experience_levels(&self, _levels: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+
+        fn set_enchantment_seed(&self, _seed: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_inventory_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_slot_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_cursor_packet<'a>(
+            &'a self,
+            _packet: &'a CSetCursorItem,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_property_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerProperty,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_slot_set_packet<'a>(
+            &'a self,
+            _packet: &'a CSetPlayerInventory,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_set_held_item_packet<'a>(
+            &'a self,
+            _packet: &'a CSetSelectedSlot,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn enqueue_equipment_change<'a>(
+            &'a self,
+            _slot: &'a EquipmentSlot,
+            _stack: &'a ItemStack,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+
+        fn award_experience(&self, _amount: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn increment_stat(
+            &self,
+            _category: StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+
+        fn can_interact_with_block_at(&self, _position: &BlockPos, _additional_range: f64) -> bool {
+            self.within_range
+        }
+    }
+
+    struct TestHandler {
+        behaviour: ScreenHandlerBehaviour,
+    }
+
+    impl ScreenHandler for TestHandler {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+
+        fn get_behaviour(&self) -> &ScreenHandlerBehaviour {
+            &self.behaviour
+        }
+
+        fn get_behaviour_mut(&mut self) -> &mut ScreenHandlerBehaviour {
+            &mut self.behaviour
+        }
+
+        fn quick_move<'a>(
+            &'a mut self,
+            _player: &'a dyn InventoryPlayer,
+            _slot_index: i32,
+        ) -> ItemStackFuture<'a> {
+            Box::pin(async { ItemStack::EMPTY.clone() })
+        }
+    }
+
+    #[test]
+    fn default_can_use_is_true_without_validity_check() {
+        let player = DummyPlayer::new(true);
+        let handler = TestHandler {
+            behaviour: ScreenHandlerBehaviour::new(1, None),
+        };
+        assert!(handler.can_use(&player));
+    }
+
+    #[test]
+    fn validity_check_evaluates_correctly() {
+        let in_range_player = DummyPlayer::new(true);
+        let out_of_range_player = DummyPlayer::new(false);
+
+        let mut behaviour = ScreenHandlerBehaviour::new(1, None);
+        let block_valid = Arc::new(AtomicBool::new(true));
+        let block_valid_clone = block_valid.clone();
+
+        behaviour.set_validity_check(move |p| {
+            block_valid_clone.load(Ordering::Relaxed)
+                && p.can_interact_with_block_at(&BlockPos::new(0, 0, 0), 4.0)
+        });
+
+        let handler = TestHandler { behaviour };
+
+        // Both in range and block valid
+        assert!(handler.can_use(&in_range_player));
+
+        // Out of range
+        assert!(!handler.can_use(&out_of_range_player));
+
+        // Block becomes invalid (e.g. broken or changed)
+        block_valid.store(false, Ordering::Relaxed);
+        assert!(!handler.can_use(&in_range_player));
+    }
+
+    #[tokio::test]
+    async fn test_hotbar_slot_swap_two_way() {
+        use crate::slot::NormalSlot;
+        use pumpkin_data::item::Item;
+        use pumpkin_world::inventory::Inventory;
+
+        let player = DummyPlayer::new(true);
+        let mut handler = TestHandler {
+            behaviour: ScreenHandlerBehaviour::new(1, None),
+        };
+
+        // Create a standalone inventory for the container
+        let container_inv: Arc<dyn Inventory> =
+            Arc::new(crate::player::ender_chest_inventory::EnderChestInventory::new());
+        let slot = handler.add_slot(Arc::new(NormalSlot::new(container_inv.clone(), 0)));
+
+        // Put an item (e.g., Diamond) in container slot 0
+        let diamond_stack = ItemStack::new(1, &Item::DIAMOND);
+        slot.set_stack(diamond_stack.clone()).await;
+
+        // Put an item (e.g., Stick) in player hotbar slot 0
+        let stick_stack = ItemStack::new(10, &Item::STICK);
+        player
+            .get_inventory()
+            .set_stack(0, stick_stack.clone())
+            .await;
+
+        // Execute Swap action (swapping container slot 0 with player hotbar 0)
+        handler
+            .on_slot_click(0, 0, SlotActionType::Swap, &player)
+            .await;
+
+        // Verify container slot 0 now has the stick stack
+        let slot_after = slot.get_stack().await;
+        assert_eq!(slot_after.item_count, 10);
+        assert_eq!(slot_after.get_item().id, Item::STICK.id);
+
+        // Verify player hotbar 0 now has the diamond stack
+        let hotbar_after = player.get_inventory().get_stack(0).await;
+        assert_eq!(hotbar_after.item_count, 1);
+        assert_eq!(hotbar_after.get_item().id, Item::DIAMOND.id);
     }
 }

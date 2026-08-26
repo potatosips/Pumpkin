@@ -657,15 +657,12 @@ impl RegionalDifficulty {
 }
 
 /// Moon brightness factor for the given time of day (0.0 to 1.0).
-/// Full moon at phase 0, new moon at phase 4.
+/// Moon brightness factor for the given time of day (0.0 to 1.0).
+/// Full moon at phase 0 (1.0), new moon at phase 4 (0.0).
 #[must_use]
 fn moon_brightness(time_of_day: i64) -> f32 {
     let phase = (time_of_day / 24000 % 8) as i32;
-    if phase == 0 {
-        1.0
-    } else {
-        1.0 - (phase - 4).abs() as f32 / 4.0
-    }
+    1.0 - (phase.min(8 - phase) as f32) / 4.0
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1039,4 +1036,49 @@ pub async fn equip_mob_on_spawn(mob: &dyn EntityBase, world: &Arc<crate::world::
     drop(drop_chances);
 
     living.send_equipment_changes(&equipment_changes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regional_difficulty_peaceful_is_zero() {
+        let diff = RegionalDifficulty::calculate(Difficulty::Peaceful, 100000, 5000000, 1.0);
+        assert_eq!(diff.effective_difficulty, 0.0);
+        assert_eq!(diff.special_multiplier, 0.0);
+        assert!(!diff.should_happen(1.0));
+    }
+
+    #[test]
+    fn regional_difficulty_scaling_and_multipliers() {
+        let hard = RegionalDifficulty::calculate(Difficulty::Hard, 1000000, 3600000, 1.0);
+        assert!(hard.effective_difficulty >= 2.0);
+        assert!(hard.special_multiplier > 0.0 && hard.special_multiplier <= 1.0);
+    }
+
+    #[test]
+    fn moon_brightness_phases() {
+        assert_eq!(moon_brightness(0), 1.0); // Full moon phase 0
+        assert_eq!(moon_brightness(24000 * 4), 0.0); // New moon phase 4
+    }
+
+    #[test]
+    fn equipment_registry_mob_coverage() {
+        assert!(EQUIPMENT_REGISTRY.contains_key("zombie"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("skeleton"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("bogged"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("stray"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("drowned"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("piglin"));
+        assert!(EQUIPMENT_REGISTRY.contains_key("wither_skeleton"));
+    }
+
+    #[test]
+    fn enchantment_exclusive_set_conflicts() {
+        let applied = [&Enchantment::SHARPNESS];
+        assert!(conflicts_with(&Enchantment::SMITE, &applied));
+        assert!(conflicts_with(&Enchantment::BANE_OF_ARTHROPODS, &applied));
+        assert!(!conflicts_with(&Enchantment::UNBREAKING, &applied));
+    }
 }

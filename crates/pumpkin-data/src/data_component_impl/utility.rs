@@ -99,14 +99,27 @@ pub struct BundleContentsImpl {
     pub items: Vec<crate::item_stack::ItemStack>,
 }
 impl PartialEq for BundleContentsImpl {
-    fn eq(&self, _other: &Self) -> bool {
-        false
+    fn eq(&self, other: &Self) -> bool {
+        if self.items.len() != other.items.len() {
+            return false;
+        }
+        for (a, b) in self.items.iter().zip(other.items.iter()) {
+            if a.item.id != b.item.id
+                || a.item_count != b.item_count
+                || !crate::item_stack::ItemStack::are_items_and_components_equal(a, b)
+            {
+                return false;
+            }
+        }
+        true
     }
 }
 impl Eq for BundleContentsImpl {}
 impl std::fmt::Debug for BundleContentsImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BundleContentsImpl")
+        f.debug_struct("BundleContentsImpl")
+            .field("count", &self.items.len())
+            .finish()
     }
 }
 impl BundleContentsImpl {

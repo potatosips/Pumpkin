@@ -29,6 +29,27 @@ impl BlockBehaviour for TrialSpawnerBlock {
             let state_id = args.world.get_block_state_id(args.position);
             let mut props = TrialSpawnerLikeProperties::from_state_id(state_id, args.block);
 
+            // Check if player has Trial Omen or Bad Omen to convert to Ominous
+            let is_player_ominous = args
+                .player
+                .living_entity
+                .has_effect(&pumpkin_data::effect::StatusEffect::TRIAL_OMEN)
+                .await
+                || args
+                    .player
+                    .living_entity
+                    .has_effect(&pumpkin_data::effect::StatusEffect::BAD_OMEN)
+                    .await;
+
+            if is_player_ominous && !props.ominous {
+                props.ominous = true;
+                args.world.play_sound(
+                    Sound::BlockTrialSpawnerOminousActivate,
+                    SoundCategory::Blocks,
+                    &args.position.to_f64(),
+                );
+            }
+
             match props.trial_spawner_state {
                 TrialSpawnerState::Inactive | TrialSpawnerState::WaitingForPlayers => {
                     props.trial_spawner_state = TrialSpawnerState::Active;
@@ -40,11 +61,19 @@ impl BlockBehaviour for TrialSpawnerBlock {
                         )
                         .await;
 
-                    args.world.play_sound(
-                        Sound::BlockTrialSpawnerDetectPlayer,
-                        SoundCategory::Blocks,
-                        &args.position.to_f64(),
-                    );
+                    if props.ominous {
+                        args.world.play_sound(
+                            Sound::BlockTrialSpawnerOminousActivate,
+                            SoundCategory::Blocks,
+                            &args.position.to_f64(),
+                        );
+                    } else {
+                        args.world.play_sound(
+                            Sound::BlockTrialSpawnerDetectPlayer,
+                            SoundCategory::Blocks,
+                            &args.position.to_f64(),
+                        );
+                    }
                     args.world.play_sound(
                         Sound::BlockTrialSpawnerOpenShutter,
                         SoundCategory::Blocks,
@@ -73,7 +102,8 @@ impl BlockBehaviour for TrialSpawnerBlock {
                         &args.position.to_f64(),
                     );
 
-                    let key_stack = ItemStack::new(1, &Item::TRIAL_KEY);
+                    let reward_item = Self::get_reward_key(props.ominous);
+                    let key_stack = ItemStack::new(1, reward_item);
                     args.world.drop_stack(args.position, key_stack).await;
 
                     props.trial_spawner_state = TrialSpawnerState::Cooldown;
@@ -129,5 +159,33 @@ impl BlockBehaviour for TrialSpawnerBlock {
             })
             .await
         })
+    }
+}
+
+impl TrialSpawnerBlock {
+    #[must_use]
+    pub const fn get_reward_key(is_ominous: bool) -> &'static Item {
+        if is_ominous {
+            &Item::OMINOUS_TRIAL_KEY
+        } else {
+            &Item::TRIAL_KEY
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_trial_spawner_reward_keys() {
+        assert_eq!(
+            TrialSpawnerBlock::get_reward_key(false).id,
+            Item::TRIAL_KEY.id
+        );
+        assert_eq!(
+            TrialSpawnerBlock::get_reward_key(true).id,
+            Item::OMINOUS_TRIAL_KEY.id
+        );
     }
 }

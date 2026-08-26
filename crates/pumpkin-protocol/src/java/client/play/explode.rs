@@ -67,8 +67,13 @@ impl ClientPacket for CExplosion {
         write.write_f64_be(self.center.x)?;
         write.write_f64_be(self.center.y)?;
         write.write_f64_be(self.center.z)?;
-        write.write_f32_be(self.radius)?;
-        write.write_i32_be(self.block_count)?;
+        // Radius, affected-block count, and block-particle entries were added to
+        // this packet in Java 1.21.9. Earlier 1.21 clients expect knockback
+        // immediately after the three center coordinates.
+        if *version >= JavaMinecraftVersion::V_1_21_9 {
+            write.write_f32_be(self.radius)?;
+            write.write_i32_be(self.block_count)?;
+        }
         write.write_option(&self.knockback, |w, k| {
             w.write_f64_be(k.x)?;
             w.write_f64_be(k.y)?;
@@ -85,7 +90,9 @@ impl ClientPacket for CExplosion {
                 write.write_option(&event.range, |w, r| w.write_f32_be(*r))?;
             }
         }
-        write.write_var_int(&self.block_particles_pool_size)?;
+        if *version >= JavaMinecraftVersion::V_1_21_9 {
+            write.write_var_int(&self.block_particles_pool_size)?;
+        }
         Ok(())
     }
 }
@@ -132,5 +139,24 @@ mod tests {
             encoded_particle_id(JavaMinecraftVersion::V_26_2),
             VarInt(29)
         );
+    }
+
+    #[test]
+    fn explosion_uses_pre_1_21_9_packet_shape_for_1_21_4() {
+        let packet = CExplosion::new(
+            Vector3::new(1.0, 2.0, 3.0),
+            1.2,
+            0,
+            None,
+            VarInt(Particle::GustEmitterSmall as i32),
+            IdOr::Id(0),
+        );
+        let mut bytes = Vec::new();
+        packet
+            .write_packet_data(&mut bytes, &JavaMinecraftVersion::V_1_21_4)
+            .unwrap();
+
+        // 3 doubles + absent knockback + one-byte particle ID + one-byte sound holder.
+        assert_eq!(bytes.len(), 27);
     }
 }

@@ -3910,7 +3910,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -4863,7 +4863,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -6492,7 +6492,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -15066,7 +15066,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -23340,7 +23340,12 @@ impl Item {
                     enchantment: Cow::Borrowed(&[]),
                 },
             ),
-            (Instrument, &InstrumentImpl),
+            (
+                Instrument,
+                &InstrumentImpl {
+                    instrument: Cow::Borrowed("ponder_goat_horn"),
+                },
+            ),
             (
                 ItemModel,
                 &ItemModelImpl {
@@ -24880,7 +24885,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -25489,7 +25494,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -30570,7 +30575,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -31179,7 +31184,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -31978,7 +31983,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -32825,7 +32830,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -39350,7 +39355,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -42128,7 +42133,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -45616,7 +45621,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -47215,7 +47220,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -50116,7 +50121,7 @@ impl Item {
                     shearing_sound: IdOr::Id(Sound::ItemShearsSnip),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -61687,7 +61692,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,
@@ -63292,7 +63297,10 @@ impl Item {
             (UseEffects, &UseEffectsImpl),
             (
                 WritableBookContent,
-                &WritableBookContentImpl { pages: Vec::new() },
+                &WritableBookContentImpl {
+                    pages: Vec::new(),
+                    filtered_pages: Vec::new(),
+                },
             ),
         ],
     };
@@ -63352,7 +63360,7 @@ impl Item {
                     attribute_modifiers: Cow::Borrowed(&[]),
                 },
             ),
-            (BannerPatterns, &BannerPatternsImpl),
+            (BannerPatterns, &BannerPatternsImpl { layers: Vec::new() }),
             (BreakSound, &BreakSoundImpl),
             (
                 Enchantments,

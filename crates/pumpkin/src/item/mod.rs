@@ -1,6 +1,7 @@
 pub mod items;
 pub mod potion;
 pub mod registry;
+pub mod written_book;
 
 use std::any::Any;
 use std::pin::Pin;

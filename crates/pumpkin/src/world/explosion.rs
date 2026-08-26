@@ -5,10 +5,15 @@ use pumpkin_data::{
 };
 use pumpkin_util::math::{boundingbox::BoundingBox, position::BlockPos, vector3::Vector3};
 use pumpkin_world::chunk::ChunkData;
+use rand::RngExt;
 use rustc_hash::FxHashMap;
 
 use crate::{
-    block::{ExplodeArgs, drop_loot},
+    block::{
+        ExplodeArgs,
+        blocks::fire::{FireBlockBase, fire::FireBlock},
+        drop_loot,
+    },
     entity::{Entity, EntityBase},
     world::loot::LootContextParameters,
 };
@@ -19,6 +24,12 @@ pub struct Explosion {
     power: f32,
     pos: Vector3<f64>,
     preserve_rails: bool,
+    destroy_blocks: bool,
+    damage_entities: bool,
+    damage_type: DamageType,
+    knockback_multiplier: f64,
+    source_entity_id: Option<i32>,
+    create_fire: bool,
 }
 
 impl Explosion {
@@ -28,12 +39,51 @@ impl Explosion {
             power,
             pos,
             preserve_rails: false,
+            destroy_blocks: true,
+            damage_entities: true,
+            damage_type: DamageType::EXPLOSION,
+            knockback_multiplier: 1.0,
+            source_entity_id: None,
+            create_fire: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn wind_charge(power: f32, pos: Vector3<f64>, knockback_multiplier: f64) -> Self {
+        Self {
+            power,
+            pos,
+            preserve_rails: false,
+            destroy_blocks: false,
+            damage_entities: false,
+            damage_type: DamageType::WIND_CHARGE,
+            knockback_multiplier,
+            source_entity_id: None,
+            create_fire: false,
         }
     }
 
     #[must_use]
     pub const fn preserving_rails(mut self) -> Self {
         self.preserve_rails = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_block_destruction(mut self, destroy_blocks: bool) -> Self {
+        self.destroy_blocks = destroy_blocks;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_source_entity(mut self, entity_id: i32) -> Self {
+        self.source_entity_id = Some(entity_id);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_fire(mut self, create_fire: bool) -> Self {
+        self.create_fire = create_fire;
         self
     }
 
@@ -134,8 +184,8 @@ impl Explosion {
                             },
                         );
 
+                        let protects_rail = self.protects_rail(world, &block_pos, block);
                         if !state.is_air() || !fluid_state.is_empty {
-                            let protects_rail = self.protects_rail(world, &block_pos, block);
                             let resistance = if protects_rail {
                                 0.0
                             } else {
@@ -143,10 +193,13 @@ impl Explosion {
                             };
 
                             h -= (resistance + 0.3) * 0.3;
+                        }
 
-                            if h > 0.0 && !protects_rail {
-                                map.insert(block_pos, (block, state));
-                            }
+                        // Vanilla records every blast-ray position that still has
+                        // strength, including air. Those air positions are later
+                        // considered for explosion-created fire.
+                        if h > 0.0 && !protects_rail {
+                            map.insert(block_pos, (block, state));
                         }
 
                         pos_x += dir_x * 0.3;
@@ -180,6 +233,9 @@ impl Explosion {
         );
 
         let entities = world.get_all_at_box(&search_box);
+        let source = self
+            .source_entity_id
+            .and_then(|entity_id| world.get_entity_by_id(entity_id));
 
         for entity_base in entities {
             if entity_base.is_immune_to_explosion() {
@@ -209,10 +265,24 @@ impl Explosion {
                 * self.power as f64
                 + 1.0) as f32;
 
-            // TODO: damage type
-            entity
-                .damage(entity_base.as_ref(), damage, DamageType::EXPLOSION)
-                .await;
+            if self.damage_entities {
+                if let Some(source) = source.as_deref() {
+                    entity_base
+                        .damage_with_context(
+                            entity_base.as_ref(),
+                            damage,
+                            self.damage_type,
+                            Some(self.pos),
+                            Some(source),
+                            Some(source),
+                        )
+                        .await;
+                } else {
+                    entity
+                        .damage(entity_base.as_ref(), damage, self.damage_type)
+                        .await;
+                }
+            }
 
             // Calculate and apply knockback
             let dir_pos = if entity.entity_type == &EntityType::TNT {
@@ -224,7 +294,10 @@ impl Explosion {
             // TODO
             let knockback_resistance = 0.0;
 
-            let knockback_multiplier = (1.0 - distance) * exposure * (1.0 - knockback_resistance);
+            let knockback_multiplier = (1.0 - distance)
+                * exposure
+                * (1.0 - knockback_resistance)
+                * self.knockback_multiplier;
             let knockback = direction * knockback_multiplier;
             entity.add_velocity(knockback);
         }
@@ -307,9 +380,18 @@ impl Explosion {
             return 0;
         }
 
-        let blocks = self.get_blocks_to_destroy(world);
+        let blocks = if self.destroy_blocks {
+            self.get_blocks_to_destroy(world)
+        } else {
+            FxHashMap::default()
+        };
         self.damage_entities(world).await;
+        let mut removed_blocks = 0;
         for (pos, (block, state)) in &blocks {
+            if state.is_air() {
+                continue;
+            }
+            removed_blocks += 1;
             world
                 .set_block_state(pos, BlockStateId::AIR, BlockFlags::NOTIFY_ALL)
                 .await;
@@ -345,8 +427,28 @@ impl Explosion {
                     .await;
             }
         }
-        // TODO: fire
-        blocks.len() as u32
+        if self.create_fire {
+            for pos in blocks.keys() {
+                if rand::rng().random_range(0..3) != 0
+                    || !world.get_block_state(pos).is_air()
+                    || !world
+                        .get_block_state(&pos.down())
+                        .is_side_solid(pumpkin_data::BlockDirection::Up)
+                {
+                    continue;
+                }
+                let fire = FireBlockBase::get_fire_type(world, pos);
+                let state = if fire == Block::FIRE {
+                    FireBlock.get_state_for_position(world, &fire, pos)
+                } else {
+                    fire.default_state.id
+                };
+                world
+                    .set_block_state(pos, state, BlockFlags::NOTIFY_ALL)
+                    .await;
+            }
+        }
+        removed_blocks
     }
 }
 
@@ -366,5 +468,55 @@ mod tests {
             assert!(Explosion::is_rail(rail));
         }
         assert!(!Explosion::is_rail(&Block::STONE));
+    }
+
+    #[test]
+    fn player_wind_charge_explosion_is_knockback_only() {
+        let explosion = Explosion::wind_charge(
+            1.2,
+            pumpkin_util::math::vector3::Vector3::new(0.0, 0.0, 0.0),
+            1.22,
+        );
+        assert!(!explosion.destroy_blocks);
+        assert!(!explosion.damage_entities);
+        assert_eq!(
+            explosion.damage_type.id,
+            pumpkin_data::damage::DamageType::WIND_CHARGE.id
+        );
+        assert!((explosion.knockback_multiplier - 1.22).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn mob_griefing_only_controls_explosion_block_destruction() {
+        let explosion = Explosion::new(
+            3.0,
+            pumpkin_util::math::vector3::Vector3::new(0.0, 0.0, 0.0),
+        )
+        .with_block_destruction(false);
+
+        assert!(!explosion.destroy_blocks);
+        assert!(explosion.damage_entities);
+    }
+
+    #[test]
+    fn entity_sourced_explosion_retains_kill_attribution() {
+        let explosion = Explosion::new(
+            3.0,
+            pumpkin_util::math::vector3::Vector3::new(0.0, 0.0, 0.0),
+        )
+        .with_source_entity(42);
+
+        assert_eq!(explosion.source_entity_id, Some(42));
+    }
+
+    #[test]
+    fn vanilla_fire_creation_is_opt_in() {
+        let normal = Explosion::new(
+            5.0,
+            pumpkin_util::math::vector3::Vector3::new(0.0, 0.0, 0.0),
+        );
+        assert!(!normal.create_fire);
+        let incendiary = normal.with_fire(true);
+        assert!(incendiary.create_fire);
     }
 }

@@ -117,7 +117,7 @@ impl crate::entity::ageable::AgeableMob for SheepEntity {
 impl NBTStorage for SheepEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_bool("Sheared", self.is_sheared());
@@ -127,16 +127,20 @@ impl NBTStorage for SheepEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
+            let current = self.color_and_sheared.load(Ordering::Relaxed);
             let sheared = nbt
                 .get_bool("Sheared")
-                .or_else(|| nbt.get_byte("Sheared").map(|b| b == 1))
-                .unwrap_or(false);
-            let color = nbt.get_byte("Color").unwrap_or(0) as u8;
-            let byte = (color & 0x0F) | if sheared { 0x10 } else { 0 };
-            self.color_and_sheared.store(byte, Ordering::Relaxed);
+                .or_else(|| nbt.get_byte("Sheared").map(|b| b == 1));
+            let color = nbt.get_byte("Color").map(|color| color as u8);
+            if sheared.is_some() || color.is_some() {
+                let sheared = sheared.unwrap_or(current & 0x10 != 0);
+                let color = color.unwrap_or(current) & 0x0F;
+                let byte = color | if sheared { 0x10 } else { 0 };
+                self.color_and_sheared.store(byte, Ordering::Relaxed);
+            }
         })
     }
 }
@@ -173,5 +177,26 @@ impl Mob for SheepEntity {
     ) -> EntityBaseFuture<'a, bool> {
         use super::animal::Animal;
         self.animal_interact(player, item_stack, Sound::EntitySheepAmbient)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sheep_color_and_sheared_bit_packing() {
+        let color = 14u8; // Red
+        let sheared = false;
+        let mut byte = (color & 0x0F) | if sheared { 0x10 } else { 0 };
+        assert_eq!(byte & 0x0F, 14);
+        assert_eq!((byte & 0x10) != 0, false);
+
+        // Shear the sheep
+        byte |= 0x10;
+        assert_eq!(byte & 0x0F, 14);
+        assert_eq!((byte & 0x10) != 0, true);
+
+        // Eat grass / regrow wool
+        byte &= !0x10;
+        assert_eq!((byte & 0x10) != 0, false);
     }
 }

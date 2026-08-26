@@ -120,14 +120,18 @@ fn can_place_at(block_accessor: &dyn BlockAccessor, position: &BlockPos) -> bool
         return true;
     }
 
+    if state.is_solid() || state.is_solid_block() || below_block.is_solid() {
+        return true;
+    }
+
     // Block.isFaceFullSquare(collisionShape, Direction.UP): the collision shape must fully cover
     // the top face, e.g. leaves are not "side solid" but do support snow layers.
     state.get_block_collision_shapes().any(|shape| {
-        shape.max.y >= 1.0
-            && shape.min.x <= 0.0
-            && shape.max.x >= 1.0
-            && shape.min.z <= 0.0
-            && shape.max.z >= 1.0
+        shape.max.y >= 0.99
+            && shape.min.x <= 0.01
+            && shape.max.x >= 0.99
+            && shape.min.z <= 0.01
+            && shape.max.z >= 0.99
     }) || (below_block == &Block::SNOW
         && SnowLikeProperties::from_state_id(state.id, below_block).layers == 8)
 }

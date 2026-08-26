@@ -212,3 +212,53 @@ impl BlockBehaviour for CrafterBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, CrafterLikeProperties, Orientation};
+
+    #[test]
+    fn crafter_block_id_parity() {
+        assert_eq!(Block::CRAFTER.name, "crafter");
+    }
+
+    #[test]
+    fn crafter_default_state_parity() {
+        assert_ne!(Block::CRAFTER.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn crafter_properties_roundtrip_parity() {
+        for orientation in [
+            Orientation::DownEast,
+            Orientation::DownNorth,
+            Orientation::DownSouth,
+            Orientation::DownWest,
+            Orientation::UpEast,
+            Orientation::UpNorth,
+            Orientation::UpSouth,
+            Orientation::UpWest,
+            Orientation::WestUp,
+            Orientation::EastUp,
+            Orientation::NorthUp,
+            Orientation::SouthUp,
+        ] {
+            for crafting in [true, false] {
+                for triggered in [true, false] {
+                    let props = CrafterLikeProperties {
+                        crafting,
+                        orientation,
+                        triggered,
+                    };
+                    let state_id = props.to_state_id(&Block::CRAFTER);
+                    let rt = CrafterLikeProperties::from_state_id(state_id, &Block::CRAFTER);
+                    assert_eq!(rt.orientation, orientation);
+                    assert_eq!(rt.crafting, crafting);
+                    assert_eq!(rt.triggered, triggered);
+                }
+            }
+        }
+    }
+}

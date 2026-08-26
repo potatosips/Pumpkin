@@ -1102,17 +1102,14 @@ impl NBTStorage for TextDisplayEntity {
                 self.text_opacity.store(opacity, Ordering::Relaxed);
             }
 
-            let mut flags = 0u8;
-            if nbt.get_bool("shadow").unwrap_or(false) {
-                flags |= 1;
-            }
-            if nbt.get_bool("see_through").unwrap_or(false) {
-                flags |= 2;
-            }
-            if nbt.get_bool("default_background").unwrap_or(false) {
-                flags |= 4;
+            let mut flags = self.flags.load(Ordering::Relaxed);
+            for (name, mask) in [("shadow", 1), ("see_through", 2), ("default_background", 4)] {
+                if let Some(enabled) = nbt.get_bool(name) {
+                    flags = if enabled { flags | mask } else { flags & !mask };
+                }
             }
             if let Some(align) = nbt.get_string("alignment") {
+                flags &= !(8 | 16);
                 match align {
                     "left" => flags |= 8,
                     "right" => flags |= 16,

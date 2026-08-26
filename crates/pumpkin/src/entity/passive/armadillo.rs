@@ -294,7 +294,7 @@ impl AgeableMob for ArmadilloEntity {
 impl NBTStorage for ArmadilloEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_string("state", self.get_state().name().to_string());
@@ -304,7 +304,7 @@ impl NBTStorage for ArmadilloEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(state_name) = nbt.get_string("state") {
@@ -459,5 +459,37 @@ impl Mob for ArmadilloEntity {
             self.animal_interact(player, item_stack, Sound::EntityArmadilloAmbient)
                 .await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn armadillo_state_durations_and_shell_hiding() {
+        assert_eq!(ArmadilloState::Rolling.animation_duration(), 10);
+        assert_eq!(ArmadilloState::Scared.animation_duration(), 50);
+        assert_eq!(ArmadilloState::Unrolling.animation_duration(), 30);
+
+        assert!(!ArmadilloState::Rolling.should_hide_in_shell(4));
+        assert!(ArmadilloState::Rolling.should_hide_in_shell(6));
+        assert!(ArmadilloState::Scared.should_hide_in_shell(10));
+        assert!(ArmadilloState::Unrolling.should_hide_in_shell(20));
+        assert!(!ArmadilloState::Unrolling.should_hide_in_shell(27));
+    }
+
+    #[test]
+    fn armadillo_state_id_and_name_roundtrip() {
+        assert_eq!(ArmadilloState::from_id(0), ArmadilloState::Idle);
+        assert_eq!(ArmadilloState::from_id(1), ArmadilloState::Rolling);
+        assert_eq!(ArmadilloState::from_id(2), ArmadilloState::Scared);
+        assert_eq!(ArmadilloState::from_id(3), ArmadilloState::Unrolling);
+
+        assert_eq!(ArmadilloState::from_name("scared"), ArmadilloState::Scared);
+        assert_eq!(
+            ArmadilloState::from_name("rolling"),
+            ArmadilloState::Rolling
+        );
     }
 }

@@ -449,6 +449,45 @@ impl Scoreboard {
         }
     }
 
+    pub async fn increment_criterion_scores(
+        &mut self,
+        target: &impl ScoreboardTarget,
+        entity_name: &str,
+        criterion: &str,
+        delta: i32,
+    ) {
+        let matching_objectives: Vec<String> = self
+            .objectives
+            .values()
+            .filter(|obj| obj.criterion == criterion)
+            .map(|obj| obj.name.clone())
+            .collect();
+
+        for obj_name in matching_objectives {
+            self.add_score(target, entity_name, &obj_name, delta).await;
+        }
+    }
+
+    pub async fn set_criterion_scores(
+        &mut self,
+        target: &impl ScoreboardTarget,
+        entity_name: &str,
+        criterion: &str,
+        value: i32,
+    ) {
+        let matching_objectives: Vec<String> = self
+            .objectives
+            .values()
+            .filter(|obj| obj.criterion == criterion)
+            .map(|obj| obj.name.clone())
+            .collect();
+
+        for obj_name in matching_objectives {
+            self.set_score_value(target, entity_name, &obj_name, value)
+                .await;
+        }
+    }
+
     pub async fn reset_scores_for_entity(
         &mut self,
         target: &impl ScoreboardTarget,
@@ -1304,5 +1343,70 @@ impl BedrockScoreboardBuilder {
     #[must_use]
     pub fn build(self) -> BedrockScoreboard {
         self.scoreboard
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn scoreboard_objective_scores_and_teams_parity() {
+        let mut scoreboard = Scoreboard::new();
+        let target = NoTarget;
+
+        // Add objective
+        let obj = ScoreboardObjective::new(
+            "test_obj",
+            TextComponent::text("Test Objective"),
+            RenderType::Integer,
+            None,
+            "dummy",
+        );
+        scoreboard.add_objective(&target, obj).await;
+        assert!(scoreboard.get_objective("test_obj").is_some());
+
+        // Set display slot
+        scoreboard
+            .set_display_objective(&target, ScoreboardDisplaySlot::Sidebar, Some("test_obj"))
+            .await;
+        assert_eq!(
+            scoreboard.get_display_objective(ScoreboardDisplaySlot::Sidebar),
+            Some("test_obj")
+        );
+
+        // Add and increment score
+        scoreboard
+            .set_score_value(&target, "Player1", "test_obj", 10)
+            .await;
+        assert_eq!(scoreboard.get_score_value("Player1", "test_obj"), Some(10));
+
+        let new_val = scoreboard
+            .add_score(&target, "Player1", "test_obj", 5)
+            .await;
+        assert_eq!(new_val, 15);
+        assert_eq!(scoreboard.get_score_value("Player1", "test_obj"), Some(15));
+
+        // Create team and add player
+        let team = Team {
+            name: "red_team".to_string(),
+            display_name: TextComponent::text("Red Team"),
+            options: 0,
+            nametag_visibility: NameTagVisibility::Always,
+            collision_rule: CollisionRule::Always,
+            color: NamedColor::Red,
+            player_prefix: TextComponent::empty(),
+            player_suffix: TextComponent::empty(),
+            players: Vec::new(),
+        };
+        scoreboard.create_team(&target, team).await;
+        assert!(scoreboard.get_team("red_team").is_some());
+
+        scoreboard
+            .add_player_to_team(&target, "red_team", "Player1".to_string())
+            .await;
+        let p_team = scoreboard.get_entity_team("Player1");
+        assert!(p_team.is_some());
+        assert_eq!(p_team.unwrap().name, "red_team");
     }
 }

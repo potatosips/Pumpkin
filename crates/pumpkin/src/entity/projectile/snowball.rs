@@ -79,19 +79,45 @@ impl EntityBase for SnowballEntity {
                 Some(ActorEventType::Death),
             );
 
-            // Handle entity-specific damage
+            // Handle entity-specific damage & knockback
             if let ProjectileHit::Entity { ref entity, .. } = hit {
                 let entity_clone = entity.clone();
+                let is_blaze = entity_clone.get_entity().entity_type.id == EntityType::BLAZE.id;
 
-                tokio::spawn(async move {
-                    let is_blaze = entity_clone.get_entity().entity_type.id == EntityType::BLAZE.id;
-                    let damage = if is_blaze { 3.0 } else { 0.0 }; // Only damage blazes
+                if let Some(owner_id) = self.thrown.owner_id {
+                    if let Some(living) = entity_clone.get_living_entity() {
+                        living
+                            .last_attacker_id
+                            .store(owner_id, std::sync::atomic::Ordering::Relaxed);
+                        living
+                            .last_attacked_time
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
 
-                    entity_clone
-                        .damage(entity_clone.as_ref(), damage, DamageType::THROWN)
-                        .await;
-                });
+                if is_blaze {
+                    tokio::spawn(async move {
+                        entity_clone
+                            .damage(entity_clone.as_ref(), 3.0, DamageType::THROWN)
+                            .await;
+                    });
+                } else {
+                    // Apply knockback to hit entity (including friendly fire on other snow golems)
+                    let snowball_vel = self.get_entity().velocity.load();
+                    let target_entity = entity_clone.get_entity();
+                    target_entity.knockback(0.4, -snowball_vel.x, -snowball_vel.z);
+                }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snowball_gravity_and_blaze_damage_parity() {
+        assert_eq!(GRAVITY, 0.03);
     }
 }

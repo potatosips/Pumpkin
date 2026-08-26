@@ -416,7 +416,9 @@ impl EntityBase for ShulkerBulletEntity {
             } else {
                 // No live target – apply gravity and drift
                 let mut vel = entity.velocity.load();
-                vel.y -= 0.04;
+                if !entity.has_no_gravity() {
+                    vel.y -= 0.04;
+                }
                 entity.velocity.store(vel);
             }
 

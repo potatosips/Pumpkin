@@ -74,3 +74,56 @@ impl BlockBehaviour for CopperBulbBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, CopperBulbLikeProperties};
+
+    #[test]
+    fn copper_bulb_ids_parity() {
+        assert_eq!(Block::COPPER_BULB.name, "copper_bulb");
+        assert_eq!(Block::EXPOSED_COPPER_BULB.name, "exposed_copper_bulb");
+        assert_eq!(Block::WEATHERED_COPPER_BULB.name, "weathered_copper_bulb");
+        assert_eq!(Block::OXIDIZED_COPPER_BULB.name, "oxidized_copper_bulb");
+        assert_eq!(Block::WAXED_COPPER_BULB.name, "waxed_copper_bulb");
+        assert_eq!(
+            Block::WAXED_EXPOSED_COPPER_BULB.name,
+            "waxed_exposed_copper_bulb"
+        );
+        assert_eq!(
+            Block::WAXED_WEATHERED_COPPER_BULB.name,
+            "waxed_weathered_copper_bulb"
+        );
+        assert_eq!(
+            Block::WAXED_OXIDIZED_COPPER_BULB.name,
+            "waxed_oxidized_copper_bulb"
+        );
+    }
+
+    #[test]
+    fn copper_bulb_default_state_parity() {
+        assert_ne!(
+            Block::COPPER_BULB.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::OXIDIZED_COPPER_BULB.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn copper_bulb_properties_roundtrip_parity() {
+        for lit in [true, false] {
+            for powered in [true, false] {
+                let props = CopperBulbLikeProperties { lit, powered };
+                let state_id = props.to_state_id(&Block::COPPER_BULB);
+                let rt = CopperBulbLikeProperties::from_state_id(state_id, &Block::COPPER_BULB);
+                assert_eq!(rt.lit, lit);
+                assert_eq!(rt.powered, powered);
+            }
+        }
+    }
+}

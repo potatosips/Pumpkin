@@ -188,7 +188,9 @@ impl EntityBase for TridentEntity {
             let mut velocity = entity.velocity.load();
 
             // Apply gravity
-            velocity.y -= Self::GRAVITY;
+            if !entity.has_no_gravity() {
+                velocity.y -= Self::GRAVITY;
+            }
 
             // Apply inertia (air resistance or water drag)
             let inertia = if entity.touching_water.load(Ordering::Relaxed) {

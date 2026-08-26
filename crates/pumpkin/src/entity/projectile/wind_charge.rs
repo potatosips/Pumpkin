@@ -9,13 +9,17 @@ use std::{
 
 use crate::{
     entity::{
-        Entity, EntityBase, EntityBaseFuture, NBTStorage, living::LivingEntity,
-        projectile::ThrownItemEntity, projectile_deflection::ProjectileDeflectionType,
+        Entity, EntityBase, EntityBaseFuture, NBTStorage,
+        living::LivingEntity,
+        projectile::{ProjectileHit, ThrownItemEntity},
+        projectile_deflection::ProjectileDeflectionType,
     },
     server::Server,
 };
 
 const EXPLOSION_POWER: f32 = 1.2;
+const PLAYER_KNOCKBACK_MULTIPLIER: f64 = 1.22;
+const BREEZE_EXPLOSION_POWER: f32 = 3.0;
 const DEFAULT_DEFLECT_COOLDOWN: u8 = 5;
 pub const WIND_CHARGE_GRAVITY: f64 = 0.0;
 
@@ -64,10 +68,14 @@ impl WindChargeEntity {
     }
 
     pub async fn create_explosion(&self, position: Vector3<f64>) {
+        let (power, knockback_multiplier) = match self.kind {
+            WindChargeKind::Normal { .. } => (EXPLOSION_POWER, PLAYER_KNOCKBACK_MULTIPLIER),
+            WindChargeKind::Breeze => (BREEZE_EXPLOSION_POWER, 1.0),
+        };
         self.get_entity()
             .world
             .load()
-            .explode(position, EXPLOSION_POWER)
+            .explode_wind_charge(position, power, knockback_multiplier)
             .await;
     }
 
@@ -129,5 +137,51 @@ impl EntityBase for WindChargeEntity {
 
     fn cast_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn on_hit(&self, hit: ProjectileHit) -> EntityBaseFuture<'_, ()> {
+        Box::pin(async move {
+            let hit_pos = match &hit {
+                ProjectileHit::Block {
+                    hit_pos, normal, ..
+                } => hit_pos.add(&normal.multiply(0.25, 0.25, 0.25)),
+                ProjectileHit::Entity {
+                    entity, hit_pos, ..
+                } => {
+                    let world = self.get_entity().world.load();
+                    let owner = self
+                        .thrown_item_entity
+                        .owner_id
+                        .and_then(|owner_id| world.get_entity_by_id(owner_id));
+                    let source = owner.as_deref().unwrap_or(self);
+                    entity
+                        .damage_with_context(
+                            entity.as_ref(),
+                            1.0,
+                            pumpkin_data::damage::DamageType::WIND_CHARGE,
+                            Some(*hit_pos),
+                            Some(self),
+                            Some(source),
+                        )
+                        .await;
+                    *hit_pos
+                }
+            };
+            self.create_explosion(hit_pos).await;
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wind_charge_constants_parity() {
+        assert_eq!(EXPLOSION_POWER, 1.2);
+        assert_eq!(PLAYER_KNOCKBACK_MULTIPLIER, 1.22);
+        assert_eq!(BREEZE_EXPLOSION_POWER, 3.0);
+        assert_eq!(DEFAULT_DEFLECT_COOLDOWN, 5);
+        assert_eq!(WIND_CHARGE_GRAVITY, 0.0);
     }
 }

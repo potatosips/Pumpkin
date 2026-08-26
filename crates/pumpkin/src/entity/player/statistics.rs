@@ -50,3 +50,29 @@ impl Statistics {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_statistics_increment_and_nbt_roundtrip_parity() {
+        let mut stats = Statistics::default();
+        stats.increment(StatisticCategory::Custom, CustomStatistic::Jump as i32, 5);
+        stats.increment_custom(CustomStatistic::Jump, 3);
+        assert_eq!(
+            stats.get(StatisticCategory::Custom, CustomStatistic::Jump as i32),
+            8
+        );
+
+        let mut compound = NbtCompound::new();
+        stats.write_nbt(&mut compound);
+
+        let mut loaded_stats = Statistics::default();
+        loaded_stats.read_nbt(&compound);
+        assert_eq!(
+            loaded_stats.get(StatisticCategory::Custom, CustomStatistic::Jump as i32),
+            8
+        );
+    }
+}

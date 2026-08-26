@@ -12,8 +12,9 @@ use pumpkin_world::{chunk::ChunkHeightmapType, world::BlockFlags};
 
 use crate::world::World;
 
-const SEARCH_RADIUS_NETHER: i32 = 128;
+const SEARCH_RADIUS_NETHER: i32 = 16;
 const SEARCH_RADIUS_OVERWORLD: i32 = 128;
+const CREATE_RADIUS: i32 = 16;
 
 #[derive(Debug, Clone)]
 pub struct PortalSearchResult {
@@ -574,8 +575,8 @@ impl NetherPortal {
         let mut ideal_pos: Option<(BlockPos, HorizontalAxis, f64)> = None;
         let mut acceptable_pos: Option<(BlockPos, HorizontalAxis, f64)> = None;
 
-        for offset_x in -32..=32 {
-            for offset_z in -32..=32 {
+        for offset_x in -CREATE_RADIUS..=CREATE_RADIUS {
+            for offset_z in -CREATE_RADIUS..=CREATE_RADIUS {
                 let check_x = target_pos.0.x + offset_x;
                 let check_z = target_pos.0.z + offset_z;
 
@@ -801,5 +802,17 @@ impl NetherPortal {
                 poi_storage.add_portal(pos);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CREATE_RADIUS, SEARCH_RADIUS_NETHER, SEARCH_RADIUS_OVERWORLD};
+
+    #[test]
+    fn vanilla_portal_search_radii_are_dimension_specific() {
+        assert_eq!(SEARCH_RADIUS_NETHER, 16);
+        assert_eq!(SEARCH_RADIUS_OVERWORLD, 128);
+        assert_eq!(CREATE_RADIUS, 16);
     }
 }

@@ -45,7 +45,7 @@ impl Ignition {
     }
 }
 
-fn can_be_lit(block: &Block, state_id: BlockStateId) -> Option<BlockStateId> {
+pub(crate) fn can_be_lit(block: &Block, state_id: BlockStateId) -> Option<BlockStateId> {
     // Vanilla only lights the clicked block itself for campfires, candles and candle cakes.
     // See `CampfireBlock::canLight`, `CandleBlock::canLight` and `CandleCakeBlock::canLight`.
     // Everything else that merely carries a `lit` property (furnaces, redstone lamps, copper
@@ -62,10 +62,78 @@ fn can_be_lit(block: &Block, state_id: BlockStateId) -> Option<BlockStateId> {
         props.to_props()
     };
 
+    if props
+        .iter()
+        .any(|(key, value)| *key == "waterlogged" && *value == "true")
+    {
+        return None;
+    }
+
     let (_, value) = props.iter_mut().find(|(k, _)| *k == "lit")?;
     *value = "true";
 
     let new_state_id = block.from_properties(&props).to_state_id(block);
 
     (new_state_id != state_id).then_some(new_state_id)
+}
+
+pub(crate) fn can_be_extinguished(block: &Block, state_id: BlockStateId) -> Option<BlockStateId> {
+    if !block.has_tag(&tag::Block::MINECRAFT_CAMPFIRES)
+        && !block.has_tag(&tag::Block::MINECRAFT_CANDLES)
+        && !block.has_tag(&tag::Block::MINECRAFT_CANDLE_CAKES)
+    {
+        return None;
+    }
+
+    let mut props = {
+        let props = &block.properties(state_id)?;
+        props.to_props()
+    };
+
+    let (_, value) = props.iter_mut().find(|(k, _)| *k == "lit")?;
+    if *value == "false" {
+        return None;
+    }
+    *value = "false";
+
+    let new_state_id = block.from_properties(&props).to_state_id(block);
+    (new_state_id != state_id).then_some(new_state_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_be_extinguished, can_be_lit};
+    use pumpkin_data::{
+        Block,
+        block_properties::{BlockProperties, CampfireLikeProperties},
+    };
+
+    #[test]
+    fn vanilla_projectile_lighting_rejects_lit_and_waterlogged_campfires() {
+        let block = &Block::CAMPFIRE;
+        let mut props = CampfireLikeProperties::from_state_id(block.default_state.id, block);
+
+        props.lit = false;
+        props.waterlogged = false;
+        let unlit = props.to_state_id(block);
+        let lit = can_be_lit(block, unlit).expect("dry unlit campfire should light");
+        assert!(CampfireLikeProperties::from_state_id(lit, block).lit);
+        assert!(can_be_lit(block, lit).is_none());
+
+        props.waterlogged = true;
+        assert!(can_be_lit(block, props.to_state_id(block)).is_none());
+    }
+
+    #[test]
+    fn vanilla_extinguishing_toggles_lit_campfires_and_rejects_unlit() {
+        let block = &Block::CAMPFIRE;
+        let mut props = CampfireLikeProperties::from_state_id(block.default_state.id, block);
+
+        props.lit = true;
+        props.waterlogged = false;
+        let lit = props.to_state_id(block);
+        let unlit = can_be_extinguished(block, lit).expect("lit campfire should extinguish");
+        assert!(!CampfireLikeProperties::from_state_id(unlit, block).lit);
+        assert!(can_be_extinguished(block, unlit).is_none());
+    }
 }

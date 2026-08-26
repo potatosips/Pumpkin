@@ -11,6 +11,7 @@ use crate::item::{ItemBehaviour, ItemMetadata};
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::sound::{Sound, SoundCategory};
+use pumpkin_util::Hand;
 
 pub struct FishingRodItem;
 
@@ -59,12 +60,24 @@ impl ItemBehaviour for FishingRodItem {
                 world.spawn_entity(bobber_arc).await;
             } else {
                 // Reel in
+                let inventory = player.inventory();
+                let main_hand = inventory.held_item().await;
+                let (hand, mut rod) = if main_hand.item.id == Item::FISHING_ROD.id {
+                    (Hand::Right, main_hand)
+                } else {
+                    (Hand::Left, inventory.off_hand_item().await)
+                };
                 if let Some(bobber_base) = world.get_entity_by_id(bobber_id) {
                     if let Some(bobber) =
                         bobber_base.cast_any().downcast_ref::<FishingBobberEntity>()
                     {
-                        let _result = bobber.reel_in(player).await;
-                        // TODO: give items
+                        let durability_cost = bobber.reel_in(player, &rod).await;
+                        if durability_cost > 0
+                            && player.gamemode.load() != pumpkin_util::GameMode::Creative
+                        {
+                            let _ = rod.damage_item(durability_cost);
+                            inventory.set_stack_in_hand(hand, rod).await;
+                        }
                     }
                     bobber_base.get_entity().remove().await;
                 }

@@ -84,3 +84,24 @@ impl KeyStore {
 pub fn auth_digest(bytes: &[u8]) -> String {
     BigInt::from_signed_bytes_be(bytes).to_str_radix(16)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minecraft_auth_digest_hex_format_parity() {
+        // Positive big-endian byte array
+        let pos_bytes = [0x00, 0x12, 0x34];
+        assert_eq!(auth_digest(&pos_bytes), "1234");
+
+        // Negative big-endian byte array (signed two's complement representation)
+        let neg_bytes = [0x80, 0x00];
+        assert_eq!(auth_digest(&neg_bytes), "-8000");
+
+        // Known Minecraft auth digest test vector: "Notch" test vector
+        let notch_hash = sha1::Sha1::digest(b"Notch");
+        let notch_digest = auth_digest(&notch_hash);
+        assert_eq!(notch_digest, "4ed1f46bbe04bc756bcb17c0c7ce3e4632f06a48");
+    }
+}

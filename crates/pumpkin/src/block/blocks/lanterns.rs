@@ -82,3 +82,41 @@ fn can_place_at(world: &World, position: &BlockPos) -> bool {
         || block_up_state.is_center_solid(BlockDirection::Down)
         || block_down.has_tag(&tag::Block::MINECRAFT_UNSTABLE_BOTTOM_CENTER)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, LanternLikeProperties};
+
+    #[test]
+    fn lantern_ids_parity() {
+        assert_eq!(Block::LANTERN.name, "lantern");
+        assert_eq!(Block::SOUL_LANTERN.name, "soul_lantern");
+    }
+
+    #[test]
+    fn lantern_default_state_parity() {
+        assert_ne!(Block::LANTERN.default_state.id, Block::AIR.default_state.id);
+        assert_ne!(
+            Block::SOUL_LANTERN.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn lantern_properties_roundtrip_parity() {
+        for hanging in [true, false] {
+            for waterlogged in [true, false] {
+                let props = LanternLikeProperties {
+                    hanging,
+                    waterlogged,
+                };
+                let state_id = props.to_state_id(&Block::LANTERN);
+                let rt = LanternLikeProperties::from_state_id(state_id, &Block::LANTERN);
+                assert_eq!(rt.hanging, hanging);
+                assert_eq!(rt.waterlogged, waterlogged);
+            }
+        }
+    }
+}

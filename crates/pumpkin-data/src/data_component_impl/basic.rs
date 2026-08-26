@@ -337,8 +337,30 @@ impl DataComponentImpl for BaseColorImpl {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct InstrumentImpl;
+pub struct InstrumentImpl {
+    pub instrument: Cow<'static, str>,
+}
+impl InstrumentImpl {
+    pub fn read_data(data: &NbtTag) -> Option<Self> {
+        data.extract_string().map(|instrument| Self {
+            instrument: Cow::Owned(
+                instrument
+                    .strip_prefix("minecraft:")
+                    .unwrap_or(instrument)
+                    .to_string(),
+            ),
+        })
+    }
+}
 impl DataComponentImpl for InstrumentImpl {
+    fn write_data(&self) -> NbtTag {
+        NbtTag::String(format!("minecraft:{}", self.instrument).into())
+    }
+
+    fn get_hash(&self) -> i32 {
+        get_str_hash(&format!("minecraft:{}", self.instrument)) as i32
+    }
+
     default_impl!(Instrument);
 }
 
@@ -355,8 +377,48 @@ impl DataComponentImpl for ProvidesBannerPatternsImpl {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct BannerPatternsImpl;
+pub struct BannerPatternLayer {
+    pub pattern: String,
+    pub color: String,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct BannerPatternsImpl {
+    /// Ordered from the bottom layer to the top layer, matching Vanilla.
+    pub layers: Vec<BannerPatternLayer>,
+}
+impl BannerPatternsImpl {
+    pub fn read_data(tag: &NbtTag) -> Option<Self> {
+        let NbtTag::List(list) = tag else {
+            return None;
+        };
+        let layers = list
+            .iter()
+            .map(|entry| {
+                let compound = entry.extract_compound()?;
+                Some(BannerPatternLayer {
+                    pattern: compound.get_string("pattern")?.to_string(),
+                    color: compound.get_string("color")?.to_string(),
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self { layers })
+    }
+}
 impl DataComponentImpl for BannerPatternsImpl {
+    fn write_data(&self) -> NbtTag {
+        NbtTag::List(
+            self.layers
+                .iter()
+                .map(|layer| {
+                    let mut compound = NbtCompound::new();
+                    compound.put_string("pattern", layer.pattern.clone());
+                    compound.put_string("color", layer.color.clone());
+                    NbtTag::Compound(compound)
+                })
+                .collect(),
+        )
+    }
     default_impl!(BannerPatterns);
 }
 

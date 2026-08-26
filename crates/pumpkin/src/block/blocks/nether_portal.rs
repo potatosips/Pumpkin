@@ -54,11 +54,12 @@ impl BlockBehaviour for NetherPortalBlock {
                 HorizontalAxis::X => Axis::X,
                 HorizontalAxis::Z => Axis::Z,
             };
-            // Vanilla logic: keep portal if direction is horizontal AND different from portal axis
             let is_horizontal_and_different =
                 args.direction.is_horizontal() && direction_axis != state_axis_full;
+            let is_neighbor_portal =
+                Block::from_state_id(args.neighbor_state_id) == &Block::NETHER_PORTAL;
             if is_horizontal_and_different
-                || args.neighbor_state_id == args.state_id
+                || is_neighbor_portal
                 || NetherPortal::get_on_axis(args.world, args.position, state_axis)
                     .is_some_and(|e| e.was_already_valid())
             {

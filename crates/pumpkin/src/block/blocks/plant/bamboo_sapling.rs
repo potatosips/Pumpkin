@@ -101,3 +101,30 @@ impl PlantBlockBase for BambooSaplingBlock {
         block.has_tag(&pumpkin_data::tag::Block::MINECRAFT_SUPPORTS_BAMBOO)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn bamboo_sapling_block_id_parity() {
+        assert_eq!(Block::BAMBOO_SAPLING.name, "bamboo_sapling");
+    }
+
+    #[test]
+    fn bamboo_sapling_default_state_parity() {
+        assert_ne!(
+            Block::BAMBOO_SAPLING.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn bamboo_sapling_supports_tag_parity() {
+        assert!(Block::DIRT.has_tag(&pumpkin_data::tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::GRASS_BLOCK.has_tag(&pumpkin_data::tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::SAND.has_tag(&pumpkin_data::tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+        assert!(Block::GRAVEL.has_tag(&pumpkin_data::tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+    }
+}

@@ -32,6 +32,13 @@ impl JavaClient {
             return;
         }
 
+        if !self
+            .prepare_hand_item_for_use(player, hand, &mut item_in_hand)
+            .await
+        {
+            return;
+        }
+
         let (item_id, _item) = (item_in_hand.item.id, item_in_hand.item);
         player
             .increment_stat(StatisticCategory::Used, item_id as i32, 1)
@@ -63,9 +70,6 @@ impl JavaClient {
             PlayerInteractEvent::new(player, InteractAction::RightClickAir, &Block::AIR, None)
         };
         let (item_for_use, stack_for_use) = (item_in_hand.item, item_in_hand.clone());
-        self.prepare_hand_item_for_use(player, hand, &mut item_in_hand)
-            .await;
-
         if !self
             .should_continue_use_after_fish_event(server, player, hand, item_for_use)
             .await
@@ -87,17 +91,15 @@ impl JavaClient {
         player: &Arc<Player>,
         hand: Hand,
         held: &mut ItemStack,
-    ) {
+    ) -> bool {
         let inventory = player.inventory();
 
-        if let Some(cooldown) = held.get_use_cooldown() {
-            let group = cooldown
-                .cooldown_group
-                .clone()
-                .unwrap_or_else(|| held.item.registry_key.to_string());
-            if player.is_on_cooldown(&group).await {
-                return;
-            }
+        let cooldown_group = held
+            .get_use_cooldown()
+            .and_then(|cooldown| cooldown.cooldown_group.clone())
+            .unwrap_or_else(|| held.item.registry_key.to_string());
+        if player.is_on_cooldown(&cooldown_group).await {
+            return false;
         }
 
         if held.get_data_component::<ConsumableImpl>().is_some()
@@ -129,7 +131,7 @@ impl JavaClient {
             // the off hand lives in the same map, so holding it here would deadlock.
             let current_equipped = inventory.entity_equipment.lock().await.get(&slot);
             if current_equipped.are_items_and_components_equal(held) {
-                return;
+                return true;
             }
 
             player.enqueue_equipment_change(&slot, held).await;
@@ -144,6 +146,7 @@ impl JavaClient {
             inventory.entity_equipment.lock().await.put(&slot, equipped);
             inventory.set_stack_in_hand(hand, held.clone()).await;
         }
+        true
     }
 
     async fn should_continue_use_after_fish_event(

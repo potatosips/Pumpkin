@@ -6,6 +6,7 @@ use pumpkin_data::{
     block_properties::{
         BlockProperties, ComparatorLikeProperties, HorizontalFacing, ModeComparator,
     },
+    sound::{Sound, SoundCategory},
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::{boundingbox::BoundingBox, position::BlockPos};
@@ -300,14 +301,23 @@ impl ComparatorBlock {
         block_pos: BlockPos,
         block: &Block,
     ) {
-        // Vanilla Parity TODO:
-        // playSound(player, pos, SoundEvents.COMPARATOR_CLICK, SoundSource.BLOCKS, 0.3F, pitch);
-        // Pitch is 0.55F if SUBTRACT, 0.5F if COMPARE.
-
         props.mode = match props.mode {
             ModeComparator::Compare => ModeComparator::Subtract,
             ModeComparator::Subtract => ModeComparator::Compare,
         };
+
+        let pitch = match props.mode {
+            ModeComparator::Subtract => 0.55,
+            ModeComparator::Compare => 0.50,
+        };
+
+        world.play_sound_fine(
+            Sound::BlockComparatorClick,
+            SoundCategory::Blocks,
+            &block_pos.to_f64(),
+            0.3,
+            pitch,
+        );
 
         let state_id = props.to_state_id(block);
         world
@@ -401,6 +411,53 @@ impl ComparatorBlock {
 
             RedstoneGateBlock::update_target(self, world, pos, props.to_state_id(block), block)
                 .await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, ComparatorLikeProperties, HorizontalFacing, ModeComparator,
+    };
+
+    #[test]
+    fn comparator_block_id_parity() {
+        assert_eq!(Block::COMPARATOR.name, "comparator");
+    }
+
+    #[test]
+    fn comparator_default_state_parity() {
+        assert_ne!(
+            Block::COMPARATOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn comparator_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for mode in [ModeComparator::Compare, ModeComparator::Subtract] {
+                for powered in [true, false] {
+                    let props = ComparatorLikeProperties {
+                        facing,
+                        mode,
+                        powered,
+                    };
+                    let state_id = props.to_state_id(&Block::COMPARATOR);
+                    let rt = ComparatorLikeProperties::from_state_id(state_id, &Block::COMPARATOR);
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.mode, mode);
+                    assert_eq!(rt.powered, powered);
+                }
+            }
         }
     }
 }

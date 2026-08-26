@@ -88,3 +88,29 @@ const fn get_dead_type(id: BlockId) -> Option<BlockId> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn coral_plant_ids_parity() {
+        assert_eq!(Block::TUBE_CORAL.name, "tube_coral");
+        assert_eq!(Block::BRAIN_CORAL.name, "brain_coral");
+        assert_eq!(Block::BUBBLE_CORAL.name, "bubble_coral");
+        assert_eq!(Block::FIRE_CORAL.name, "fire_coral");
+        assert_eq!(Block::HORN_CORAL.name, "horn_coral");
+        assert_eq!(Block::DEAD_TUBE_CORAL.name, "dead_tube_coral");
+    }
+
+    #[test]
+    fn coral_plant_properties_parity() {
+        for waterlogged in [true, false] {
+            let props = CoralPlantLikeProperties { waterlogged };
+            let state_id = props.to_state_id(&Block::TUBE_CORAL);
+            let roundtrip = CoralPlantLikeProperties::from_state_id(state_id, &Block::TUBE_CORAL);
+            assert_eq!(roundtrip.waterlogged, waterlogged);
+        }
+    }
+}

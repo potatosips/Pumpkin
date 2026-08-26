@@ -47,6 +47,7 @@ impl JukeboxBlock {
                 BlockFlags::NOTIFY_LISTENERS,
             )
             .await;
+        world.update_comparators(position, block).await;
     }
 
     /// Drops the record from the jukebox - matches vanilla's `JukeboxBlockEntity.dropRecord()`
@@ -194,10 +195,11 @@ impl BlockBehaviour for JukeboxBlock {
     }
 
     /// Vanilla: `JukeboxBlock.onStateReplaced()` -> `ItemScatterer.onStateReplaced()`
-    fn on_state_replaced<'a>(&'a self, _args: OnStateReplacedArgs<'a>) -> BlockFuture<'a, ()> {
+    fn on_state_replaced<'a>(&'a self, args: OnStateReplacedArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            // Vanilla calls ItemScatterer.onStateReplaced which updates comparators
-            // TODO: world.updateComparators(pos, block) when implemented
+            args.world
+                .update_comparators(args.position, args.block)
+                .await;
         })
     }
 
@@ -250,5 +252,32 @@ impl BlockBehaviour for JukeboxBlock {
             }
             Some(0)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, JukeboxLikeProperties};
+
+    #[test]
+    fn jukebox_block_id_parity() {
+        assert_eq!(Block::JUKEBOX.name, "jukebox");
+    }
+
+    #[test]
+    fn jukebox_default_state_parity() {
+        assert_ne!(Block::JUKEBOX.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn jukebox_properties_roundtrip_parity() {
+        for has_record in [true, false] {
+            let props = JukeboxLikeProperties { has_record };
+            let state_id = props.to_state_id(&Block::JUKEBOX);
+            let rt = JukeboxLikeProperties::from_state_id(state_id, &Block::JUKEBOX);
+            assert_eq!(rt.has_record, has_record);
+        }
     }
 }

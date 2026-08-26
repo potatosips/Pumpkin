@@ -67,3 +67,22 @@ impl<'a> FindArg<'a> for MsgArgConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn vanilla_msg_arg_lookup_parity() {
+        let mut args = HashMap::new();
+        args.insert(
+            "msg",
+            Arg::Msg("Hello world this is a test message".to_string()),
+        );
+
+        let res = MsgArgConsumer::find_arg(&args, "msg");
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), "Hello world this is a test message");
+    }
+}

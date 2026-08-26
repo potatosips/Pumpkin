@@ -27,6 +27,8 @@ pub enum OwnedArg {
     Particle(pumpkin_data::particle::Particle),
     Msg(String),
     TextComponent(TextComponent),
+    NbtCompound(pumpkin_nbt::compound::NbtCompound),
+    NbtTag(pumpkin_nbt::tag::NbtTag),
     Time(i32),
     Num(
         Result<
@@ -71,6 +73,9 @@ impl OwnedArg {
             Arg::Particle(p) => Self::Particle(*p),
             Arg::Msg(m) => Self::Msg(m.clone()),
             Arg::TextComponent(t) => Self::TextComponent(t.clone()),
+            Arg::NbtCompound(nbt) => Self::NbtCompound(nbt.clone()),
+            Arg::NbtTag(nbt) => Self::NbtTag(nbt.clone()),
+            Arg::NbtPath(path) => Self::Simple(path.as_str().to_owned()),
             Arg::Time(t) => Self::Time(*t),
             Arg::Num(n) => Self::Num(*n),
             Arg::Bool(b) => Self::Bool(*b),

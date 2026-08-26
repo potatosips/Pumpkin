@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::command::CommandSender;
 use crate::command::args::entities::TargetSelector;
 use crate::command::args::{ConsumeResult, ConsumeResultWithSyntax};
+use crate::command::argument_types::entity::NO_ENTITIES_ERROR_TYPE;
 use crate::command::dispatcher::CommandError;
 use crate::command::tree::RawArgs;
 use crate::entity::EntityBase;
@@ -62,7 +63,7 @@ impl ArgumentConsumer for EntityArgumentConsumer {
 
         Box::pin(async move {
             // todo: command context
-            let entities = server.select_entities(&entity_selector, Some(sender));
+            let entities = server.select_entities(&entity_selector, Some(sender)).await;
 
             entities.into_iter().next().map(Arg::Entity)
         })
@@ -88,8 +89,11 @@ impl ArgumentConsumer for EntityArgumentConsumer {
         }
 
         Box::pin(async move {
-            let entities = server.select_entities(&selector, Some(sender));
-            Ok(entities.into_iter().next().map(Arg::Entity))
+            let entities = server.select_entities(&selector, Some(sender)).await;
+            match entities.into_iter().next() {
+                Some(entity) => Ok(Some(Arg::Entity(entity))),
+                None => Err(NO_ENTITIES_ERROR_TYPE.create_without_context()),
+            }
         })
     }
 }

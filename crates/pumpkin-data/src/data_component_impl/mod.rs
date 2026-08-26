@@ -541,6 +541,7 @@ pub fn read_data(id: DataComponent, data: &NbtTag) -> Option<Box<dyn DataCompone
         DataComponent::CustomName => Some(CustomNameImpl::read_data(data)?.to_dyn()),
         DataComponent::ItemName => Some(ItemNameImpl::read_data(data)?.to_dyn()),
         DataComponent::ItemModel => Some(ItemModelImpl::read_data(data)?.to_dyn()),
+        DataComponent::Instrument => Some(InstrumentImpl::read_data(data)?.to_dyn()),
         DataComponent::Consumable => Some(ConsumableImpl::read_data(data)?.to_dyn()),
         DataComponent::Equippable => Some(EquippableImpl::read_data(data)?.to_dyn()),
         DataComponent::StoredEnchantments => {
@@ -606,6 +607,7 @@ pub fn read_data(id: DataComponent, data: &NbtTag) -> Option<Box<dyn DataCompone
         DataComponent::ShulkerColor => Some(ShulkerColorImpl::read_data(data)?.to_dyn()),
         DataComponent::DyedColor => Some(DyedColorImpl::read_data(data)?.to_dyn()),
         DataComponent::BaseColor => Some(BaseColorImpl::read_data(data)?.to_dyn()),
+        DataComponent::BannerPatterns => Some(BannerPatternsImpl::read_data(data)?.to_dyn()),
         DataComponent::NoteBlockSound => Some(NoteBlockSoundImpl::read_data(data)?.to_dyn()),
         DataComponent::TooltipStyle => Some(TooltipStyleImpl::read_data(data)?.to_dyn()),
         DataComponent::Lock => Some(LockImpl::read_data(data)?.to_dyn()),
@@ -710,6 +712,25 @@ mod tests {
     }
 
     #[test]
+    fn banner_patterns_round_trip_in_layer_order() {
+        assert_round_trip(
+            BannerPatternsImpl {
+                layers: vec![
+                    BannerPatternLayer {
+                        pattern: "minecraft:stripe_bottom".to_string(),
+                        color: "red".to_string(),
+                    },
+                    BannerPatternLayer {
+                        pattern: "minecraft:circle".to_string(),
+                        color: "blue".to_string(),
+                    },
+                ],
+            },
+            BannerPatternsImpl::read_data,
+        );
+    }
+
+    #[test]
     fn base_color_round_trip() {
         assert_round_trip(
             BaseColorImpl {
@@ -726,6 +747,16 @@ mod tests {
                 sound: "minecraft:block.note_block.pling".to_string(),
             },
             NoteBlockSoundImpl::read_data,
+        );
+    }
+
+    #[test]
+    fn instrument_round_trip() {
+        assert_round_trip(
+            InstrumentImpl {
+                instrument: Cow::Borrowed("dream_goat_horn"),
+            },
+            InstrumentImpl::read_data,
         );
     }
 

@@ -87,3 +87,39 @@ impl DaylightDetectorBlock {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, DaylightDetectorLikeProperties};
+
+    #[test]
+    fn daylight_detector_block_id_parity() {
+        assert_eq!(Block::DAYLIGHT_DETECTOR.name, "daylight_detector");
+    }
+
+    #[test]
+    fn daylight_detector_default_state_parity() {
+        assert_ne!(
+            Block::DAYLIGHT_DETECTOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn daylight_detector_properties_roundtrip_parity() {
+        for inverted in [true, false] {
+            for power in 0..=15 {
+                let props = DaylightDetectorLikeProperties { inverted, power };
+                let state_id = props.to_state_id(&Block::DAYLIGHT_DETECTOR);
+                let rt = DaylightDetectorLikeProperties::from_state_id(
+                    state_id,
+                    &Block::DAYLIGHT_DETECTOR,
+                );
+                assert_eq!(rt.inverted, inverted);
+                assert_eq!(rt.power, power);
+            }
+        }
+    }
+}

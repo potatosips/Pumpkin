@@ -158,3 +158,40 @@ impl BlockBehaviour for FurnaceBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, FurnaceLikeProperties, HorizontalFacing,
+    };
+
+    #[test]
+    fn furnace_block_id_parity() {
+        assert_eq!(Block::FURNACE.name, "furnace");
+    }
+
+    #[test]
+    fn furnace_default_state_parity() {
+        assert_ne!(Block::FURNACE.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn furnace_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for lit in [true, false] {
+                let props = FurnaceLikeProperties { facing, lit };
+                let state_id = props.to_state_id(&Block::FURNACE);
+                let rt = FurnaceLikeProperties::from_state_id(state_id, &Block::FURNACE);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.lit, lit);
+            }
+        }
+    }
+}

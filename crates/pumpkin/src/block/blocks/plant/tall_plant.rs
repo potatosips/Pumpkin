@@ -130,3 +130,53 @@ impl BlockBehaviour for TallPlantBlock {
 }
 
 impl PlantBlockBase for TallPlantBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn tall_plant_block_id_parity() {
+        assert_eq!(Block::TALL_GRASS.name, "tall_grass");
+        assert_eq!(Block::LARGE_FERN.name, "large_fern");
+        assert_eq!(Block::PITCHER_PLANT.name, "pitcher_plant");
+        assert_eq!(Block::SUNFLOWER.name, "sunflower");
+        assert_eq!(Block::LILAC.name, "lilac");
+        assert_eq!(Block::PEONY.name, "peony");
+        assert_eq!(Block::ROSE_BUSH.name, "rose_bush");
+        assert_eq!(
+            TallPlantBlock::ids().as_ref(),
+            &[
+                BlockId::TALL_GRASS,
+                BlockId::LARGE_FERN,
+                BlockId::PITCHER_PLANT,
+                BlockId::SUNFLOWER,
+                BlockId::LILAC,
+                BlockId::PEONY,
+                BlockId::ROSE_BUSH,
+            ]
+        );
+    }
+
+    #[test]
+    fn tall_plant_properties_parity() {
+        let blocks = [
+            &Block::TALL_GRASS,
+            &Block::LARGE_FERN,
+            &Block::PITCHER_PLANT,
+            &Block::SUNFLOWER,
+            &Block::LILAC,
+            &Block::PEONY,
+            &Block::ROSE_BUSH,
+        ];
+        for block in blocks {
+            for half in [DoubleBlockHalf::Lower, DoubleBlockHalf::Upper] {
+                let props = TallSeagrassLikeProperties { half };
+                let state_id = props.to_state_id(block);
+                let roundtrip = TallSeagrassLikeProperties::from_state_id(state_id, block);
+                assert_eq!(roundtrip.half, half, "Failed for block {}", block.name);
+            }
+        }
+    }
+}

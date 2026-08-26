@@ -17,7 +17,6 @@ use arc_swap::ArcSwap;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::Receiver;
 use pumpkin_data::dimension::Dimension;
-use pumpkin_inventory::merchant::merchant_screen_handler::MerchantScreenHandler;
 use pumpkin_inventory::player::ender_chest_inventory::EnderChestInventory;
 use pumpkin_protocol::bedrock::client::play_status::CPlayStatus;
 use pumpkin_protocol::bedrock::client::set_time::CSetTime;
@@ -232,6 +231,7 @@ use pumpkin_protocol::bedrock::server::actor_event::{ActorEventType, SActorEvent
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::codec::var_long::VarLong;
 use pumpkin_protocol::codec::var_ulong::VarULong;
+use pumpkin_protocol::java::client::play::block_particle_data_for_version;
 use pumpkin_protocol::java::client::play::{
     Animation, CActionBar, CAwardStats, CChangeDifficulty, CCloseContainer, CCombatDeath,
     CCustomPayload, CDisguisedChatMessage, CEntityAnimation, CEntityPositionSync, CGameEvent,
@@ -265,6 +265,7 @@ use crate::command::context::command_source::CommandSource;
 use crate::command::node::dispatcher::CommandDispatcher;
 use crate::command::{CommandSender, client_suggestions};
 use crate::data::SaveJSONConfiguration;
+use crate::entity::experience_orb::ExperienceOrbEntity;
 use crate::entity::{EntityBaseFuture, NbtFuture, TeleportFuture};
 use crate::net::{ClientPlatform, GameProfile};
 use crate::net::{DisconnectReason, PlayerConfig};
@@ -762,6 +763,8 @@ pub struct Player {
     pub using_item: AtomicBool,
     pub item_use_start_time: AtomicI32,
     pub using_hand: AtomicCell<Option<Hand>>,
+    /// Remaining ticks of Vanilla's Riptide auto-spin attack state.
+    pub auto_spin_attack_ticks: AtomicU8,
     /// The player's experience level.
     pub experience_level: AtomicI32,
     /// The player's experience progress (`0.0` to `1.0`)
@@ -1003,6 +1006,7 @@ impl Player {
             using_item: AtomicBool::new(false),
             item_use_start_time: AtomicI32::new(0),
             using_hand: AtomicCell::new(None),
+            auto_spin_attack_ticks: AtomicU8::new(0),
             // Minecraft has no way to change the default permission level of new players.
             // Minecraft's default permission level is 0.
             permission_lvl: server
@@ -1315,6 +1319,7 @@ impl Player {
 
         let inventory = self.inventory();
         let item_stack = inventory.held_item().await;
+        let auto_spin_attack = self.is_auto_spin_attack();
 
         let base_damage = self
             .living_entity
@@ -1330,18 +1335,45 @@ impl Player {
         {
             let stack = &item_stack;
             if stack.is_empty() {
-                // Vanilla fist: base_attack_damage = -1.0, base_attack_speed = -2.4
-                add_damage = -1.0;
-                add_speed = -2.4;
+                // Vanilla fist: player base ATTACK_DAMAGE is 1.0, no reduction
+                add_damage = 0.0;
+                add_speed = 0.0;
             } else if let Some(modifiers) = stack.get_data_component::<AttributeModifiersImpl>() {
                 for item_mod in modifiers.attribute_modifiers.iter() {
                     if item_mod.operation == Operation::AddValue {
-                        if item_mod.id == "minecraft:base_attack_damage" {
+                        if item_mod.id == "minecraft:base_attack_damage"
+                            || item_mod.id == "minecraft:attack_damage"
+                            || item_mod.id == "base_attack_damage"
+                            || item_mod.id == "attack_damage"
+                        {
                             add_damage = item_mod.amount;
-                        } else if item_mod.id == "minecraft:base_attack_speed" {
+                        } else if item_mod.id == "minecraft:base_attack_speed"
+                            || item_mod.id == "minecraft:attack_speed"
+                            || item_mod.id == "base_attack_speed"
+                            || item_mod.id == "attack_speed"
+                        {
                             add_speed = item_mod.amount;
                         }
                     }
+                }
+            } else {
+                let item_path = stack.item.registry_key;
+                if item_path.ends_with("_sword") {
+                    add_damage = match item_path {
+                        "netherite_sword" => 7.0,
+                        "diamond_sword" => 6.0,
+                        "iron_sword" => 5.0,
+                        "stone_sword" => 4.0,
+                        _ => 3.0,
+                    };
+                    add_speed = -2.4;
+                } else if item_path.ends_with("_axe") {
+                    add_damage = match item_path {
+                        "netherite_axe" => 9.0,
+                        "diamond_axe" | "iron_axe" | "stone_axe" => 8.0,
+                        _ => 6.0,
+                    };
+                    add_speed = -3.0;
                 }
             }
             if let Some(enchantments) = stack.get_data_component::<EnchantmentsImpl>() {
@@ -1387,7 +1419,7 @@ impl Player {
         let attack_speed = base_attack_speed + add_speed;
 
         let is_bedrock = matches!(self.client.as_ref(), ClientPlatform::Bedrock(_));
-        let attack_cooldown_progress = if is_bedrock {
+        let attack_cooldown_progress = if auto_spin_attack || is_bedrock {
             1.0
         } else {
             self.get_attack_cooldown_progress(f64::from(server.basic_config.tps), 0.5, attack_speed)
@@ -1401,7 +1433,13 @@ impl Player {
         }
 
         // Modify the added damage based on the multiplier.
-        let mut damage = (base_damage + add_damage) * damage_multiplier;
+        let mut damage = if auto_spin_attack {
+            // Player#startAutoSpinAttack stores TridentItem's fixed 8.0 damage;
+            // normal held-item attack modifiers are not the base for this hit.
+            8.0
+        } else {
+            (base_damage + add_damage) * damage_multiplier
+        };
         damage += extra_ench_damage * attack_cooldown_progress;
 
         if let Some(strength) = self
@@ -1421,7 +1459,11 @@ impl Player {
         damage = damage.max(0.0);
 
         let pos = victim_entity.pos.load();
-        let attack_type = AttackType::new(self, attack_cooldown_progress as f32).await;
+        let attack_type = if auto_spin_attack {
+            AttackType::Strong
+        } else {
+            AttackType::new(self, attack_cooldown_progress as f32).await
+        };
 
         if matches!(attack_type, AttackType::Critical) {
             damage *= 1.5;
@@ -1430,7 +1472,19 @@ impl Player {
         let is_mace_smash = matches!(attack_type, AttackType::MaceSmash);
         if is_mace_smash {
             let fall_distance = self.living_entity.fall_distance.load();
-            damage += 1.5 * f64::from(fall_distance);
+            let mut density_level = 0u32;
+            if let Some(enchantments) = item_stack.get_data_component::<EnchantmentsImpl>() {
+                for (enchantment, level) in enchantments.enchantment.iter() {
+                    if **enchantment == Enchantment::DENSITY {
+                        density_level = *level as u32;
+                    }
+                }
+            }
+            let bonus = crate::item::items::mace::MaceItem::calculate_smash_damage_bonus(
+                fall_distance,
+                density_level,
+            );
+            damage += f64::from(bonus);
         }
 
         if !victim
@@ -1442,7 +1496,7 @@ impl Player {
                 } else {
                     DamageType::PLAYER_ATTACK
                 },
-                None,
+                Some(self.living_entity.entity.pos.load()),
                 Some(self),
                 Some(self),
             )
@@ -1593,6 +1647,34 @@ impl Player {
 
     /// Applies `amount` durability damage to the item in `slot`.
     /// Broadcasts an [`EntityStatus`] break event and syncs the slot if the item is destroyed.
+    pub async fn handle_item_break(
+        &self,
+        slot: &EquipmentSlot,
+        broken_item: &'static pumpkin_data::item::Item,
+    ) {
+        if let Some(server) = self.world().server.upgrade()
+            && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
+        {
+            let mut event =
+                crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent::new(
+                    player_arc,
+                    broken_item.registry_key.to_string(),
+                );
+            server.plugin_manager.fire(&server, &mut event).await;
+        }
+        self.increment_stat(
+            statistics::StatisticCategory::Broken,
+            broken_item.id as i32,
+            1,
+        )
+        .await;
+        self.world().send_entity_status(
+            &self.living_entity.entity,
+            super::equipment_break_status(slot),
+            None,
+        );
+    }
+
     pub async fn damage_item_in_slot(&self, slot: &EquipmentSlot, amount: i32) -> bool {
         if matches!(
             self.gamemode.load(),
@@ -1615,6 +1697,7 @@ impl Player {
         };
 
         let mut stack = self.inventory().get_stack(slot_index).await;
+        let damaged_item = stack.get_item();
         let result = stack.damage_item(amount);
         let updated = (result != pumpkin_data::item_stack::DamageResult::Untouched)
             .then_some((result, stack.clone()));
@@ -1625,7 +1708,7 @@ impl Player {
             {
                 let mut event = crate::plugin::api::events::player::player_item_damage::PlayerItemDamageEvent::new(
                     player_arc,
-                    updated_stack.item.registry_key.to_string(),
+                    damaged_item.registry_key.to_string(),
                     amount,
                 );
                 server.plugin_manager.fire(&server, &mut event).await;
@@ -1633,26 +1716,7 @@ impl Player {
             // Send the break status before clearing the slot so the client can
             // use the item texture for break particles.
             if result == pumpkin_data::item_stack::DamageResult::Broken {
-                if let Some(server) = self.world().server.upgrade()
-                    && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
-                {
-                    let mut event = crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent::new(
-                        player_arc,
-                        updated_stack.item.registry_key.to_string(),
-                    );
-                    server.plugin_manager.fire(&server, &mut event).await;
-                }
-                self.increment_stat(
-                    statistics::StatisticCategory::Broken,
-                    updated_stack.item.id as i32,
-                    1,
-                )
-                .await;
-                self.world().send_entity_status(
-                    &self.living_entity.entity,
-                    super::equipment_break_status(slot),
-                    None,
-                );
+                self.handle_item_break(slot, damaged_item).await;
             }
 
             self.enqueue_slot_set_packet(&CSetPlayerInventory::new(
@@ -1763,12 +1827,36 @@ impl Player {
     /// This function does NOT send any packets. The caller is responsible for
     /// sending `NoRespawnBlockAvailable` if this returns `None`.
     pub async fn calculate_respawn_point(&self) -> Option<CalculatedRespawnPoint> {
+        self.calculate_respawn_point_with_options(true).await
+    }
+
+    /// Resolves a stored spawn for non-death transitions such as leaving the End.
+    /// Vanilla uses the bed/anchor destination there but does not consume a
+    /// respawn-anchor charge because the player did not respawn from death.
+    pub async fn calculate_transition_respawn_point(&self) -> Option<CalculatedRespawnPoint> {
+        self.calculate_respawn_point_with_options(false).await
+    }
+
+    async fn calculate_respawn_point_with_options(
+        &self,
+        consume_anchor_charge: bool,
+    ) -> Option<CalculatedRespawnPoint> {
         type BedProperties = pumpkin_data::block_properties::WhiteBedLikeProperties;
         type AnchorProperties = pumpkin_data::block_properties::RespawnAnchorLikeProperties;
 
-        let respawn_guard = self.respawn_point.lock().await;
-        let respawn_point = respawn_guard.as_ref()?;
-        let world = self.world();
+        let respawn_point = self.respawn_point.lock().await.clone()?;
+        let current_world = self.world();
+        let world = if current_world.dimension == respawn_point.dimension {
+            current_world
+        } else {
+            let server = current_world.server.upgrade()?;
+            server
+                .worlds
+                .load()
+                .iter()
+                .find(|world| world.dimension == respawn_point.dimension)
+                .cloned()?
+        };
         let pos = &respawn_point.position;
         let (block, state_id) = world.get_block_and_state_id(pos);
 
@@ -1834,17 +1922,17 @@ impl Player {
 
             // Try positions around the anchor
             if let Some(spawn_pos) = Self::find_anchor_spawn_position(&world, pos) {
-                // Decrement charges after successful respawn position found
-                let new_charges = charges - 1;
-                let mut new_props = anchor_props;
-                new_props.charges = new_charges;
-                world
-                    .set_block_state(
-                        pos,
-                        new_props.to_state_id(block),
-                        pumpkin_world::world::BlockFlags::NOTIFY_ALL,
-                    )
-                    .await;
+                if consume_anchor_charge {
+                    let mut new_props = anchor_props;
+                    new_props.charges = charges - 1;
+                    world
+                        .set_block_state(
+                            pos,
+                            new_props.to_state_id(block),
+                            pumpkin_world::world::BlockFlags::NOTIFY_ALL,
+                        )
+                        .await;
+                }
 
                 return Some(CalculatedRespawnPoint {
                     position: spawn_pos,
@@ -2076,9 +2164,47 @@ impl Player {
             && !entity.has_vehicle().await
     }
 
-    const fn is_auto_spin_attack() -> bool {
-        // TODO: Track active auto-spin/riptide state and return true while it is active.
-        false
+    fn is_auto_spin_attack(&self) -> bool {
+        self.auto_spin_attack_ticks.load(Ordering::Relaxed) > 0
+    }
+
+    async fn tick_auto_spin_attack(&self) {
+        let ticks = self.auto_spin_attack_ticks.load(Ordering::Relaxed);
+        if ticks == 0 {
+            return;
+        }
+
+        let entity = self.get_entity();
+        let movement = entity.movement.load();
+        let swept_box =
+            entity
+                .bounding_box
+                .load()
+                .expand_towards(-movement.x, -movement.y, -movement.z);
+
+        for target in self.world().get_all_at_box(&swept_box) {
+            let target_entity = target.get_entity();
+            if target_entity.entity_id == entity.entity_id
+                || target.get_living_entity().is_none()
+                || !target_entity.is_alive()
+                || !target_entity.can_hit()
+            {
+                continue;
+            }
+
+            self.attack(target).await;
+            self.auto_spin_attack_ticks.store(0, Ordering::Relaxed);
+            entity.velocity.store(entity.velocity.load() * -0.2);
+            return;
+        }
+
+        if entity.horizontal_collision.load(Ordering::Relaxed) {
+            self.auto_spin_attack_ticks.store(0, Ordering::Relaxed);
+            return;
+        }
+
+        self.auto_spin_attack_ticks
+            .store(ticks.saturating_sub(1), Ordering::Relaxed);
     }
 
     fn can_fit_pose(&self, pose: EntityPose) -> bool {
@@ -2107,7 +2233,7 @@ impl Player {
             EntityPose::Swimming
         } else if entity.is_fall_flying() {
             EntityPose::FallFlying
-        } else if Self::is_auto_spin_attack() {
+        } else if self.is_auto_spin_attack() {
             EntityPose::SpinAttack
         } else if entity.is_sneaking() && !flying {
             EntityPose::Crouching
@@ -2334,12 +2460,11 @@ impl Player {
         }
 
         let current_screen_handler = self.current_screen_handler.lock().await.clone();
-        let invalid_merchant = {
+        let invalid_screen_handler = {
             let screen_handler = current_screen_handler.lock().await;
-            screen_handler.as_any().is::<MerchantScreenHandler>()
-                && !screen_handler.can_use(self.as_ref())
+            !screen_handler.can_use(self.as_ref())
         };
-        if invalid_merchant {
+        if invalid_screen_handler {
             self.close_handled_screen().await;
         } else {
             current_screen_handler
@@ -2472,6 +2597,7 @@ impl Player {
 
         let caller: Arc<dyn EntityBase> = self.clone();
         self.living_entity.tick(&caller, server).await;
+        self.tick_auto_spin_attack().await;
         // Vanilla updates pose in PlayerEntity#tick after super.tick().
         self.update_player_pose().await;
         self.breath_manager.tick(self).await;
@@ -2575,16 +2701,36 @@ impl Player {
     }
 
     pub async fn progress_motion(&self, delta_pos: Vector3<f64>) {
-        // TODO: Swimming, gliding...
-        if self.living_entity.entity.on_ground.load(Ordering::Relaxed) {
-            let delta = (delta_pos.horizontal_length() * 100.0).round() as f32;
-            if delta > 0.0 {
-                if self.living_entity.entity.is_sprinting() {
-                    self.add_exhaustion(0.1 * delta * 0.01).await;
-                } else {
-                    self.add_exhaustion(0.0 * delta * 0.01).await;
-                }
-            }
+        let entity = &self.living_entity.entity;
+        let distance_cm = if entity.swimming.load(Ordering::Relaxed)
+            || entity.touching_water.load(Ordering::Relaxed)
+        {
+            (delta_pos.length() * 100.0).round() as f32
+        } else if entity.on_ground.load(Ordering::Relaxed) {
+            (delta_pos.horizontal_length() * 100.0).round() as f32
+        } else {
+            0.0
+        };
+
+        if distance_cm <= 0.0 {
+            return;
+        }
+
+        // FoodConstants in Vanilla 1.21.4: swimming costs 0.01 per metre,
+        // sprinting costs 0.1 per metre, while walking/crouching/gliding do
+        // not add movement exhaustion.
+        let exhaustion = if entity.swimming.load(Ordering::Relaxed)
+            || entity.touching_water.load(Ordering::Relaxed)
+        {
+            0.01 * distance_cm * 0.01
+        } else if entity.is_sprinting() {
+            0.1 * distance_cm * 0.01
+        } else {
+            0.0
+        };
+
+        if exhaustion > 0.0 {
+            self.add_exhaustion(exhaustion).await;
         }
     }
 
@@ -3970,10 +4116,49 @@ impl Player {
                     self.world().drop_stack(&block_pos, stack).await;
                 }
             }
+
+            // Drop equipped armor and offhand items (vanilla parity)
+            {
+                let mut equipment = self.inventory().entity_equipment.lock().await;
+                for slot in [
+                    EquipmentSlot::HEAD,
+                    EquipmentSlot::CHEST,
+                    EquipmentSlot::LEGS,
+                    EquipmentSlot::FEET,
+                    EquipmentSlot::OFF_HAND,
+                ] {
+                    let stack = equipment.put(&slot, ItemStack::EMPTY.clone());
+                    if !stack.is_empty() {
+                        self.world().drop_stack(&block_pos, stack).await;
+                    }
+                }
+            }
+
+            // Spawn experience orbs on death: vanilla drops min(level * 7, 100) XP
+            let level = self.experience_level.load(Ordering::Relaxed);
+            if level > 0 {
+                let xp_to_drop = (level * 7).min(100) as u32;
+                let pos = self.position();
+                ExperienceOrbEntity::spawn(&self.world(), pos, xp_to_drop).await;
+            }
+
+            // Reset XP on death
+            self.experience_level.store(0, Ordering::Relaxed);
+            self.experience_progress.store(0.0);
+            self.experience_points.store(0, Ordering::Relaxed);
         }
 
         // Reset air supply & drowning ticks on death
         self.breath_manager.reset(self);
+
+        // Auto-track scoreboard deathCount criterion for player
+        {
+            let world = self.world();
+            let mut scoreboard = world.scoreboard.lock().await;
+            scoreboard
+                .increment_criterion_scores(world.as_ref(), &self.gameprofile.name, "deathCount", 1)
+                .await;
+        }
 
         if matches!(self.client.as_ref(), ClientPlatform::Java(_)) {
             self.set_client_loaded(false);
@@ -4092,26 +4277,10 @@ impl Player {
     pub fn send_client_information(&self) {
         let config = self.config.load();
         self.living_entity.entity.send_meta_data(
-            &[
-                // v26.x
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
-                    config.skin_parts,
-                ),
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::PLAYER_MAIN_HAND,
-                    config.main_hand as u8,
-                ),
-                // v1.21.x
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMIZATION_ID,
-                    config.skin_parts,
-                ),
-                Metadata::new(
-                    pumpkin_data::tracked_data::player::MAIN_ARM_ID,
-                    config.main_hand as u8,
-                ),
-            ],
+            &[Metadata::new(
+                pumpkin_data::tracked_data::player::PLAYER_MODE_CUSTOMISATION,
+                config.skin_parts,
+            )],
             None,
         );
     }
@@ -4830,7 +4999,18 @@ impl Player {
             )
             .await
         {
-            let screen_handler_temp = screen_handler.lock().await;
+            let mut screen_handler_temp = screen_handler.lock().await;
+            if let Some(pos) = block_pos {
+                if screen_handler_temp.get_behaviour().validity_check.is_none() {
+                    let world = self.world();
+                    screen_handler_temp
+                        .get_behaviour_mut()
+                        .set_validity_check(move |player| {
+                            let state = world.get_block_state(&pos);
+                            !state.is_air() && player.can_interact_with_block_at(&pos, 4.0)
+                        });
+                }
+            }
             let sync_id = screen_handler_temp.sync_id();
             let window_type = screen_handler_temp.window_type()?;
 
@@ -5402,6 +5582,61 @@ impl Player {
         None
     }
 
+    pub fn spawn_block_particle(
+        &self,
+        position: Vector3<f64>,
+        offset: Vector3<f32>,
+        max_speed: f32,
+        particle_count: i32,
+        state_id: pumpkin_data::BlockStateId,
+    ) {
+        if let ClientPlatform::Java(client) = self.client.as_ref() {
+            let version = client.version.load();
+            let data = block_particle_data_for_version(state_id, version);
+            let packet = CParticle::new(
+                false,
+                false,
+                position,
+                offset,
+                max_speed,
+                particle_count,
+                VarInt(Particle::Block as i32),
+                &data,
+            );
+            if let Ok(data) = client.serialize_packet(&packet) {
+                client.try_enqueue_packet(data);
+            }
+        }
+    }
+
+    /// Find valid crossbow ammunition. Vanilla allows firework rockets in
+    /// addition to all arrow variants, with the offhand checked first.
+    pub async fn find_crossbow_projectile(&self) -> Option<usize> {
+        use pumpkin_data::item::Item;
+        let inventory = self.inventory();
+        let is_ammunition = |stack: &ItemStack| {
+            matches!(
+                stack.item.id,
+                id if id == Item::ARROW.id
+                    || id == Item::TIPPED_ARROW.id
+                    || id == Item::SPECTRAL_ARROW.id
+                    || id == Item::FIREWORK_ROCKET.id
+            ) && stack.item_count > 0
+        };
+
+        let offhand = inventory.get_stack(PlayerInventory::OFF_HAND_SLOT).await;
+        if is_ammunition(&offhand) {
+            return Some(PlayerInventory::OFF_HAND_SLOT);
+        }
+        for slot in 0..PlayerInventory::MAIN_SIZE {
+            let stack = inventory.get_stack(slot).await;
+            if is_ammunition(&stack) {
+                return Some(slot);
+            }
+        }
+        None
+    }
+
     /// Consume one arrow from the specified slot
     pub async fn consume_arrow(&self, slot: usize) -> bool {
         let gamemode = self.gamemode.load();
@@ -5870,7 +6105,6 @@ impl EntityBase for Player {
             {
                 return false;
             }
-            // TODO: Implement shield blocking durability.
             let result = self
                 .living_entity
                 .damage_with_context(caller, amount, damage_type, position, source, cause)
@@ -6307,6 +6541,17 @@ impl InventoryPlayer for Player {
 
     fn is_creative(&self) -> bool {
         self.gamemode.load() == GameMode::Creative
+    }
+
+    fn may_build(&self) -> bool {
+        matches!(
+            self.gamemode.load(),
+            GameMode::Survival | GameMode::Creative
+        )
+    }
+
+    fn can_interact_with_block_at(&self, position: &BlockPos, additional_range: f64) -> bool {
+        Player::can_interact_with_block_at(self, position, additional_range)
     }
 
     fn experience_level(&self) -> i32 {

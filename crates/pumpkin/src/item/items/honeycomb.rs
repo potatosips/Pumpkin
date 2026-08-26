@@ -7,16 +7,14 @@ use crate::block::entities::BlockEntity;
 use crate::block::entities::sign::SignBlockEntity;
 use crate::block::registry::BlockActionResult;
 use crate::entity::player::Player;
+use crate::item::items::axe::state_with_properties_of;
 use crate::item::{ItemBehaviour, ItemMetadata};
 use crate::server::Server;
 use crate::world::World;
-use pumpkin_data::block_properties::BlockProperties;
-use pumpkin_data::block_properties::OakDoorLikeProperties;
+use pumpkin_data::Block;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
-use pumpkin_data::tag::Taggable;
 use pumpkin_data::world::WorldEvent;
-use pumpkin_data::{Block, tag};
 use pumpkin_data::{BlockDirection, BlockId};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
@@ -33,7 +31,7 @@ impl ItemMetadata for HoneyCombItem {
 impl ItemBehaviour for HoneyCombItem {
     fn use_on_block<'a>(
         &'a self,
-        _item: &'a mut ItemStack,
+        item: &'a mut ItemStack,
         player: &'a Player,
         location: BlockPos,
         _face: BlockDirection,
@@ -43,7 +41,16 @@ impl ItemBehaviour for HoneyCombItem {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             let world = player.world();
-            try_wax_block(&world, location, block).await;
+            if try_wax_block(&world, location, block).await {
+                item.decrement_unless_creative(player.gamemode.load(), 1);
+                player
+                    .increment_stat(
+                        pumpkin_data::statistic::StatisticCategory::Used,
+                        Item::HONEYCOMB.id.into(),
+                        1,
+                    )
+                    .await;
+            }
         })
     }
 
@@ -60,21 +67,8 @@ pub(crate) async fn try_wax_block(world: &Arc<World>, location: BlockPos, block:
     };
     let new_block = replacement.to_block();
 
-    let new_state_id = if block.has_tag(&tag::Block::MINECRAFT_DOORS) {
-        // Carry the door state over to the waxed door.
-        let door_information = world.get_block_state_id(&location);
-        let door_props = OakDoorLikeProperties::from_state_id(door_information, block);
-        let mut new_door_properties = OakDoorLikeProperties::default(new_block);
-        new_door_properties.facing = door_props.facing;
-        new_door_properties.open = door_props.open;
-        new_door_properties.half = door_props.half;
-        new_door_properties.hinge = door_props.hinge;
-        new_door_properties.powered = door_props.powered;
-        new_door_properties.to_state_id(new_block)
-    } else {
-        // TODO: Also carry over the properties of trapdoors.
-        new_block.default_state.id
-    };
+    let old_state_id = world.get_block_state_id(&location);
+    let new_state_id = state_with_properties_of(block, old_state_id, new_block);
 
     world
         .set_block_state(&location, new_state_id, BlockFlags::NOTIFY_ALL)

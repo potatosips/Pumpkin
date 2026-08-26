@@ -233,3 +233,91 @@ pub enum MouseDragState {
     /// End of drag - apply to all selected slots.
     End,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pickup_clicks() {
+        let left_click = Click::new(&SlotActionType::Pickup, 0, 5).unwrap();
+        match left_click.click_type {
+            ClickType::MouseClick(MouseClick::Left) => (),
+            _ => panic!("Expected Left MouseClick"),
+        }
+        match left_click.slot {
+            Slot::Normal(5) => (),
+            _ => panic!("Expected Normal(5)"),
+        }
+
+        let right_click_outside = Click::new(&SlotActionType::Pickup, 1, -999).unwrap();
+        match right_click_outside.click_type {
+            ClickType::MouseClick(MouseClick::Right) => (),
+            _ => panic!("Expected Right MouseClick"),
+        }
+        match right_click_outside.slot {
+            Slot::OutsideInventory => (),
+            _ => panic!("Expected OutsideInventory"),
+        }
+    }
+
+    #[test]
+    fn parse_swap_and_quick_move() {
+        let shift_click = Click::new(&SlotActionType::QuickMove, 0, 12).unwrap();
+        match shift_click.click_type {
+            ClickType::ShiftClick => (),
+            _ => panic!("Expected ShiftClick"),
+        }
+
+        let hotbar_swap = Click::new(&SlotActionType::Swap, 2, 10).unwrap();
+        match hotbar_swap.click_type {
+            ClickType::KeyClick(KeyClick::Slot(2)) => (),
+            _ => panic!("Expected KeyClick::Slot(2)"),
+        }
+
+        let offhand_swap = Click::new(&SlotActionType::Swap, 40, 10).unwrap();
+        match offhand_swap.click_type {
+            ClickType::KeyClick(KeyClick::Offhand) => (),
+            _ => panic!("Expected KeyClick::Offhand"),
+        }
+    }
+
+    #[test]
+    fn parse_throw_and_drag() {
+        let single_drop = Click::new(&SlotActionType::Throw, 0, 3).unwrap();
+        match single_drop.click_type {
+            ClickType::DropType(DropType::SingleItem) => (),
+            _ => panic!("Expected SingleItem Drop"),
+        }
+
+        let full_drop = Click::new(&SlotActionType::Throw, 1, 3).unwrap();
+        match full_drop.click_type {
+            ClickType::DropType(DropType::FullStack) => (),
+            _ => panic!("Expected FullStack Drop"),
+        }
+
+        let drag_start = Click::new(&SlotActionType::QuickCraft, 0, -999).unwrap();
+        match drag_start.click_type {
+            ClickType::MouseDrag {
+                drag_state: MouseDragState::Start(MouseDragType::Left),
+            } => (),
+            _ => panic!("Expected Left MouseDrag Start"),
+        }
+
+        let drag_add = Click::new(&SlotActionType::QuickCraft, 1, 15).unwrap();
+        match drag_add.click_type {
+            ClickType::MouseDrag {
+                drag_state: MouseDragState::AddSlot(15),
+            } => (),
+            _ => panic!("Expected MouseDrag AddSlot(15)"),
+        }
+
+        let drag_end = Click::new(&SlotActionType::QuickCraft, 2, -999).unwrap();
+        match drag_end.click_type {
+            ClickType::MouseDrag {
+                drag_state: MouseDragState::End,
+            } => (),
+            _ => panic!("Expected MouseDrag End"),
+        }
+    }
+}

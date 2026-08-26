@@ -32,6 +32,16 @@ impl BlockMetadata for StemBlock {
 }
 
 impl StemBlock {
+    fn supported_by(soil: &Block, stem: &Block) -> bool {
+        if stem == &Block::PUMPKIN_STEM {
+            soil.has_tag(&tag::Block::MINECRAFT_SUPPORTS_PUMPKIN_STEM)
+        } else if stem == &Block::MELON_STEM {
+            soil.has_tag(&tag::Block::MINECRAFT_SUPPORTS_MELON_STEM)
+        } else {
+            false
+        }
+    }
+
     fn state_with_age(block: &Block, state: BlockStateId, age: i32) -> BlockStateId {
         let mut props = StemProperties::from_state_id(state, block);
         props.age = age as u8;
@@ -82,7 +92,10 @@ impl BlockBehaviour for StemBlock {
     }
 
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
-        <Self as PlantBlockBase>::can_place_at(self, args.block_accessor, args.position)
+        Self::supported_by(
+            args.block_accessor.get_block(&args.position.down()),
+            args.block,
+        )
     }
 
     fn get_state_for_neighbor_update<'a>(
@@ -102,7 +115,9 @@ impl BlockBehaviour for StemBlock {
 
     fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            // TODO add light level check
+            if args.world.get_max_local_raw_brightness(&args.position.up()) < 9 {
+                return;
+            }
             let f: f32 = get_available_moisture(args.world, args.position, args.block).await;
             if rand::rng().random_range(0..=(25.0 / f).floor() as i32) == 0 {
                 let (block, state) = args.world.get_block_and_state_id(args.position);
@@ -152,13 +167,30 @@ impl BlockBehaviour for StemBlock {
 
 impl PlantBlockBase for StemBlock {
     fn can_plant_on_top(&self, block_accessor: &dyn BlockAccessor, pos: &BlockPos) -> bool {
-        let block = block_accessor.get_block(pos);
-        if block == &Block::PUMPKIN_STEM {
-            block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_PUMPKIN_STEM)
-        } else {
-            block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_MELON_STEM)
-        }
+        Self::supported_by(
+            block_accessor.get_block(pos),
+            block_accessor.get_block(&pos.up()),
+        )
     }
 }
 
 impl CropBlockBase for StemBlock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_stems_require_their_supported_soil_tag() {
+        assert!(StemBlock::supported_by(
+            &Block::FARMLAND,
+            &Block::PUMPKIN_STEM
+        ));
+        assert!(StemBlock::supported_by(
+            &Block::FARMLAND,
+            &Block::MELON_STEM
+        ));
+        assert!(!StemBlock::supported_by(&Block::DIRT, &Block::PUMPKIN_STEM));
+        assert!(!StemBlock::supported_by(&Block::DIRT, &Block::MELON_STEM));
+    }
+}

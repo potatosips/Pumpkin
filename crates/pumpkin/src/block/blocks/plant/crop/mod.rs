@@ -71,6 +71,12 @@ trait CropBlockBase: PlantBlockBase {
     }
 
     async fn random_tick(&self, world: &Arc<World>, pos: &BlockPos) {
+        // Vanilla: crops require light level >= 9 to grow
+        let light_above = world.get_max_local_raw_brightness(&pos.up());
+        if light_above < 9 {
+            return;
+        }
+
         let (block, state) = world.get_block_and_state_id(pos);
         let age = self.get_age(state, block);
         if age < self.max_age() {
@@ -98,8 +104,6 @@ trait CropBlockBase: PlantBlockBase {
             }
         }
     }
-
-    //TODO add impl for light level
 }
 
 pub async fn get_available_moisture(world: &Arc<World>, pos: &BlockPos, block: &Block) -> f32 {

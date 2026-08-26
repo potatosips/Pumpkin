@@ -118,6 +118,8 @@ impl pumpkin::plugin::command::HostConsumedArgs for PluginHostState {
 
         Ok(match owned_arg {
             OwnedArg::Simple(s) => Arg::Simple(s),
+            OwnedArg::NbtCompound(nbt) => Arg::Simple(nbt.to_string()),
+            OwnedArg::NbtTag(nbt) => Arg::Simple(nbt.to_string()),
             OwnedArg::Msg(s) => Arg::Msg(s),
             OwnedArg::Bool(b) => Arg::Bool(b),
             OwnedArg::Item(s) => Arg::Item(s),

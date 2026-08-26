@@ -80,3 +80,28 @@ impl CropBlockBase for TorchFlowerBlock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn torchflower_crop_block_id_and_default_state_parity() {
+        assert_eq!(Block::TORCHFLOWER_CROP.name, "torchflower_crop");
+        let default_props = TorchFlowerProperties::from_state_id(
+            Block::TORCHFLOWER_CROP.default_state.id,
+            &Block::TORCHFLOWER_CROP,
+        );
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn torchflower_crop_properties_encoding_decoding_parity() {
+        for age in 0..=1 {
+            let props = TorchFlowerProperties { age };
+            let state_id = props.to_state_id(&Block::TORCHFLOWER_CROP);
+            let decoded = TorchFlowerProperties::from_state_id(state_id, &Block::TORCHFLOWER_CROP);
+            assert_eq!(decoded.age, age);
+        }
+    }
+}

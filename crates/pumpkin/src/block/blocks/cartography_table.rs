@@ -5,7 +5,7 @@ use pumpkin_data::translation;
 use pumpkin_inventory::cartography_table_screen_handler::CartographyTableScreenHandler;
 use pumpkin_inventory::player::player_inventory::PlayerInventory;
 use pumpkin_inventory::screen_handler::{
-    BoxFuture, InventoryPlayer, ScreenHandlerFactory, SharedScreenHandler,
+    BoxFuture, InventoryPlayer, ScreenHandler, ScreenHandlerFactory, SharedScreenHandler,
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::text::TextComponent;
@@ -26,7 +26,13 @@ impl BlockBehaviour for CartographyTableBlock {
                 )
                 .await;
             args.player
-                .open_handled_screen(&CartographyTableScreenFactory, Some(*args.position))
+                .open_handled_screen(
+                    &CartographyTableScreenFactory {
+                        position: *args.position,
+                        world: args.world.clone(),
+                    },
+                    Some(*args.position),
+                )
                 .await;
 
             BlockActionResult::Success
@@ -34,7 +40,10 @@ impl BlockBehaviour for CartographyTableBlock {
     }
 }
 
-struct CartographyTableScreenFactory;
+struct CartographyTableScreenFactory {
+    position: pumpkin_util::math::position::BlockPos,
+    world: Arc<crate::world::World>,
+}
 
 impl ScreenHandlerFactory for CartographyTableScreenFactory {
     fn create_screen_handler<'a>(
@@ -44,14 +53,42 @@ impl ScreenHandlerFactory for CartographyTableScreenFactory {
         _player: &'a dyn InventoryPlayer,
     ) -> BoxFuture<'a, Option<SharedScreenHandler>> {
         Box::pin(async move {
-            let handler: SharedScreenHandler = Arc::new(Mutex::new(
-                CartographyTableScreenHandler::new(sync_id, player_inventory),
-            ));
+            let mut handler = CartographyTableScreenHandler::new(sync_id, player_inventory);
+            let pos = self.position;
+            let world = self.world.clone();
+            handler
+                .get_behaviour_mut()
+                .set_validity_check(move |player| {
+                    let state_id = world.get_block_state(&pos).id;
+                    let block = pumpkin_data::Block::from_state_id(state_id);
+                    block == &pumpkin_data::Block::CARTOGRAPHY_TABLE
+                        && player.can_interact_with_block_at(&pos, 4.0)
+                });
+            let handler: SharedScreenHandler = Arc::new(Mutex::new(handler));
             Some(handler)
         })
     }
 
     fn get_display_name(&self) -> TextComponent {
         TextComponent::translate(translation::java::CONTAINER_CARTOGRAPHY_TABLE, [])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn cartography_table_block_id_parity() {
+        assert_eq!(Block::CARTOGRAPHY_TABLE.name, "cartography_table");
+    }
+
+    #[test]
+    fn cartography_table_default_state_parity() {
+        assert_ne!(
+            Block::CARTOGRAPHY_TABLE.default_state.id,
+            Block::AIR.default_state.id
+        );
     }
 }

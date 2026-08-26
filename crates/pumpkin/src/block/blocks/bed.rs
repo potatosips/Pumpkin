@@ -244,7 +244,7 @@ impl BlockBehaviour for BedBlock {
                     .await;
 
                 args.world
-                    .explode(bed_head_pos.to_centered_f64(), 5.0)
+                    .explode_with_fire(bed_head_pos.to_centered_f64(), 5.0)
                     .await;
 
                 return BlockActionResult::SuccessServer;
@@ -268,7 +268,20 @@ impl BlockBehaviour for BedBlock {
 
             // Make sure the bed is not occupied
             if bed_props.occupied {
-                // TODO: Wake up villager
+                let mut woke_villager = false;
+                for entity in args.world.entities.load().iter() {
+                    if entity.get_entity().entity_type == &EntityType::VILLAGER
+                        && entity.get_home_pos() == Some(bed_head_pos)
+                        && entity.wake_up_from_bed().await
+                    {
+                        woke_villager = true;
+                        break;
+                    }
+                }
+
+                if woke_villager {
+                    return BlockActionResult::SuccessServer;
+                }
 
                 args.player
                     .send_system_message_raw(

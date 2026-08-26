@@ -319,12 +319,23 @@ impl ShulkerEntity {
 
         // pre_damage for arrow blocking below.
     }
+
+    #[must_use]
+    pub fn calculate_incoming_damage(is_closed: bool, amount: f32, damage_type: DamageType) -> f32 {
+        if is_closed && !crate::entity::living::bypasses_armor_durability(&damage_type) {
+            const ARMOR: f32 = 20.0;
+            let f1 = (ARMOR - amount * 0.5f32).clamp(ARMOR * 0.2f32, 20.0f32);
+            (amount * (1.0f32 - f1 / 25.0f32)).max(0.0)
+        } else {
+            amount
+        }
+    }
 }
 
 impl NBTStorage for ShulkerEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             nbt.put_byte("AttachFace", self.attach_face.load(Ordering::Relaxed) as i8);
             nbt.put_byte("PeekAmount", self.peek_amount.load(Ordering::Relaxed) as i8);
             nbt.put_byte("Color", self.color.load(Ordering::Relaxed) as i8);
@@ -333,7 +344,7 @@ impl NBTStorage for ShulkerEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(face) = nbt.get_byte("AttachFace") {
                 self.attach_face.store(face as u8, Ordering::Relaxed);
             }
@@ -404,13 +415,7 @@ impl Mob for ShulkerEntity {
 
     /// Apply armor modifier (20 armor) reduction when closed.
     fn modify_incoming_damage(&self, amount: f32, damage_type: DamageType) -> f32 {
-        if self.is_closed() && !crate::entity::living::bypasses_armor_durability(&damage_type) {
-            const ARMOR: f32 = 20.0;
-            let f1 = (ARMOR - amount * 0.5f32).clamp(ARMOR * 0.2f32, 20.0f32);
-            (amount * (1.0f32 - f1 / 25.0f32)).max(0.0)
-        } else {
-            amount
-        }
+        Self::calculate_incoming_damage(self.is_closed(), amount, damage_type)
     }
 }
 
@@ -601,5 +606,27 @@ impl BlockPosExt for BlockPos {
             self.0.y + offset.y,
             self.0.z + offset.z,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_shulker_closed_shell_grants_eighty_percent_armor_reduction() {
+        let full_damage = 10.0;
+
+        // When open, full damage is received
+        let open_dmg =
+            ShulkerEntity::calculate_incoming_damage(false, full_damage, DamageType::PLAYER_ATTACK);
+        assert_eq!(open_dmg, 10.0);
+
+        // When closed, damage is mitigated by 20 armor points (80% reduction)
+        let closed_dmg =
+            ShulkerEntity::calculate_incoming_damage(true, full_damage, DamageType::PLAYER_ATTACK);
+        assert!(closed_dmg < open_dmg);
+        // For 10 dmg: armor calculation gives ~4.0 dmg
+        assert!((closed_dmg - 4.0).abs() < 1.0e-5);
     }
 }

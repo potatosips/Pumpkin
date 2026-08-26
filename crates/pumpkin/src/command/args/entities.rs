@@ -37,6 +37,76 @@ pub enum ValueCondition<T> {
     NotEquals(T),
 }
 
+impl<T: PartialEq> ValueCondition<T> {
+    pub fn matches(&self, actual: &T) -> bool {
+        match self {
+            Self::Equals(expected) => actual == expected,
+            Self::NotEquals(expected) => actual != expected,
+        }
+    }
+}
+
+impl<T: PartialOrd> ComparableValueCondition<T> {
+    pub fn matches(&self, actual: &T) -> bool {
+        match self {
+            Self::Equals(expected) => actual == expected,
+            Self::NotEquals(expected) => actual != expected,
+            Self::GreaterThan(expected) => actual > expected,
+            Self::LessThan(expected) => actual < expected,
+            Self::GreaterThanOrEquals(expected) => actual >= expected,
+            Self::LessThanOrEquals(expected) => actual <= expected,
+            Self::Between(min, max) => actual >= min && actual <= max,
+        }
+    }
+}
+
+fn parse_f64_range(
+    value: &str,
+    non_negative: bool,
+) -> Result<ComparableValueCondition<f64>, String> {
+    let parse_number = |raw: &str| {
+        raw.parse::<f64>()
+            .map_err(|_| format!("Invalid number {raw}"))
+            .and_then(|number| {
+                if number.is_finite() && (!non_negative || number >= 0.0) {
+                    Ok(number)
+                } else {
+                    Err(format!("Invalid number {raw}"))
+                }
+            })
+    };
+    if let Some((min, max)) = value.split_once("..") {
+        match (min.is_empty(), max.is_empty()) {
+            (true, true) => Err("Empty range".to_owned()),
+            (true, false) => Ok(ComparableValueCondition::LessThanOrEquals(parse_number(
+                max,
+            )?)),
+            (false, true) => Ok(ComparableValueCondition::GreaterThanOrEquals(parse_number(
+                min,
+            )?)),
+            (false, false) => {
+                let min = parse_number(min)?;
+                let max = parse_number(max)?;
+                if min > max {
+                    Err("Range minimum exceeds maximum".to_owned())
+                } else {
+                    Ok(ComparableValueCondition::Between(min, max))
+                }
+            }
+        }
+    } else {
+        Ok(ComparableValueCondition::Equals(parse_number(value)?))
+    }
+}
+
+fn parse_finite_f64(value: &str, label: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("Invalid {label} value {value}"))
+}
+
 pub enum ComparableValueCondition<T> {
     Equals(T),
     NotEquals(T),
@@ -89,6 +159,25 @@ impl FromStr for EntityFilter {
         }
 
         match key {
+            "x" => Ok(Self::X(ComparableValueCondition::Equals(parse_finite_f64(
+                value, "x",
+            )?))),
+            "y" => Ok(Self::Y(ComparableValueCondition::Equals(parse_finite_f64(
+                value, "y",
+            )?))),
+            "z" => Ok(Self::Z(ComparableValueCondition::Equals(parse_finite_f64(
+                value, "z",
+            )?))),
+            "dx" => Ok(Self::Dx(ComparableValueCondition::Equals(
+                parse_finite_f64(value, "dx")?,
+            ))),
+            "dy" => Ok(Self::Dy(ComparableValueCondition::Equals(
+                parse_finite_f64(value, "dy")?,
+            ))),
+            "dz" => Ok(Self::Dz(ComparableValueCondition::Equals(
+                parse_finite_f64(value, "dz")?,
+            ))),
+            "distance" => Ok(Self::Distance(parse_f64_range(value, true)?)),
             "type" => {
                 let name = value.strip_prefix("minecraft:").unwrap_or(value);
                 let entity_type =
@@ -238,12 +327,12 @@ impl FromStr for TargetSelector {
 }
 
 #[derive(Debug)]
-struct TargetSelectorParseError {
-    message: String,
-    cursor: usize,
+pub(crate) struct TargetSelectorParseError {
+    pub message: String,
+    pub cursor: usize,
 }
 
-fn parse_target_selector(arg: &str) -> Result<TargetSelector, TargetSelectorParseError> {
+pub(crate) fn parse_target_selector(arg: &str) -> Result<TargetSelector, TargetSelectorParseError> {
     if !arg.starts_with('@') {
         return Uuid::parse_str(arg).map_or_else(
             |_| {
@@ -375,7 +464,7 @@ impl ArgumentConsumer for EntitiesArgumentConsumer {
         Box::pin(async move {
             // todo: command context
             // This is the required asynchronous operation.
-            let entities = server.select_entities(&entity_selector, Some(sender));
+            let entities = server.select_entities(&entity_selector, Some(sender)).await;
 
             Some(Arg::Entities(entities))
         })
@@ -397,7 +486,7 @@ impl ArgumentConsumer for EntitiesArgumentConsumer {
         };
 
         Box::pin(async move {
-            let entities = server.select_entities(&selector, Some(sender));
+            let entities = server.select_entities(&selector, Some(sender)).await;
             Ok(Some(Arg::Entities(entities)))
         })
     }
@@ -479,7 +568,10 @@ fn syntax_error_for_arg_with_cursor(
 mod test {
     use pumpkin_data::translation;
 
-    use super::{TargetSelector, ensure_player_only_selector, parse_target_selector_with_context};
+    use super::{
+        ComparableValueCondition, EntityFilter, TargetSelector, ValueCondition,
+        ensure_player_only_selector, parse_target_selector_with_context,
+    };
     use crate::command::tree::RawArg;
 
     #[test]
@@ -537,6 +629,14 @@ mod test {
             .parse::<TargetSelector>()
             .expect("should parse name selectors");
         assert_eq!(s.conditions.len(), 2);
+        assert!(matches!(
+            &s.conditions[0],
+            EntityFilter::Name(ValueCondition::Equals(name)) if name == "Alex"
+        ));
+        assert!(matches!(
+            &s.conditions[1],
+            EntityFilter::Name(ValueCondition::NotEquals(name)) if name == "Steve"
+        ));
 
         // Test tag selector
         let s = "@e[tag=admin,tag=!vip]"
@@ -549,6 +649,14 @@ mod test {
             .parse::<TargetSelector>()
             .expect("should parse team selectors");
         assert_eq!(s.conditions.len(), 2);
+        assert!(matches!(
+            &s.conditions[0],
+            EntityFilter::Team(ValueCondition::Equals(team)) if team == "red"
+        ));
+        assert!(matches!(
+            &s.conditions[1],
+            EntityFilter::Team(ValueCondition::NotEquals(team)) if team == "blue"
+        ));
 
         // Test scores selector
         let s = "@e[scores={kills=1..,deaths=..5}]"
@@ -567,5 +675,33 @@ mod test {
             .parse::<TargetSelector>()
             .expect("should parse NBT selectors");
         assert_eq!(s.conditions.len(), 1);
+    }
+
+    #[test]
+    fn parse_spatial_selector_values_and_ranges() {
+        let selector = "@e[x=1.5,y=-2,z=3,dx=4,dy=0,dz=-6,distance=2..5]"
+            .parse::<TargetSelector>()
+            .expect("spatial selector should parse");
+        assert!(matches!(
+            selector.conditions[0],
+            EntityFilter::X(ComparableValueCondition::Equals(1.5))
+        ));
+        assert!(matches!(
+            selector.conditions[1],
+            EntityFilter::Y(ComparableValueCondition::Equals(-2.0))
+        ));
+        assert!(matches!(
+            selector.conditions[3],
+            EntityFilter::Dx(ComparableValueCondition::Equals(4.0))
+        ));
+        assert!(matches!(
+            selector.conditions[6],
+            EntityFilter::Distance(ComparableValueCondition::Between(2.0, 5.0))
+        ));
+        assert!("@e[distance=..5]".parse::<TargetSelector>().is_ok());
+        assert!("@e[distance=2..]".parse::<TargetSelector>().is_ok());
+        assert!("@e[distance=-1..5]".parse::<TargetSelector>().is_err());
+        assert!("@e[distance=5..2]".parse::<TargetSelector>().is_err());
+        assert!("@e[x=NaN]".parse::<TargetSelector>().is_err());
     }
 }

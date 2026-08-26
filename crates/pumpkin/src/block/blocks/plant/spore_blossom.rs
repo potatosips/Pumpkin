@@ -45,3 +45,31 @@ impl PlantBlockBase for SporeBlossomBlock {
 fn supports_spore_blossom(block: &Block) -> bool {
     !block.has_tag(&tag::Block::MINECRAFT_LEAVES) && block.is_solid()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn spore_blossom_block_id_parity() {
+        assert_eq!(Block::SPORE_BLOSSOM.name, "spore_blossom");
+    }
+
+    #[test]
+    fn spore_blossom_default_state_parity() {
+        assert_ne!(
+            Block::SPORE_BLOSSOM.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn spore_blossom_ceiling_support_parity() {
+        assert!(supports_spore_blossom(&Block::STONE));
+        assert!(supports_spore_blossom(&Block::DIRT));
+        assert!(supports_spore_blossom(&Block::DEEPSLATE));
+        assert!(!supports_spore_blossom(&Block::OAK_LEAVES));
+        assert!(!supports_spore_blossom(&Block::AIR));
+    }
+}

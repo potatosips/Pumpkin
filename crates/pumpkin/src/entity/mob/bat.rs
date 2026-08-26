@@ -91,7 +91,7 @@ impl BatEntity {
 impl NBTStorage for BatEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             let flags: u8 = if self.is_roosting() { ROOSTING_FLAG } else { 0 };
             nbt.put_byte("BatFlags", flags as i8);
         })
@@ -99,10 +99,11 @@ impl NBTStorage for BatEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
-            let flags = nbt.get_byte("BatFlags").unwrap_or(0) as u8;
-            let roosting = (flags & ROOSTING_FLAG) != 0;
-            self.set_roosting(roosting);
+            self.mob_entity.read_nbt_non_mut(nbt).await;
+            if let Some(flags) = nbt.get_byte("BatFlags") {
+                let roosting = (flags as u8 & ROOSTING_FLAG) != 0;
+                self.set_roosting(roosting);
+            }
         })
     }
 }
@@ -201,7 +202,6 @@ impl Mob for BatEntity {
                     let d = f64::from(target.0.x) + 0.5 - pos.x;
                     let e = f64::from(target.0.y) + 0.1 - pos.y;
                     let f = f64::from(target.0.z) + 0.5 - pos.z;
-
                     let velo = entity.velocity.load();
                     let new_velo = Vector3::new(
                         velo.x + (d.signum() * 0.5 - velo.x) * 0.1,
@@ -256,5 +256,17 @@ impl Mob for BatEntity {
                 self.set_roosting(false);
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bat_constants_and_flag_parity() {
+        assert_eq!(ROOSTING_FLAG, 1);
+        assert_eq!(CLOSE_PLAYER_DISTANCE, 4.0);
+        assert_eq!(MIN_AMBIENT_SOUND_DELAY, 80);
     }
 }

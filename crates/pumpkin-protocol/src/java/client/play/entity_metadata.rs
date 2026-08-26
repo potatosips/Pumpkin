@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 
 use pumpkin_data::{
     block_state_remap::remap_block_state_for_version,
@@ -12,6 +12,7 @@ use pumpkin_util::version::JavaMinecraftVersion;
 
 use crate::{
     ClientPacket, VarInt,
+    codec::var_long::VarLong,
     ser::{NetworkWriteExt, WritingError},
 };
 
@@ -60,7 +61,15 @@ impl ClientPacket for CSetEntityMetadata {
         // 1. Entity ID
         write.write_var_int(&self.entity_id)?;
 
-        write.write_slice(&self.metadata)
+        write.write_slice(&self.metadata)?;
+        // Synched entity data is sentinel-terminated, not length-prefixed. Keep
+        // the invariant at the packet boundary so direct/plugin-created packets
+        // cannot make a 1.21.4 client read past the packet looking for another
+        // serializer id.
+        if self.metadata.last().copied() != Some(u8::MAX) {
+            write.write_u8(u8::MAX)?;
+        }
+        Ok(())
     }
 }
 
@@ -163,6 +172,64 @@ impl<T> Metadata<T> {
             let remainder_start = cursor.position() as usize;
             let inner = cursor.into_inner();
             writer.write_slice(&inner[remainder_start..])?;
+            return Ok(());
+        }
+
+        // The only particle-list metadata in Vanilla is LivingEntity's status-effect
+        // particle list. Each entry is an entity_effect particle followed by its ARGB
+        // color. Particle registry IDs are version-dependent just like singular
+        // particle metadata, so remap every entry rather than copying current IDs.
+        if self.r#type == MetaDataType::PARTICLES {
+            let mut serialized_value = Vec::new();
+            self.value.write_metadata(&mut serialized_value)?;
+            let mut cursor = Cursor::new(serialized_value);
+            let count = VarInt::decode(&mut cursor).map_err(|e| {
+                WritingError::Message(format!("Failed to decode particle-list count: {e}"))
+            })?;
+            if count.0 < 0 {
+                return Err(WritingError::Message(
+                    "Negative particle-list metadata count".into(),
+                ));
+            }
+            writer.write_var_int(&count)?;
+            for _ in 0..count.0 {
+                let particle_id = VarInt::decode(&mut cursor).map_err(|e| {
+                    WritingError::Message(format!("Failed to decode particle-list entry: {e}"))
+                })?;
+                writer.write_var_int(&particle_id_for_version(particle_id, *version))?;
+                let mut color = [0u8; 4];
+                cursor
+                    .read_exact(&mut color)
+                    .map_err(WritingError::IoError)?;
+                writer.write_all(&color).map_err(WritingError::IoError)?;
+            }
+            return Ok(());
+        }
+
+        // Vanilla 1.21.4 EntityDataSerializers.INT/LONG use the VAR_INT and
+        // VAR_LONG codecs. Some callers naturally provide i32/i64, whose generic
+        // serializers are fixed-width, so normalize either representation here.
+        if self.r#type == MetaDataType::INT {
+            let mut serialized = Vec::new();
+            self.value.write_metadata(&mut serialized)?;
+            let value = if serialized.len() == 4 {
+                i32::from_be_bytes(serialized.as_slice().try_into().unwrap_or_default())
+            } else {
+                VarInt::decode(&mut Cursor::new(&serialized)).map_or(0, |value| value.0)
+            };
+            writer.write_var_int(&VarInt(value))?;
+            return Ok(());
+        }
+
+        if self.r#type == MetaDataType::LONG {
+            let mut serialized = Vec::new();
+            self.value.write_metadata(&mut serialized)?;
+            let value = if serialized.len() == 8 {
+                i64::from_be_bytes(serialized.as_slice().try_into().unwrap_or_default())
+            } else {
+                VarLong::decode(&mut Cursor::new(&serialized)).map_or(0, |value| value.0)
+            };
+            writer.write_var_long(&VarLong(value))?;
             return Ok(());
         }
 
@@ -320,7 +387,8 @@ mod tests {
 
     use crate::{VarInt, ser::NetworkWriteExt};
 
-    use super::{Metadata, MetadataSerializer};
+    use super::{CSetEntityMetadata, Metadata, MetadataSerializer};
+    use crate::ClientPacket;
 
     struct ParticleMetadata {
         particle_id: VarInt,
@@ -376,5 +444,50 @@ mod tests {
 
         assert_eq!(particle_id, VarInt(29));
         assert_eq!(data, [0x12, 0x34, 0x56, 0x78]);
+    }
+
+    #[test]
+    fn vanilla_1_21_4_int_metadata_uses_varint_wire_encoding() {
+        let metadata = Metadata::new(pumpkin_data::tracked_data::creeper::FUSE_ID, -1_i32);
+        let mut bytes = Vec::new();
+        metadata
+            .write(&mut bytes, &JavaMinecraftVersion::V_1_21_4)
+            .unwrap();
+
+        assert_eq!(bytes[1], 1);
+        assert_eq!(&bytes[2..], &[0xff, 0xff, 0xff, 0xff, 0x0f]);
+    }
+
+    #[test]
+    fn vanilla_1_21_4_metadata_type_ids_include_optional_global_pos() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        assert_eq!(MetaDataType::OPTIONAL_GLOBAL_POS.id(version), 25);
+        assert_eq!(MetaDataType::PAINTING_VARIANT.id(version), 26);
+        assert_eq!(MetaDataType::SNIFFER_STATE.id(version), 27);
+        assert_eq!(MetaDataType::ARMADILLO_STATE.id(version), 28);
+        assert_eq!(MetaDataType::VECTOR3.id(version), 29);
+        assert_eq!(MetaDataType::QUATERNION.id(version), 30);
+    }
+
+    #[test]
+    fn set_entity_data_encoder_supplies_required_terminal_byte() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        let packet = CSetEntityMetadata::new(VarInt(7), vec![0, 0, 1].into_boxed_slice());
+        let mut bytes = Vec::new();
+
+        packet.write_packet_data(&mut bytes, &version).unwrap();
+
+        assert_eq!(bytes, [7, 0, 0, 1, 255]);
+    }
+
+    #[test]
+    fn set_entity_data_encoder_does_not_duplicate_existing_terminal_byte() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        let packet = CSetEntityMetadata::new(VarInt(7), vec![0, 0, 1, 255].into_boxed_slice());
+        let mut bytes = Vec::new();
+
+        packet.write_packet_data(&mut bytes, &version).unwrap();
+
+        assert_eq!(bytes, [7, 0, 0, 1, 255]);
     }
 }

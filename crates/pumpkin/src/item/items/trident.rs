@@ -18,6 +18,27 @@ use pumpkin_world::inventory::Inventory;
 
 pub struct TridentItem;
 
+const AUTO_SPIN_ATTACK_TICKS: u8 = 20;
+
+fn riptide_launch_speed(level: u32) -> f64 {
+    3.0 * f64::from(level + 1) / 4.0
+}
+
+fn riptide_sound(level: u32) -> Sound {
+    match level {
+        0 | 1 => Sound::ItemTridentRiptide1,
+        2 => Sound::ItemTridentRiptide2,
+        _ => Sound::ItemTridentRiptide3,
+    }
+}
+
+fn next_damage_will_break(stack: &ItemStack) -> bool {
+    !stack.is_unbreakable()
+        && stack
+            .get_max_damage()
+            .is_some_and(|max| stack.get_damage().saturating_add(1) >= max)
+}
+
 impl ItemMetadata for TridentItem {
     fn ids() -> Box<[u16]> {
         [Item::TRIDENT.id].into()
@@ -33,6 +54,12 @@ impl ItemBehaviour for TridentItem {
         Box::pin(async move {
             let inventory = player.inventory();
             let stack = inventory.held_item().await;
+
+            // TridentItem#use rejects a stack whose next durability point would
+            // destroy it. This is checked before the client starts charging.
+            if next_damage_will_break(&stack) {
+                return;
+            }
 
             player
                 .living_entity
@@ -73,14 +100,17 @@ impl ItemBehaviour for TridentItem {
             }
 
             if riptide_level > 0 {
-                let in_water = world.get_block_state(&player.position().to_block_pos()).id
-                    == pumpkin_data::Block::WATER.default_state.id;
-                if !in_water {
+                let entity = player.get_entity();
+                let position = player.position();
+                let wet = entity
+                    .touching_water
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    || world.is_raining_at(&position.to_block_pos()).await;
+                if !wet {
                     player.living_entity.clear_active_hand().await;
                     return;
                 }
 
-                let f = f64::from(riptide_level);
                 let (yaw, pitch) = player.rotation();
                 let f_yaw = f32::to_radians(yaw);
                 let f_pitch = f32::to_radians(pitch);
@@ -91,15 +121,29 @@ impl ItemBehaviour for TridentItem {
 
                 let sq = (vx * vx + vy * vy + vz * vz).sqrt();
                 if sq > 0.0 {
-                    let mult = (1.0 + f * 0.75) / sq;
-                    player.living_entity.entity.velocity.store(Vector3::new(
-                        vx * mult,
-                        vy * mult,
-                        vz * mult,
-                    ));
+                    let mult = riptide_launch_speed(riptide_level) / sq;
+                    entity
+                        .velocity
+                        .store(Vector3::new(vx * mult, vy * mult, vz * mult));
                 }
 
                 player.damage_held_item(1).await;
+                player
+                    .auto_spin_attack_ticks
+                    .store(AUTO_SPIN_ATTACK_TICKS, std::sync::atomic::Ordering::Relaxed);
+                entity.set_pose(pumpkin_data::entity::EntityPose::SpinAttack);
+                world.play_sound(
+                    riptide_sound(riptide_level),
+                    pumpkin_data::sound::SoundCategory::Players,
+                    &position,
+                );
+                player
+                    .increment_stat(
+                        pumpkin_data::statistic::StatisticCategory::Used,
+                        Item::TRIDENT.id.into(),
+                        1,
+                    )
+                    .await;
                 player.living_entity.clear_active_hand().await;
                 return;
             }
@@ -107,10 +151,12 @@ impl ItemBehaviour for TridentItem {
             // Normal throw - spawn thrown trident
             let (yaw, pitch) = player.rotation();
             let entity = Entity::new(world.clone(), player.position(), &EntityType::TRIDENT);
+            let mut thrown_stack = stack_guard.clone();
+            let _ = thrown_stack.damage_item(1);
             let trident = TridentEntity::new_shot(
                 entity,
                 player.get_entity(),
-                stack_guard.clone(),
+                thrown_stack,
                 ArrowPickup::Allowed,
             );
             trident.set_velocity_from_rotation(pitch, yaw, 0.0, 2.5, 1.0);
@@ -121,6 +167,14 @@ impl ItemBehaviour for TridentItem {
                 pumpkin_data::sound::SoundCategory::Players,
                 &player.position(),
             );
+
+            player
+                .increment_stat(
+                    pumpkin_data::statistic::StatisticCategory::Used,
+                    Item::TRIDENT.id.into(),
+                    1,
+                )
+                .await;
 
             if player.gamemode.load() != GameMode::Creative {
                 let inventory = player.inventory();
@@ -163,5 +217,47 @@ impl ItemBehaviour for TridentItem {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_damage_will_break, riptide_launch_speed, riptide_sound};
+    use pumpkin_data::{item::Item, item_stack::ItemStack, sound::Sound};
+
+    #[test]
+    fn vanilla_riptide_launch_speeds() {
+        assert_eq!(riptide_launch_speed(1), 1.5);
+        assert_eq!(riptide_launch_speed(2), 2.25);
+        assert_eq!(riptide_launch_speed(3), 3.0);
+    }
+
+    #[test]
+    fn vanilla_riptide_sounds_follow_enchantment_level() {
+        assert_eq!(riptide_sound(1), Sound::ItemTridentRiptide1);
+        assert_eq!(riptide_sound(2), Sound::ItemTridentRiptide2);
+        assert_eq!(riptide_sound(3), Sound::ItemTridentRiptide3);
+    }
+
+    #[test]
+    fn vanilla_rejects_trident_use_when_next_damage_would_break_it() {
+        let mut trident = ItemStack::new(1, &Item::TRIDENT);
+        let max_damage = trident.get_max_damage().expect("trident is damageable");
+
+        trident.set_damage(max_damage - 2);
+        assert!(!next_damage_will_break(&trident));
+
+        trident.set_damage(max_damage - 1);
+        assert!(next_damage_will_break(&trident));
+    }
+
+    #[test]
+    fn thrown_trident_carries_one_point_of_durability_damage() {
+        let trident = ItemStack::new(1, &Item::TRIDENT);
+        let mut projectile_stack = trident.clone();
+        let _ = projectile_stack.damage_item(1);
+
+        assert_eq!(trident.get_damage(), 0);
+        assert_eq!(projectile_stack.get_damage(), 1);
     }
 }

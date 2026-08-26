@@ -101,3 +101,40 @@ impl BlockBehaviour for BarrelBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BarrelLikeProperties, BlockProperties, Facing};
+
+    #[test]
+    fn barrel_block_id_parity() {
+        assert_eq!(Block::BARREL.name, "barrel");
+    }
+
+    #[test]
+    fn barrel_default_state_parity() {
+        assert_ne!(Block::BARREL.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn barrel_properties_roundtrip_parity() {
+        for facing in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            for open in [true, false] {
+                let props = BarrelLikeProperties { facing, open };
+                let state_id = props.to_state_id(&Block::BARREL);
+                let rt = BarrelLikeProperties::from_state_id(state_id, &Block::BARREL);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.open, open);
+            }
+        }
+    }
+}

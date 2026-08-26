@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -116,22 +117,12 @@ impl ItemBehaviour for BoatItem {
                 true
             };
 
-            let Some((hit_pos, _direction)) = world.raycast(start_pos, end_pos, checker).await
+            let Some((_hit_pos, _direction, hit_vec)) =
+                world.raycast_exact(start_pos, end_pos, checker).await
             else {
                 return;
             };
 
-            // Calculate hit position - center of the block top or water surface
-            // TODO: Vanilla uses exact raycast intersection point (hitResult.getPos()),
-            // Pumpkin's raycast only returns block positions.
-            let hit_vec = Vector3::new(
-                f64::from(hit_pos.0.x) + 0.5,
-                f64::from(hit_pos.0.y) + 1.0,
-                f64::from(hit_pos.0.z) + 0.5,
-            );
-
-            // Vanilla: Check for entities in the path that would block placement
-            // Get player's rotation vector stretched by 5.0 and expanded by 1.0
             let (yaw, pitch) = player.rotation();
             let rotation_vec =
                 Vector3::rotation_vector(f64::from(pitch), f64::from(yaw)).multiply(5.0, 5.0, 5.0);
@@ -183,11 +174,17 @@ impl ItemBehaviour for BoatItem {
 
             // Decrement item unless in creative mode
             let mut stack = player.inventory.held_item().await;
+            let item_id = stack.item.id;
             stack.decrement_unless_creative(player.gamemode.load(), 1);
             player.inventory.set_held_item(stack).await;
 
-            // TODO: world.emitGameEvent(user, GameEvent.ENTITY_PLACE, hitResult.getPos())
-            // TODO: user.incrementStat(Stats.USED.getOrCreateStat(this))
+            player
+                .increment_stat(
+                    pumpkin_data::statistic::StatisticCategory::Used,
+                    item_id as i32,
+                    1,
+                )
+                .await;
         })
     }
 

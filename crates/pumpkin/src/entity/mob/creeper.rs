@@ -10,7 +10,9 @@ use pumpkin_data::{
     sound::{Sound, SoundCategory},
 };
 use pumpkin_nbt::compound::NbtCompound;
-use pumpkin_protocol::{codec::var_int::VarInt, java::client::play::Metadata};
+use pumpkin_protocol::codec::var_int::VarInt;
+use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::version::JavaMinecraftVersion;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -20,12 +22,17 @@ use crate::entity::{
         melee_attack::MeleeAttackGoal, revenge::RevengeGoal, swim::SwimGoal,
         wander_around::WanderAroundGoal,
     },
+    area_effect_cloud::AreaEffectCloudEntity,
     mob::{Mob, MobEntity},
     player::Player,
 };
 
 const DEFAULT_FUSE_TIME: i32 = 30;
 const DEFAULT_EXPLOSION_RADIUS: i32 = 3;
+const EFFECT_CLOUD_DURATION: i32 = 300;
+const EFFECT_CLOUD_RADIUS: f32 = 2.5;
+const EFFECT_CLOUD_WAIT_TIME: i32 = 10;
+const MAX_DROPPED_SKULLS: i32 = 1;
 
 pub struct CreeperEntity {
     pub mob_entity: MobEntity,
@@ -36,6 +43,7 @@ pub struct CreeperEntity {
     pub explosion_radius: AtomicI32,
     pub ignited: AtomicBool,
     pub charged: AtomicBool,
+    pub dropped_skulls: AtomicI32,
 }
 
 impl CreeperEntity {
@@ -50,6 +58,7 @@ impl CreeperEntity {
             explosion_radius: AtomicI32::new(DEFAULT_EXPLOSION_RADIUS),
             ignited: AtomicBool::new(false),
             charged: AtomicBool::new(false),
+            dropped_skulls: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(entity);
         let mob_weak: Weak<dyn Mob> = {
@@ -91,7 +100,9 @@ impl CreeperEntity {
     }
 
     pub fn set_fuse_speed(&self, speed: i32) {
-        self.fuse_speed.store(speed, Ordering::Relaxed);
+        if self.fuse_speed.swap(speed, Ordering::Relaxed) == speed {
+            return;
+        }
         self.mob_entity.living_entity.entity.send_meta_data(
             &[Metadata::new(
                 pumpkin_data::tracked_data::creeper::FUSE_ID,
@@ -115,16 +126,92 @@ impl CreeperEntity {
             .store(true, Ordering::Relaxed);
         let world = entity.world.load();
         let pos = entity.pos.load();
-        world.explode(pos, radius * multiplier).await;
-        // TODO: spawn area effect cloud with potion effects
+        world
+            .explode_mob(pos, radius * multiplier, entity.entity_id)
+            .await;
+        self.spawn_effect_cloud(&world, pos).await;
         entity.remove().await;
+    }
+
+    async fn spawn_effect_cloud(
+        &self,
+        world: &Arc<crate::world::World>,
+        pos: pumpkin_util::math::vector3::Vector3<f64>,
+    ) {
+        let effects = self.mob_entity.living_entity.active_effects.lock().await;
+        if effects.is_empty() {
+            return;
+        }
+        let cloud_effects = effects
+            .values()
+            .map(|effect| {
+                (
+                    effect.effect_type,
+                    effect.duration,
+                    effect.amplifier,
+                    effect.ambient,
+                    effect.show_particles,
+                    effect.show_icon,
+                )
+            })
+            .collect();
+        drop(effects);
+
+        let cloud_entity = Entity::new(world.clone(), pos, &EntityType::AREA_EFFECT_CLOUD);
+        let cloud = AreaEffectCloudEntity::create(
+            cloud_entity,
+            ItemStack::new(0, &Item::GLASS_BOTTLE),
+            cloud_effects,
+            EFFECT_CLOUD_DURATION,
+            EFFECT_CLOUD_RADIUS,
+            20,
+            EFFECT_CLOUD_WAIT_TIME,
+            -0.5,
+            0,
+        );
+        world.spawn_entity(cloud).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_creeper_effect_cloud_uses_exact_geometry_and_timing() {
+        assert_eq!(EFFECT_CLOUD_DURATION, 300);
+        assert_eq!(EFFECT_CLOUD_RADIUS, 2.5);
+        assert_eq!(EFFECT_CLOUD_WAIT_TIME, 10);
+    }
+
+    #[test]
+    fn vanilla_charged_creeper_can_create_only_one_mob_head() {
+        assert_eq!(MAX_DROPPED_SKULLS, 1);
+        assert_eq!(
+            pumpkin_data::item_id_remap::remap_item_id_for_version(
+                Item::CREEPER_HEAD.id,
+                JavaMinecraftVersion::V_1_21_4,
+            ),
+            1158
+        );
+    }
+
+    #[test]
+    fn creeper_fuse_metadata_uses_varint_payload() {
+        let mut bytes = Vec::new();
+        Metadata::new(pumpkin_data::tracked_data::creeper::FUSE_ID, VarInt(-1))
+            .write(&mut bytes, &JavaMinecraftVersion::V_1_21_4)
+            .unwrap();
+
+        // Tracker index 16, INT serializer 1, then Minecraft's five-byte VarInt(-1).
+        assert_eq!(bytes, [16, 1, 255, 255, 255, 255, 15]);
     }
 }
 
 impl NBTStorage for CreeperEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             nbt.put_bool("powered", self.charged.load(Ordering::Relaxed));
             nbt.put_short("Fuse", self.fuse_time.load(Ordering::Relaxed) as i16);
             nbt.put_byte(
@@ -137,7 +224,7 @@ impl NBTStorage for CreeperEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(powered) = nbt.get_bool("powered") {
                 self.charged.store(powered, Ordering::Relaxed);
             }
@@ -158,6 +245,89 @@ impl NBTStorage for CreeperEntity {
 impl Mob for CreeperEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn mob_init_data_tracker(&self) -> EntityBaseFuture<'_, ()> {
+        Box::pin(async move {
+            let entity = &self.mob_entity.living_entity.entity;
+            entity.send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::creeper::FUSE_ID,
+                    VarInt(self.fuse_speed.load(Ordering::Relaxed)),
+                )],
+                None,
+            );
+            entity.send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::creeper::CHARGED,
+                    self.charged.load(Ordering::Relaxed),
+                )],
+                None,
+            );
+            entity.send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::creeper::IS_IGNITED,
+                    self.ignited.load(Ordering::Relaxed),
+                )],
+                None,
+            );
+        })
+    }
+
+    fn mob_on_death<'a>(&'a self, cause: Option<&'a dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(killer) =
+                cause.and_then(|entity| entity.cast_any().downcast_ref::<CreeperEntity>())
+            else {
+                return;
+            };
+            let world = self.mob_entity.living_entity.entity.world.load();
+            if !world.level_info.load().game_rules.mob_drops
+                || !killer.charged.load(Ordering::Relaxed)
+                || killer
+                    .dropped_skulls
+                    .compare_exchange(0, MAX_DROPPED_SKULLS, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_err()
+            {
+                return;
+            }
+
+            world
+                .drop_stack(
+                    &self.mob_entity.living_entity.entity.block_pos.load(),
+                    ItemStack::new(1, &Item::CREEPER_HEAD),
+                )
+                .await;
+        })
+    }
+
+    fn mob_java_spawn_metadata(
+        &self,
+        version: JavaMinecraftVersion,
+    ) -> EntityBaseFuture<'_, Option<Box<[u8]>>> {
+        Box::pin(async move {
+            let mut metadata = Vec::new();
+            Metadata::new(
+                pumpkin_data::tracked_data::creeper::FUSE_ID,
+                VarInt(self.fuse_speed.load(Ordering::Relaxed)),
+            )
+            .write(&mut metadata, &version)
+            .ok()?;
+            Metadata::new(
+                pumpkin_data::tracked_data::creeper::CHARGED,
+                self.charged.load(Ordering::Relaxed),
+            )
+            .write(&mut metadata, &version)
+            .ok()?;
+            Metadata::new(
+                pumpkin_data::tracked_data::creeper::IS_IGNITED,
+                self.ignited.load(Ordering::Relaxed),
+            )
+            .write(&mut metadata, &version)
+            .ok()?;
+            metadata.push(255);
+            Some(metadata.into_boxed_slice())
+        })
     }
 
     fn mob_on_lightning_strike<'a>(
@@ -254,9 +424,16 @@ impl Mob for CreeperEntity {
             );
 
             if player.gamemode.load() != pumpkin_util::GameMode::Creative {
-                // TODO: Handle DamageResult::Broken to broadcast item break and update player slot.
                 let _ = item_stack.damage_item(1);
             }
+
+            player
+                .increment_stat(
+                    crate::entity::player::statistics::StatisticCategory::Used,
+                    Item::FLINT_AND_STEEL.id as i32,
+                    1,
+                )
+                .await;
 
             true
         })

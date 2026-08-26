@@ -1,7 +1,7 @@
 use crate::{
     block::{
         BlockBehaviour, BlockFuture, BlockMetadata, GetStateForNeighborUpdateArgs,
-        OnScheduledTickArgs, PlacedArgs,
+        OnNeighborUpdateArgs, OnScheduledTickArgs, PlacedArgs,
     },
     entity::falling::FallingEntity,
 };
@@ -48,6 +48,13 @@ impl BlockBehaviour for FallingBlock {
         })
     }
 
+    fn on_neighbor_update<'a>(&'a self, args: OnNeighborUpdateArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move {
+            args.world
+                .schedule_block_tick(args.block, *args.position, 2, TickPriority::Normal);
+        })
+    }
+
     fn on_scheduled_tick<'a>(&'a self, args: OnScheduledTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             let (block, state) = args.world.get_block_and_state(&args.position.down());
@@ -57,5 +64,18 @@ impl BlockBehaviour for FallingBlock {
             let state = args.world.get_block_state(args.position);
             FallingEntity::replace_spawn(args.world, *args.position, state.id).await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_registers_vanilla_sands_and_gravel() {
+        let ids = FallingBlock::ids();
+        for id in [BlockId::GRAVEL, BlockId::SAND, BlockId::RED_SAND] {
+            assert!(ids.contains(&id));
+        }
     }
 }

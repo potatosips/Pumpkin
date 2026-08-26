@@ -8,8 +8,10 @@ use crate::block::{
     GetRedstonePowerArgs, NormalUseArgs, OnPlaceArgs, OnScheduledTickArgs, OnStateReplacedArgs,
     PlacedArgs, UseWithItemArgs,
 };
-use crate::entity::Entity;
+use crate::command::CommandSender;
+use crate::command::context::command_source::CommandSource;
 use crate::entity::item::ItemEntity;
+use crate::entity::{Entity, EntityBase};
 use crate::world::World;
 use pumpkin_data::block_properties::{BlockProperties, LecternLikeProperties};
 use pumpkin_data::entity::EntityType;
@@ -46,6 +48,34 @@ impl LecternPageController {
 }
 
 impl LecternController for LecternPageController {
+    fn can_use(&self, player: &dyn InventoryPlayer) -> bool {
+        let Some(original_entity) = self.entity() else {
+            return false;
+        };
+        let Some(current_block_entity) = self.world.get_block_entity(&self.position) else {
+            return false;
+        };
+        let Some(current_entity) = current_block_entity
+            .as_any()
+            .downcast_ref::<LecternBlockEntity>()
+        else {
+            return false;
+        };
+        if !std::ptr::eq(original_entity, current_entity) {
+            return false;
+        }
+
+        let state_id = self.world.get_block_state(&self.position).id;
+        let block = Block::from_state_id(state_id);
+        if block.registry_key() != Block::LECTERN.registry_key()
+            || !LecternLikeProperties::from_state_id(state_id, block).has_book
+        {
+            return false;
+        }
+
+        player.can_interact_with_block_at(&self.position, 4.0)
+    }
+
     fn current_page(&self) -> i32 {
         self.entity()
             .map_or(0, |entity| entity.page.load(Ordering::Relaxed) as i32)
@@ -245,8 +275,33 @@ impl BlockBehaviour for LecternBlock {
                 return BlockActionResult::PassToDefaultBlockAction;
             };
 
-            let book = item_stack.split_unless_creative(args.player.gamemode.load(), 1);
+            let mut book = item_stack.split_unless_creative(args.player.gamemode.load(), 1);
             let _ = item_stack;
+
+            if let Some(server) = args.world.server.upgrade() {
+                let pos = Vector3::new(
+                    f64::from(args.position.0.x) + 0.5,
+                    f64::from(args.position.0.y) + 0.5,
+                    f64::from(args.position.0.z) + 0.5,
+                );
+                let command_source = CommandSource::new(
+                    CommandSender::Player(args.player.clone()),
+                    args.world.clone(),
+                    Some(args.player.clone() as Arc<dyn EntityBase>),
+                    pos,
+                    pumpkin_util::math::vector2::Vector2::new(0.0, 0.0),
+                    args.player.gameprofile.name.clone(),
+                    args.player.get_display_name().await,
+                    server,
+                );
+                crate::item::written_book::resolve_book_components(
+                    &mut book,
+                    &command_source,
+                    Some(args.player),
+                )
+                .await;
+            }
+
             lectern.set_stack(0, book).await;
 
             Self::set_has_book(args.world, args.position, true).await;

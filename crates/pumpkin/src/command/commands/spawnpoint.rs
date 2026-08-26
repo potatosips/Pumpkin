@@ -7,7 +7,7 @@ use pumpkin_util::text::TextComponent;
 use crate::command::args::players::PlayersArgumentConsumer;
 use crate::command::args::position_block::BlockPosArgumentConsumer;
 use crate::command::args::rotation::RotationArgumentConsumer;
-use crate::command::args::{Arg, ConsumedArgs, FindArgDefaultName};
+use crate::command::args::{Arg, ConsumedArgs, FindArg};
 use crate::command::dispatcher::CommandError;
 use crate::command::tree::CommandTree;
 use crate::command::tree::builder::argument;
@@ -57,7 +57,7 @@ impl CommandExecutor for TargetsExecutor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let targets = PlayersArgumentConsumer.find_arg_default_name(args)?;
+            let targets = PlayersArgumentConsumer::find_arg(args, ARG_TARGETS)?;
 
             for target in targets {
                 let pos = target.position().to_block_pos();
@@ -81,7 +81,7 @@ impl CommandExecutor for TargetsPosExecutor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let targets = PlayersArgumentConsumer.find_arg_default_name(args)?;
+            let targets = PlayersArgumentConsumer::find_arg(args, ARG_TARGETS)?;
             let Some(Arg::BlockPos(pos)) = args.get(ARG_POS) else {
                 return Err(CommandError::InvalidConsumption(Some(ARG_POS.into())));
             };
@@ -107,7 +107,7 @@ impl CommandExecutor for TargetsPosAngleExecutor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let targets = PlayersArgumentConsumer.find_arg_default_name(args)?;
+            let targets = PlayersArgumentConsumer::find_arg(args, ARG_TARGETS)?;
             let Some(Arg::BlockPos(pos)) = args.get(ARG_POS) else {
                 return Err(CommandError::InvalidConsumption(Some(ARG_POS.into())));
             };

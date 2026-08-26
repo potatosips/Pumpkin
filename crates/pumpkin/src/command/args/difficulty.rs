@@ -77,3 +77,23 @@ impl<'a> FindArg<'a> for DifficultyArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn difficulty_string_parsing_parity() {
+        assert_eq!(
+            Difficulty::from_str("peaceful").ok(),
+            Some(Difficulty::Peaceful)
+        );
+        assert_eq!(Difficulty::from_str("easy").ok(), Some(Difficulty::Easy));
+        assert_eq!(
+            Difficulty::from_str("normal").ok(),
+            Some(Difficulty::Normal)
+        );
+        assert_eq!(Difficulty::from_str("hard").ok(), Some(Difficulty::Hard));
+        assert!(Difficulty::from_str("invalid").is_err());
+    }
+}

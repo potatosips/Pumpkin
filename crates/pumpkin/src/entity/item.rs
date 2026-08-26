@@ -274,7 +274,7 @@ impl ItemEntity {
             if velo.y < 0.06 {
                 velo.y += 5.0e-4;
             }
-        } else {
+        } else if !entity.has_no_gravity() {
             velo.y -= <Self as EntityBase>::get_gravity(self);
         }
 
@@ -455,8 +455,9 @@ impl NBTStorage for ItemEntity {
             }
 
             // Vanilla stores Age as a short
-            self.item_age
-                .store(nbt.get_short("Age").unwrap_or(0) as u32, Ordering::Relaxed);
+            if let Some(age) = nbt.get_short("Age") {
+                self.item_age.store(age.max(0) as u32, Ordering::Relaxed);
+            }
 
             // Vanilla stores PickupDelay as a short
             if let Some(delay) = nbt.get_short("PickupDelay") {

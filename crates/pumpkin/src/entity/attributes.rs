@@ -262,3 +262,42 @@ impl AttributeRegistry {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attribute_modifier_math_evaluation_parity() {
+        let mut instance = AttributeInstance::new(10.0);
+
+        // Add 2.0 -> value = 12.0
+        instance.add_or_replace_modifier(Modifier {
+            id: "test:add".to_string(),
+            amount: 2.0,
+            operation: ModifierOperation::Add,
+        });
+        assert_eq!(instance.value(), 12.0);
+
+        // MultiplyBase 0.5 -> (10.0 + 2.0) * (1.0 + 0.5) = 18.0
+        instance.add_or_replace_modifier(Modifier {
+            id: "test:mul_base".to_string(),
+            amount: 0.5,
+            operation: ModifierOperation::MultiplyBase,
+        });
+        assert_eq!(instance.value(), 18.0);
+
+        // MultiplyTotal 0.2 -> 18.0 * (1.0 + 0.2) = 21.6
+        instance.add_or_replace_modifier(Modifier {
+            id: "test:mul_total".to_string(),
+            amount: 0.2,
+            operation: ModifierOperation::MultiplyTotal,
+        });
+        assert!((instance.value() - 21.6).abs() < 1e-9);
+
+        // Remove modifier
+        instance.remove_modifier("test:add");
+        // base 10.0 * (1.0 + 0.5) * (1.0 + 0.2) = 18.0
+        assert!((instance.value() - 18.0).abs() < 1e-9);
+    }
+}

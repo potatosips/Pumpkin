@@ -54,3 +54,53 @@ impl BlockBehaviour for DetectorRailBlock {
         can_place_rail_at(args.block_accessor, args.position)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, PoweredRailLikeProperties, RailShapeStraight,
+    };
+
+    #[test]
+    fn detector_rail_block_id_parity() {
+        assert_eq!(Block::DETECTOR_RAIL.name, "detector_rail");
+    }
+
+    #[test]
+    fn detector_rail_default_state_parity() {
+        assert_ne!(
+            Block::DETECTOR_RAIL.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn detector_rail_properties_roundtrip_parity() {
+        for shape in [
+            RailShapeStraight::NorthSouth,
+            RailShapeStraight::EastWest,
+            RailShapeStraight::AscendingEast,
+            RailShapeStraight::AscendingWest,
+            RailShapeStraight::AscendingNorth,
+            RailShapeStraight::AscendingSouth,
+        ] {
+            for powered in [true, false] {
+                for waterlogged in [true, false] {
+                    let props = PoweredRailLikeProperties {
+                        powered,
+                        shape,
+                        waterlogged,
+                    };
+                    let state_id = props.to_state_id(&Block::DETECTOR_RAIL);
+                    let rt =
+                        PoweredRailLikeProperties::from_state_id(state_id, &Block::DETECTOR_RAIL);
+                    assert_eq!(rt.shape, shape);
+                    assert_eq!(rt.powered, powered);
+                    assert_eq!(rt.waterlogged, waterlogged);
+                }
+            }
+        }
+    }
+}

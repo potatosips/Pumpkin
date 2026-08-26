@@ -4,7 +4,7 @@ use crate::block::{BlockBehaviour, BlockFuture, NormalUseArgs};
 use pumpkin_data::translation;
 use pumpkin_inventory::player::player_inventory::PlayerInventory;
 use pumpkin_inventory::screen_handler::{
-    BoxFuture, InventoryPlayer, ScreenHandlerFactory, SharedScreenHandler,
+    BoxFuture, InventoryPlayer, ScreenHandler, ScreenHandlerFactory, SharedScreenHandler,
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::text::TextComponent;
@@ -27,7 +27,13 @@ impl BlockBehaviour for StonecutterBlock {
                 )
                 .await;
             args.player
-                .open_handled_screen(&StonecutterScreenFactory, Some(*args.position))
+                .open_handled_screen(
+                    &StonecutterScreenFactory {
+                        position: *args.position,
+                        world: args.world.clone(),
+                    },
+                    Some(*args.position),
+                )
                 .await;
 
             BlockActionResult::Success
@@ -35,7 +41,10 @@ impl BlockBehaviour for StonecutterBlock {
     }
 }
 
-struct StonecutterScreenFactory;
+struct StonecutterScreenFactory {
+    position: pumpkin_util::math::position::BlockPos,
+    world: Arc<crate::world::World>,
+}
 
 impl ScreenHandlerFactory for StonecutterScreenFactory {
     fn create_screen_handler<'a>(
@@ -45,10 +54,18 @@ impl ScreenHandlerFactory for StonecutterScreenFactory {
         _player: &'a dyn InventoryPlayer,
     ) -> BoxFuture<'a, Option<SharedScreenHandler>> {
         Box::pin(async move {
-            let handler: SharedScreenHandler = Arc::new(Mutex::new(StonecutterScreenHandler::new(
-                sync_id,
-                player_inventory,
-            )));
+            let mut handler = StonecutterScreenHandler::new(sync_id, player_inventory);
+            let pos = self.position;
+            let world = self.world.clone();
+            handler
+                .get_behaviour_mut()
+                .set_validity_check(move |player| {
+                    let state_id = world.get_block_state(&pos).id;
+                    let block = pumpkin_data::Block::from_state_id(state_id);
+                    block == &pumpkin_data::Block::STONECUTTER
+                        && player.can_interact_with_block_at(&pos, 4.0)
+                });
+            let handler: SharedScreenHandler = Arc::new(Mutex::new(handler));
             Some(handler)
         })
     }
@@ -58,5 +75,42 @@ impl ScreenHandlerFactory for StonecutterScreenFactory {
             translation::java::CONTAINER_STONECUTTER,
             translation::bedrock::CONTAINER_STONECUTTER
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, HorizontalFacing, WallTorchLikeProperties,
+    };
+
+    #[test]
+    fn stonecutter_block_id_parity() {
+        assert_eq!(Block::STONECUTTER.name, "stonecutter");
+    }
+
+    #[test]
+    fn stonecutter_default_state_parity() {
+        assert_ne!(
+            Block::STONECUTTER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn stonecutter_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            let props = WallTorchLikeProperties { facing };
+            let state_id = props.to_state_id(&Block::STONECUTTER);
+            let rt = WallTorchLikeProperties::from_state_id(state_id, &Block::STONECUTTER);
+            assert_eq!(rt.facing, facing);
+        }
     }
 }

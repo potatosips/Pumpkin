@@ -295,3 +295,58 @@ const fn vine_direction_mapper(direction: BlockDirection, props: &mut VineLikePr
         BlockDirection::East => props.east = true,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, VineLikeProperties};
+
+    #[test]
+    fn vine_block_id_parity() {
+        assert_eq!(Block::VINE.name, "vine");
+    }
+
+    #[test]
+    fn vine_default_state_parity() {
+        // Default vine state: all faces false
+        let default_props =
+            VineLikeProperties::from_state_id(Block::VINE.default_state.id, &Block::VINE);
+        assert!(!default_props.up);
+        assert!(!default_props.north);
+        assert!(!default_props.south);
+        assert!(!default_props.east);
+        assert!(!default_props.west);
+    }
+
+    #[test]
+    fn vine_properties_encoding_decoding_parity() {
+        // Vine has 5 boolean face properties (up, north, south, east, west) = 32 states
+        let mut count = 0;
+        for up in [true, false] {
+            for north in [true, false] {
+                for south in [true, false] {
+                    for east in [true, false] {
+                        for west in [true, false] {
+                            let props = VineLikeProperties {
+                                up,
+                                north,
+                                south,
+                                east,
+                                west,
+                            };
+                            let state_id = props.to_state_id(&Block::VINE);
+                            let rt = VineLikeProperties::from_state_id(state_id, &Block::VINE);
+                            assert_eq!(rt.up, up);
+                            assert_eq!(rt.north, north);
+                            assert_eq!(rt.south, south);
+                            assert_eq!(rt.east, east);
+                            assert_eq!(rt.west, west);
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 32, "Expected 32 vine states");
+    }
+}

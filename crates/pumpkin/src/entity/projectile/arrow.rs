@@ -1,3 +1,5 @@
+use crossbeam::atomic::AtomicCell;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use tokio::sync::RwLock;
@@ -23,6 +25,7 @@ use pumpkin_protocol::java::client::play::CSoundEffect;
 use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_world::world::BlockFlags;
 
 /// Represents the pickup rules for arrows
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +33,28 @@ pub enum ArrowPickup {
     Disallowed,
     Allowed,
     CreativeOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PierceDecision {
+    AlreadyHit,
+    Accept,
+    Exhausted,
+}
+
+fn register_pierced_entity(
+    pierced_entities: &mut HashSet<i32>,
+    pierce_level: u8,
+    entity_id: i32,
+) -> PierceDecision {
+    if pierced_entities.contains(&entity_id) {
+        PierceDecision::AlreadyHit
+    } else if pierced_entities.len() >= usize::from(pierce_level) + 1 {
+        PierceDecision::Exhausted
+    } else {
+        pierced_entities.insert(entity_id);
+        PierceDecision::Accept
+    }
 }
 
 impl ArrowPickup {
@@ -56,8 +81,8 @@ pub struct ArrowEntity {
     pub entity: Entity,
     pub owner_id: Option<i32>,
     pub item_stack: RwLock<ItemStack>,
-    pub base_damage: f64,
-    pub pickup: ArrowPickup,
+    pub base_damage: AtomicCell<f64>,
+    pub pickup: AtomicU8,
     pub is_critical: AtomicBool,
     pub pierce_level: AtomicU8,
     pub punch_level: AtomicU8,
@@ -66,7 +91,7 @@ pub struct ArrowEntity {
     pub in_ground_time: AtomicU32,
     pub life: AtomicU32,
     pub shake_time: AtomicU8,
-    pub has_hit: AtomicBool,
+    pierced_entities: std::sync::Mutex<HashSet<i32>>,
     pub last_block_pos: Arc<std::sync::RwLock<Option<BlockPos>>>,
 }
 
@@ -92,8 +117,8 @@ impl ArrowEntity {
             entity,
             owner_id,
             item_stack: RwLock::new(item_stack.copy_with_count(1)),
-            base_damage: Self::ARROW_BASE_DAMAGE,
-            pickup,
+            base_damage: AtomicCell::new(Self::ARROW_BASE_DAMAGE),
+            pickup: AtomicU8::new(pickup.to_byte()),
             is_critical: AtomicBool::new(false),
             pierce_level: AtomicU8::new(0),
             punch_level: AtomicU8::new(0),
@@ -102,7 +127,7 @@ impl ArrowEntity {
             in_ground_time: AtomicU32::new(0),
             life: AtomicU32::new(0),
             shake_time: AtomicU8::new(0),
-            has_hit: AtomicBool::new(false),
+            pierced_entities: std::sync::Mutex::new(HashSet::new()),
             last_block_pos: Arc::new(std::sync::RwLock::new(None)),
         }
     }
@@ -133,8 +158,8 @@ impl ArrowEntity {
             entity,
             owner_id: Some(shooter.entity_id),
             item_stack: RwLock::new(item_stack.copy_with_count(1)),
-            base_damage: Self::ARROW_BASE_DAMAGE,
-            pickup,
+            base_damage: AtomicCell::new(Self::ARROW_BASE_DAMAGE),
+            pickup: AtomicU8::new(pickup.to_byte()),
             is_critical: AtomicBool::new(false),
             pierce_level: AtomicU8::new(0),
             punch_level: AtomicU8::new(0),
@@ -143,7 +168,7 @@ impl ArrowEntity {
             in_ground_time: AtomicU32::new(0),
             life: AtomicU32::new(0),
             shake_time: AtomicU8::new(0),
-            has_hit: AtomicBool::new(false),
+            pierced_entities: std::sync::Mutex::new(HashSet::new()),
             last_block_pos: Arc::new(std::sync::RwLock::new(None)),
         }
     }
@@ -196,6 +221,10 @@ impl ArrowEntity {
 
     const fn should_apply_post_hurt_effects(damage_succeeded: bool) -> bool {
         damage_succeeded
+    }
+
+    const fn should_ignite_target(is_flame: bool, target_type: &'static EntityType) -> bool {
+        is_flame && target_type.id != EntityType::ENDERMAN.id
     }
 
     pub fn set_velocity_from_rotation(
@@ -253,8 +282,8 @@ impl ArrowEntity {
         self.pierce_level.store(level, Ordering::Relaxed);
     }
 
-    pub const fn set_base_damage(&self, _damage: f64) {
-        // TODO: implement this
+    pub fn set_base_damage(&self, damage: f64) {
+        self.base_damage.store(damage.max(0.0));
     }
 
     #[allow(dead_code)]
@@ -268,7 +297,9 @@ impl ArrowEntity {
     #[allow(dead_code)]
     fn apply_gravity(&self) {
         let mut velocity = self.entity.velocity.load();
-        velocity.y -= Self::GRAVITY;
+        if !self.entity.has_no_gravity() {
+            velocity.y -= Self::GRAVITY;
+        }
         self.entity.velocity.store(velocity);
     }
 }
@@ -282,6 +313,19 @@ impl NBTStorage for ArrowEntity {
             self.entity.write_nbt(nbt).await;
             let item_stack = self.item_stack.read().await;
             Self::write_item_stack_nbt(&item_stack, nbt);
+            nbt.put_double("damage", self.base_damage.load());
+            nbt.put_byte("pickup", self.pickup.load(Ordering::Relaxed) as i8);
+            nbt.put_byte(
+                "PierceLevel",
+                self.pierce_level.load(Ordering::Relaxed) as i8,
+            );
+            nbt.put_byte("crit", i8::from(self.is_critical.load(Ordering::Relaxed)));
+            nbt.put_byte("inGround", i8::from(self.in_ground.load(Ordering::Relaxed)));
+            nbt.put_byte("shake", self.shake_time.load(Ordering::Relaxed) as i8);
+            nbt.put_short(
+                "life",
+                self.life.load(Ordering::Relaxed).min(i16::MAX as u32) as i16,
+            );
         })
     }
 
@@ -294,6 +338,39 @@ impl NBTStorage for ArrowEntity {
             if let Some(item_stack) = Self::read_item_stack_nbt(nbt) {
                 *self.item_stack.write().await = item_stack;
             }
+            self.base_damage.store(
+                nbt.get_double("damage")
+                    .unwrap_or(Self::ARROW_BASE_DAMAGE)
+                    .max(0.0),
+            );
+            self.pickup.store(
+                ArrowPickup::from_byte(nbt.get_byte("pickup").unwrap_or(0) as u8).to_byte(),
+                Ordering::Relaxed,
+            );
+            self.pierce_level.store(
+                nbt.get_byte("PierceLevel").unwrap_or(0).max(0) as u8,
+                Ordering::Relaxed,
+            );
+            self.is_critical.store(
+                nbt.get_byte("crit").is_some_and(|value| value != 0),
+                Ordering::Relaxed,
+            );
+            self.in_ground.store(
+                nbt.get_byte("inGround").is_some_and(|value| value != 0),
+                Ordering::Relaxed,
+            );
+            self.shake_time.store(
+                nbt.get_byte("shake").unwrap_or(0).max(0) as u8,
+                Ordering::Relaxed,
+            );
+            self.life.store(
+                nbt.get_short("life").unwrap_or(0).max(0) as u32,
+                Ordering::Relaxed,
+            );
+            self.is_flame.store(
+                self.entity.fire_ticks.load(Ordering::Relaxed) > 0,
+                Ordering::Relaxed,
+            );
         })
     }
 }
@@ -332,7 +409,9 @@ impl EntityBase for ArrowEntity {
             let mut velocity = entity.velocity.load();
 
             // Apply gravity
-            velocity.y -= Self::GRAVITY;
+            if !entity.has_no_gravity() {
+                velocity.y -= Self::GRAVITY;
+            }
 
             // Apply inertia (air resistance or water drag)
             let inertia = if entity.touching_water.load(Ordering::Relaxed) {
@@ -441,11 +520,6 @@ impl EntityBase for ArrowEntity {
 
             // Handle hit
             if let Some(h) = hit {
-                // Ensure hit is only processed once
-                if self.has_hit.swap(true, Ordering::SeqCst) {
-                    return;
-                }
-
                 caller.on_hit(h).await;
             }
         })
@@ -494,11 +568,24 @@ impl EntityBase for ArrowEntity {
                         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pos);
 
                     let block = world.get_block(&pos);
+                    if entity.fire_ticks.load(Ordering::Relaxed) > 0
+                        && let Some(lit_state) = crate::item::items::ignite::ignition::can_be_lit(
+                            block,
+                            world.get_block_state_id(&pos),
+                        )
+                    {
+                        world
+                            .set_block_state(&pos, lit_state, BlockFlags::NOTIFY_ALL)
+                            .await;
+                    }
                     if block == &pumpkin_data::Block::TARGET {
                         let player_opt = self.owner_id.and_then(|id| world.get_player_by_id(id));
                         if let Some(player) = player_opt {
                             player.trigger_advancement(crate::entity::player::advancement::trigger::AdvancementTrigger::Bullseye).await;
                         }
+                    }
+                    if block == &pumpkin_data::Block::BIG_DRIPLEAF {
+                        crate::block::blocks::plant::big_dripleaf::BigDripleafBlock::on_projectile_hit(&world, &pos, world.get_block_state_id(&pos)).await;
                     }
 
                     // Stop the arrow
@@ -525,18 +612,46 @@ impl EntityBase for ArrowEntity {
                     hit_pos,
                     ..
                 } => {
+                    let pierce = self.pierce_level.load(Ordering::Relaxed);
+                    if pierce > 0 {
+                        let target_id = target.get_entity().entity_id;
+                        let pierce_decision = {
+                            let mut pierced = self
+                                .pierced_entities
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            register_pierced_entity(&mut pierced, pierce, target_id)
+                        };
+                        match pierce_decision {
+                            PierceDecision::AlreadyHit => return,
+                            PierceDecision::Exhausted => {
+                                entity.remove().await;
+                                return;
+                            }
+                            PierceDecision::Accept => {}
+                        }
+                    }
+
                     // Calculate damage
                     let velocity = entity.velocity.load();
                     let power = velocity.length();
-                    let mut damage = (power * self.base_damage).ceil() as i32;
+                    let mut damage = (power * self.base_damage.load()).ceil() as i32;
 
                     // Apply critical hit bonus
                     if self.is_critical.load(Ordering::Relaxed) {
                         let bonus = (rand::random::<u32>() % (damage / 2 + 2) as u32) as i32;
                         damage = damage.saturating_add(bonus);
                     }
-                    if self.is_flame.load(Ordering::Relaxed) {
-                        target.get_entity().set_on_fire_for_ticks(100);
+                    let target_entity = target.get_entity();
+                    let ignite_target = Self::should_ignite_target(
+                        self.is_flame.load(Ordering::Relaxed),
+                        target_entity.entity_type,
+                    );
+                    let previous_fire_ticks = target_entity.fire_ticks.load(Ordering::Relaxed);
+                    let previous_visual_fire =
+                        target_entity.has_visual_fire.load(Ordering::Relaxed);
+                    if ignite_target {
+                        target.set_on_fire_for_ticks(100);
                     }
 
                     let damage_succeeded = target
@@ -549,6 +664,13 @@ impl EntityBase for ArrowEntity {
                             Some(self),
                         )
                         .await;
+
+                    if ignite_target && !damage_succeeded {
+                        target_entity
+                            .fire_ticks
+                            .store(previous_fire_ticks, Ordering::Relaxed);
+                        target_entity.set_on_fire(previous_visual_fire).await;
+                    }
 
                     if let Some(living) = target.get_living_entity() {
                         let punch = self.punch_level.load(Ordering::Relaxed);
@@ -596,7 +718,6 @@ impl EntityBase for ArrowEntity {
                     }
 
                     // Check pierce level
-                    let pierce = self.pierce_level.load(Ordering::Relaxed);
                     if pierce == 0 {
                         // No piercing - remove arrow
                         entity.remove().await;
@@ -633,7 +754,7 @@ impl EntityBase for ArrowEntity {
             }
 
             // Check pickup rules
-            match self.pickup {
+            match ArrowPickup::from_byte(self.pickup.load(Ordering::Relaxed)) {
                 ArrowPickup::Disallowed => return,
                 ArrowPickup::CreativeOnly if !player.is_creative() => return,
                 _ => {}
@@ -675,6 +796,15 @@ impl ArrowEntity {
             || other_ent.entity_type == &pumpkin_data::entity::EntityType::SPECTRAL_ARROW)
             || other_ent.entity_type == &pumpkin_data::entity::EntityType::ITEM
             || other_ent.entity_type == &pumpkin_data::entity::EntityType::FALLING_BLOCK
+        {
+            return true;
+        }
+
+        if self
+            .pierced_entities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&other_ent.entity_id)
         {
             return true;
         }
@@ -737,7 +867,7 @@ fn get_hit_face(hit_pos: Vector3<f64>, block_pos: BlockPos) -> pumpkin_data::Blo
 
 #[cfg(test)]
 mod tests {
-    use super::ArrowEntity;
+    use super::{ArrowEntity, PierceDecision, register_pierced_entity};
     use pumpkin_data::data_component::DataComponent;
     use pumpkin_data::data_component_impl::{
         DataComponentImpl, PotionContentsImpl, PotionDurationScaleImpl,
@@ -745,6 +875,7 @@ mod tests {
     use pumpkin_data::entity::EntityType;
     use pumpkin_data::item::Item;
     use pumpkin_data::item_stack::ItemStack;
+    use std::collections::HashSet;
 
     fn tipped_payload(count: u8) -> ItemStack {
         let mut tipped = ItemStack::new(32, &Item::TIPPED_ARROW);
@@ -824,5 +955,40 @@ mod tests {
     fn post_hurt_effects_require_successful_arrow_damage() {
         assert!(!ArrowEntity::should_apply_post_hurt_effects(false));
         assert!(ArrowEntity::should_apply_post_hurt_effects(true));
+    }
+
+    #[test]
+    fn flame_arrows_do_not_ignite_endermen() {
+        assert!(!ArrowEntity::should_ignite_target(
+            true,
+            &EntityType::ENDERMAN
+        ));
+        assert!(ArrowEntity::should_ignite_target(true, &EntityType::ZOMBIE));
+        assert!(!ArrowEntity::should_ignite_target(
+            false,
+            &EntityType::ZOMBIE
+        ));
+    }
+
+    #[test]
+    fn piercing_level_one_hits_two_distinct_entities_once() {
+        let mut pierced = HashSet::new();
+
+        assert_eq!(
+            register_pierced_entity(&mut pierced, 1, 10),
+            PierceDecision::Accept
+        );
+        assert_eq!(
+            register_pierced_entity(&mut pierced, 1, 10),
+            PierceDecision::AlreadyHit
+        );
+        assert_eq!(
+            register_pierced_entity(&mut pierced, 1, 11),
+            PierceDecision::Accept
+        );
+        assert_eq!(
+            register_pierced_entity(&mut pierced, 1, 12),
+            PierceDecision::Exhausted
+        );
     }
 }

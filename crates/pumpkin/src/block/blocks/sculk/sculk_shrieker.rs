@@ -108,3 +108,46 @@ impl BlockBehaviour for SculkShriekerBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, SculkShriekerLikeProperties};
+
+    #[test]
+    fn sculk_shrieker_block_id_parity() {
+        assert_eq!(Block::SCULK_SHRIEKER.name, "sculk_shrieker");
+    }
+
+    #[test]
+    fn sculk_shrieker_default_state_parity() {
+        assert_ne!(
+            Block::SCULK_SHRIEKER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn sculk_shrieker_properties_parity() {
+        for can_summon in [true, false] {
+            for shrieking in [true, false] {
+                for waterlogged in [true, false] {
+                    let props = SculkShriekerLikeProperties {
+                        can_summon,
+                        shrieking,
+                        waterlogged,
+                    };
+                    let state_id = props.to_state_id(&Block::SCULK_SHRIEKER);
+                    let rt = SculkShriekerLikeProperties::from_state_id(
+                        state_id,
+                        &Block::SCULK_SHRIEKER,
+                    );
+                    assert_eq!(rt.can_summon, can_summon);
+                    assert_eq!(rt.shrieking, shrieking);
+                    assert_eq!(rt.waterlogged, waterlogged);
+                }
+            }
+        }
+    }
+}

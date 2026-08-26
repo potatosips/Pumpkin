@@ -77,10 +77,11 @@ impl BlockEntity for HopperBlockEntity {
                 .store(world.get_world_age().await, Ordering::Relaxed);
             if self.cooldown_time.fetch_sub(1, Ordering::Relaxed) <= 0 {
                 self.cooldown_time.store(0, Ordering::Relaxed);
-                let state = HopperLikeProperties::from_state_id(
-                    world.get_block_state(&self.position).id,
-                    &Block::HOPPER,
-                );
+                let state_id = world.get_block_state(&self.position).id;
+                if Block::from_state_id(state_id).id != Block::HOPPER.id {
+                    return;
+                }
+                let state = HopperLikeProperties::from_state_id(state_id, &Block::HOPPER);
                 self.try_move_items(&state, world).await;
             }
         })
@@ -99,8 +100,9 @@ impl BlockEntity for HopperBlockEntity {
     }
 
     fn set_block_state(&mut self, block_state: BlockStateId) {
-        // TODO !!!IMPORTANT!!! set block state when loading the chunk
-        self.facing = HopperLikeProperties::from_state_id(block_state, &Block::HOPPER).facing;
+        if Block::from_state_id(block_state).id == Block::HOPPER.id {
+            self.facing = HopperLikeProperties::from_state_id(block_state, &Block::HOPPER).facing;
+        }
     }
 
     fn is_dirty(&self) -> bool {

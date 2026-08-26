@@ -152,3 +152,14 @@ impl BlockBehaviour for WetSpongeBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_sponge_properties_and_dry_behavior() {
+        assert_eq!(Block::SPONGE.id, pumpkin_data::BlockId::SPONGE);
+        assert_eq!(Block::WET_SPONGE.id, pumpkin_data::BlockId::WET_SPONGE);
+    }
+}

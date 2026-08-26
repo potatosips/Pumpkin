@@ -6,7 +6,6 @@ use std::sync::{
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::Sound;
 use pumpkin_data::{entity::EntityType, item::Item};
-use pumpkin_protocol::codec::var_int::VarInt;
 use rand::RngExt;
 
 use crate::entity::{
@@ -91,7 +90,7 @@ impl crate::entity::ageable::AgeableMob for ChickenEntity {
 impl NBTStorage for ChickenEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_int("EggLayTime", self.egg_lay_time.load(Ordering::Relaxed));
@@ -106,7 +105,7 @@ impl NBTStorage for ChickenEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             self.egg_lay_time
@@ -163,13 +162,6 @@ impl Mob for ChickenEntity {
                     None,
                 );
             }
-            entity.send_meta_data(
-                &[pumpkin_protocol::java::client::play::Metadata::new(
-                    pumpkin_data::tracked_data::chicken::VARIANT,
-                    VarInt(self.variant.load(Ordering::Relaxed) as i32),
-                )],
-                None,
-            );
         })
     }
 

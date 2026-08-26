@@ -29,8 +29,9 @@ impl NBTStorage for PaintingEntity {
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.entity.read_nbt_non_mut(nbt).await;
-            let facing = nbt.get_byte("facing").unwrap_or(3);
-            self.entity.data.store(facing as i32, Ordering::Relaxed);
+            if let Some(facing) = nbt.get_byte("facing") {
+                self.entity.data.store(facing as i32, Ordering::Relaxed);
+            }
         })
     }
 }

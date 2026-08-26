@@ -187,6 +187,15 @@ impl ItemStack {
         None
     }
 
+    pub fn set_data_component<T: DataComponentImpl + 'static>(&mut self, component: T) {
+        let to_set_id = T::get_enum();
+        if let Some(index) = self.patch.iter().position(|(id, _)| *id == to_set_id) {
+            self.patch[index].1 = Some(component.to_dyn());
+        } else {
+            self.patch.push((to_set_id, Some(component.to_dyn())));
+        }
+    }
+
     pub fn has_enchantments(&self) -> bool {
         self.get_data_component::<EnchantmentsImpl>()
             .is_some_and(|e| !e.enchantment.is_empty())

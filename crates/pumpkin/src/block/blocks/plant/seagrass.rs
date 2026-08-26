@@ -61,8 +61,40 @@ impl PlantBlockBase for SeaGrassBlock {
         block_state
     }
 }
-#[must_use]
 pub fn supports_seagrass(support_block: &Block, support_block_state: &BlockState) -> bool {
     support_block_state.is_side_solid(BlockDirection::Up)
         && !support_block.has_tag(&tag::Block::MINECRAFT_CANNOT_SUPPORT_SEAGRASS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn seagrass_block_id_parity() {
+        assert_eq!(Block::SEAGRASS.name, "seagrass");
+    }
+
+    #[test]
+    fn seagrass_default_state_parity() {
+        assert_ne!(
+            Block::SEAGRASS.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn seagrass_supports_parity() {
+        assert!(supports_seagrass(&Block::DIRT, &Block::DIRT.default_state));
+        assert!(supports_seagrass(&Block::SAND, &Block::SAND.default_state));
+        assert!(supports_seagrass(
+            &Block::STONE,
+            &Block::STONE.default_state
+        ));
+        assert!(supports_seagrass(
+            &Block::GRAVEL,
+            &Block::GRAVEL.default_state
+        ));
+    }
 }

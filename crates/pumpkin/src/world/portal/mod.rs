@@ -130,7 +130,9 @@ impl PortalType {
                             pitch: None,
                         })
                     } else {
-                        // Leaving the End through the exit portal: return to overworld spawn
+                        // Leaving the End through the exit portal: return a player
+                        // to their valid stored spawn before falling back to the
+                        // Overworld's shared spawn.
                         if let Some(player) =
                             current_level.get_player_by_id(caller.get_entity().entity_id)
                         {
@@ -155,6 +157,23 @@ impl PortalType {
                                         )
                                         .await;
                                 }
+                            }
+
+                            if let Some(respawn) = player.calculate_transition_respawn_point().await
+                                && let Some(server) = current_level.server.upgrade()
+                                && let Some(respawn_world) = server
+                                    .worlds
+                                    .load()
+                                    .iter()
+                                    .find(|world| world.dimension == respawn.dimension)
+                                    .cloned()
+                            {
+                                return Some(TeleportTransition {
+                                    new_world: respawn_world,
+                                    position: respawn.position,
+                                    yaw: Some(respawn.yaw),
+                                    pitch: Some(respawn.pitch),
+                                });
                             }
                         }
 
@@ -182,8 +201,14 @@ impl PortalType {
                 let scale_factor_current = current_level.dimension.coordinate_scale;
 
                 let scale_factor = scale_factor_current / scale_factor_new;
-                let target_pos =
-                    BlockPos::floored(pos.x * scale_factor, pos.y, pos.z * scale_factor);
+                let scaled_x = (pos.x * scale_factor).floor() as i32;
+                let scaled_z = (pos.z * scale_factor).floor() as i32;
+                let clamped = dest_world
+                    .worldborder
+                    .lock()
+                    .await
+                    .clamp_block(scaled_x, scaled_z);
+                let target_pos = BlockPos::new(clamped.0, pos.y.floor() as i32, clamped.1);
 
                 let source_axis = source_portal.as_ref().map(|p| p.axis);
 

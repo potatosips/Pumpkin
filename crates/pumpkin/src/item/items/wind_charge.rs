@@ -29,6 +29,9 @@ impl ItemBehaviour for WindChargeItem {
         player: &'a Player,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
+            player
+                .start_cooldown(Item::WIND_CHARGE.registry_key.to_string(), 10)
+                .await;
             let world = player.world();
             let position = player.position();
 
@@ -45,12 +48,24 @@ impl ItemBehaviour for WindChargeItem {
             let (yaw, pitch) = player.rotation();
 
             wind_charge.set_velocity_from(player.get_entity(), pitch, yaw, 0.0, POWER, 1.0);
-            // TODO: player.incrementStat(Stats.USED)
-
-            // TODO: Implement that the projectile will explode on impact
             world
                 .spawn_entity(Arc::new(WindChargeEntity::new_normal(wind_charge)))
                 .await;
+
+            let mut main_hand = player.inventory().held_item().await;
+            if main_hand.item.id == Item::WIND_CHARGE.id {
+                main_hand.decrement_unless_creative(player.gamemode.load(), 1);
+                player.inventory().set_held_item(main_hand).await;
+            } else {
+                let mut off_hand = player.inventory().off_hand_item().await;
+                if off_hand.item.id == Item::WIND_CHARGE.id {
+                    off_hand.decrement_unless_creative(player.gamemode.load(), 1);
+                    player
+                        .inventory()
+                        .set_stack_in_hand(pumpkin_util::Hand::Left, off_hand)
+                        .await;
+                }
+            }
         })
     }
 

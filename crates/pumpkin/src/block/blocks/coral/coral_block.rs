@@ -49,3 +49,31 @@ const fn get_dead_coral_block_type(id: BlockId) -> Option<&'static Block> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn coral_block_ids_parity() {
+        assert_eq!(Block::TUBE_CORAL_BLOCK.name, "tube_coral_block");
+        assert_eq!(Block::BRAIN_CORAL_BLOCK.name, "brain_coral_block");
+        assert_eq!(Block::BUBBLE_CORAL_BLOCK.name, "bubble_coral_block");
+        assert_eq!(Block::FIRE_CORAL_BLOCK.name, "fire_coral_block");
+        assert_eq!(Block::HORN_CORAL_BLOCK.name, "horn_coral_block");
+        assert_eq!(Block::DEAD_TUBE_CORAL_BLOCK.name, "dead_tube_coral_block");
+    }
+
+    #[test]
+    fn coral_block_default_state_parity() {
+        assert_ne!(
+            Block::TUBE_CORAL_BLOCK.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::DEAD_TUBE_CORAL_BLOCK.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

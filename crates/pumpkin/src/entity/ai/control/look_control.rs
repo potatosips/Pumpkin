@@ -70,18 +70,14 @@ impl LookControl {
 
     pub fn tick(&mut self, mob: &dyn Mob) {
         let entity = mob.get_entity();
-        if Self::should_stay_horizontal() {
-            entity.set_pitch(0.0);
-        }
 
         if self.look_at_timer > 0 {
             self.look_at_timer -= 1;
             if let Some(yaw) = self.get_target_yaw(mob.get_mob_entity()) {
-                entity.head_yaw.store(self.change_angle(
-                    entity.head_yaw.load(),
-                    yaw,
-                    self.max_yaw_change,
-                ));
+                let new_yaw = self.change_angle(entity.head_yaw.load(), yaw, self.max_yaw_change);
+                entity.head_yaw.store(new_yaw);
+                entity.yaw.store(new_yaw);
+                entity.body_yaw.store(new_yaw);
             }
             if let Some(pitch) = self.get_target_pitch(mob.get_mob_entity()) {
                 entity.set_pitch(self.change_angle(
@@ -91,6 +87,7 @@ impl LookControl {
                 ));
             }
         } else {
+            entity.set_pitch(0.0);
             entity.head_yaw.store(self.change_angle(
                 entity.head_yaw.load(),
                 entity.body_yaw.load(),
@@ -99,10 +96,6 @@ impl LookControl {
         }
 
         Self::clamp_head_yaw(mob);
-    }
-
-    const fn should_stay_horizontal() -> bool {
-        true
     }
 
     fn clamp_head_yaw(mob: &dyn Mob) {

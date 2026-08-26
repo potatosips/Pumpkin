@@ -352,6 +352,35 @@ macro_rules! impl_inventory_for_cooking {
                 })
             }
 
+            fn is_valid_slot_for(&self, slot: usize, stack: &ItemStack) -> bool {
+                if stack.is_empty() {
+                    return true;
+                }
+                match slot {
+                    0 => true,
+                    1 => {
+                        stack.item == &pumpkin_data::item::Item::BUCKET
+                            || pumpkin_data::fuels::get_item_burn_ticks(stack.item.id).is_some()
+                    }
+                    _ => false,
+                }
+            }
+
+            fn can_transfer_to(
+                &self,
+                _hopper_inventory: &dyn pumpkin_world::inventory::Inventory,
+                slot: usize,
+                stack: &ItemStack,
+            ) -> bool {
+                if slot == 2 {
+                    true
+                } else if slot == 1 {
+                    stack.item == &pumpkin_data::item::Item::BUCKET
+                } else {
+                    false
+                }
+            }
+
             fn mark_dirty(&self) {
                 self.dirty.store(true, Ordering::Relaxed);
             }
@@ -500,6 +529,12 @@ macro_rules! impl_block_entity_for_cooking {
 
                         let (furnace_block, furnace_block_state) =
                             world.get_block_and_state(&self.position);
+                        if furnace_block.id != pumpkin_data::Block::FURNACE.id
+                            && furnace_block.id != pumpkin_data::Block::BLAST_FURNACE.id
+                            && furnace_block.id != pumpkin_data::Block::SMOKER.id
+                        {
+                            return;
+                        }
                         let mut props =
                             pumpkin_data::block_properties::FurnaceLikeProperties::from_state_id(
                                 furnace_block_state.id,

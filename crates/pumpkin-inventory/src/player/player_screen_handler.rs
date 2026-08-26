@@ -137,7 +137,11 @@ impl ScreenHandler for PlayerScreenHandler {
     fn on_closed<'a>(&'a mut self, player: &'a dyn InventoryPlayer) -> ScreenHandlerFuture<'a, ()> {
         Box::pin(async move {
             self.default_on_closed(player).await;
-            //TODO: this.craftingResultInventory.clear();
+            if !self.behaviour.slots.is_empty() {
+                self.behaviour.slots[0]
+                    .set_stack(ItemStack::EMPTY.clone())
+                    .await;
+            }
             self.drop_inventory(player, self.crafting_inventory.clone())
                 .await;
         })
@@ -264,5 +268,184 @@ impl ScreenHandler for PlayerScreenHandler {
             // Nothing changed
             ItemStack::EMPTY.clone()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::screen_handler::PlayerFuture;
+    use pumpkin_data::item::Item;
+    use pumpkin_data::statistic::StatisticCategory;
+    use pumpkin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+        dropped: Arc<Mutex<Vec<ItemStack>>>,
+    }
+
+    impl TestPlayer {
+        fn new() -> Self {
+            let equipment = Arc::new(Mutex::new(EntityEquipment::new()));
+            let mut equipment_slots = HashMap::new();
+            equipment_slots.insert(40, EquipmentSlot::OFF_HAND);
+            equipment_slots.insert(39, EquipmentSlot::HEAD);
+            equipment_slots.insert(38, EquipmentSlot::CHEST);
+            equipment_slots.insert(37, EquipmentSlot::LEGS);
+            equipment_slots.insert(36, EquipmentSlot::FEET);
+            let inventory = Arc::new(PlayerInventory::new(equipment, Arc::new(equipment_slots)));
+            Self {
+                inventory,
+                dropped: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn drop_item(&self, item: ItemStack, _retain_ownership: bool) -> PlayerFuture<'_, ()> {
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                dropped.lock().await.push(item);
+            })
+        }
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+        fn is_creative(&self) -> bool {
+            false
+        }
+        fn experience_level(&self) -> i32 {
+            0
+        }
+        fn add_experience_levels(&self, _levels: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+        fn set_enchantment_seed(&self, _seed: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_inventory_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_cursor_packet<'a>(
+            &'a self,
+            _packet: &'a CSetCursorItem,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_property_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerProperty,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_set_packet<'a>(
+            &'a self,
+            _packet: &'a CSetPlayerInventory,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_set_held_item_packet<'a>(
+            &'a self,
+            _packet: &'a CSetSelectedSlot,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_equipment_change<'a>(
+            &'a self,
+            _slot: &'a EquipmentSlot,
+            _stack: &'a ItemStack,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn award_experience(&self, _amount: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn increment_stat(
+            &self,
+            _category: StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn player_screen_handler_close_drops_crafting_items() {
+        let player = TestPlayer::new();
+        let mut handler = PlayerScreenHandler::new(&player.inventory, None, 0, None).await;
+
+        // Place oak planks into 2x2 crafting slot (slot 1)
+        let planks = ItemStack::new(4, &Item::OAK_PLANKS);
+        handler
+            .crafting_inventory
+            .set_stack(0, planks.clone())
+            .await;
+
+        // Closing player screen drops the crafting items to player
+        handler.on_closed(&player).await;
+        assert!(handler.crafting_inventory.get_stack(0).await.is_empty());
+        assert!(
+            handler.behaviour.slots[0]
+                .get_cloned_stack()
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn player_screen_handler_quick_move_hotbar_to_main() {
+        let player = TestPlayer::new();
+        let mut handler = PlayerScreenHandler::new(&player.inventory, None, 0, None).await;
+
+        // Hotbar slot 36 (first hotbar slot)
+        let stone = ItemStack::new(16, &Item::STONE);
+        handler.behaviour.slots[36].set_stack(stone.clone()).await;
+
+        // Quick move from hotbar to main inventory
+        let moved = handler.quick_move(&player, 36).await;
+        assert!(!moved.is_empty());
+
+        // Slot 36 should now be empty and slot 9 (first main inv slot) should have stone
+        assert!(
+            handler.behaviour.slots[36]
+                .get_cloned_stack()
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            handler.behaviour.slots[9]
+                .get_cloned_stack()
+                .await
+                .item_count,
+            16
+        );
     }
 }

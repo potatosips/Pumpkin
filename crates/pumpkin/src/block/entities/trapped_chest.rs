@@ -13,6 +13,7 @@ pub struct TrappedChestBlockEntity {
     pub position: BlockPos,
     pub items: tokio::sync::RwLock<[ItemStack; Self::INVENTORY_SIZE]>,
     pub dirty: AtomicBool,
+    pub custom_name: Option<String>,
 
     // Viewer
     viewers: ViewerCountTracker,

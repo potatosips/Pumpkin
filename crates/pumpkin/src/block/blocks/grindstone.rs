@@ -63,3 +63,43 @@ impl WallMountedBlock for GrindstoneBlock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        AttachFace, BlockProperties, GrindstoneLikeProperties, HorizontalFacing,
+    };
+
+    #[test]
+    fn grindstone_block_id_parity() {
+        assert_eq!(Block::GRINDSTONE.name, "grindstone");
+    }
+
+    #[test]
+    fn grindstone_default_state_parity() {
+        assert_ne!(
+            Block::GRINDSTONE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn grindstone_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for face in [AttachFace::Floor, AttachFace::Wall, AttachFace::Ceiling] {
+                let props = GrindstoneLikeProperties { face, facing };
+                let state_id = props.to_state_id(&Block::GRINDSTONE);
+                let rt = GrindstoneLikeProperties::from_state_id(state_id, &Block::GRINDSTONE);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.face, face);
+            }
+        }
+    }
+}

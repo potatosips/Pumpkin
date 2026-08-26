@@ -251,30 +251,32 @@ impl ArgumentType {
         // See https://doc.rust-lang.org/reference/items/enumerations.html#pointer-casting
         let id = unsafe { *std::ptr::from_ref::<Self>(self).cast::<i32>() };
 
-        // TODO: Should probably be extracting ViaVersion backward mapping data for this
+        // ViaVersion / protocol mappings for 1.21.4 (version < 1.21.5 / 1.21.6)
         if version < &JavaMinecraftVersion::V_1_21_5 {
             match id {
                 ..=16 => id,
-                18..=46 => id - 1,
-                48..=53 => id - 2,
-                55.. => id - 3,
+                18..=47 => id - 1,
+                49..=54 => id - 2,
+                56.. => id - 3,
 
                 // Fallbacks:
-                // 17 HexColor => String
-                // 47 ResourceSelector => String
-                // 54 Dialog => String
-                17 | 47 | 54 => 5,
+                // 17 HexColor (added in 1.21.6) => String (5)
+                // 48 ResourceSelector (added in 1.21.6) => String (5)
+                // 55 Dialog (added in 1.21.6) => String (5)
+                17 | 48 | 55 => 5,
             }
         } else if version < &JavaMinecraftVersion::V_1_21_6 {
             match id {
                 ..=16 => id,
-                18..=53 => id - 1,
-                55.. => id - 2,
+                18..=47 => id - 1,
+                49..=54 => id - 2,
+                56.. => id - 3,
 
                 // Fallbacks:
                 // 17 HexColor => String
-                // 54 Dialog => String
-                17 | 54 => 5,
+                // 48 ResourceSelector => String
+                // 55 Dialog => String
+                17 | 48 | 55 => 5,
             }
         } else {
             id
@@ -289,6 +291,12 @@ impl ArgumentType {
     ) -> Result<(), WritingError> {
         let id = self.to_id(version);
         write.write_var_int(&(id).into())?;
+
+        // If this parser fell back to String, write SingleWord behavior (0)
+        if id == 5 && !matches!(self, Self::String(_)) {
+            return write.write_var_int(&0.into());
+        }
+
         match self {
             Self::Float { min, max } => Self::write_number_arg(*min, *max, write),
             Self::Double { min, max } => Self::write_number_arg(*min, *max, write),

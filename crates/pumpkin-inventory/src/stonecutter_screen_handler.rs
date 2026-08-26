@@ -106,6 +106,35 @@ impl ScreenHandler for StonecutterScreenHandler {
         self
     }
 
+    fn on_closed<'a>(&'a mut self, player: &'a dyn InventoryPlayer) -> ScreenHandlerFuture<'a, ()> {
+        Box::pin(async move {
+            self.default_on_closed(player).await;
+            self.drop_inventory(player, self.input_inventory.clone())
+                .await;
+            self.output_inventory
+                .set_stack(0, ItemStack::EMPTY.clone())
+                .await;
+        })
+    }
+
+    fn on_button_click<'a>(
+        &'a mut self,
+        _player: &'a dyn InventoryPlayer,
+        button_id: i32,
+    ) -> ScreenHandlerFuture<'a, bool> {
+        Box::pin(async move {
+            if button_id >= 0 {
+                self.selected_recipe
+                    .store(button_id as u8, Ordering::Relaxed);
+                self.update_output().await;
+                self.send_content_updates().await;
+                true
+            } else {
+                false
+            }
+        })
+    }
+
     fn on_slot_click<'a>(
         &'a mut self,
         slot_index: i32,
@@ -247,5 +276,153 @@ impl Slot for StonecutterOutputSlot {
         Box::pin(async move {
             self.inventory.mark_dirty();
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::screen_handler::PlayerFuture;
+    use pumpkin_data::data_component_impl::EquipmentSlot;
+    use pumpkin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+        dropped: Arc<Mutex<Vec<ItemStack>>>,
+    }
+
+    impl TestPlayer {
+        fn new() -> Self {
+            let equipment = Arc::new(Mutex::new(EntityEquipment::new()));
+            let mut equipment_slots = HashMap::new();
+            equipment_slots.insert(40, EquipmentSlot::OFF_HAND);
+            let inventory = Arc::new(PlayerInventory::new(equipment, Arc::new(equipment_slots)));
+            Self {
+                inventory,
+                dropped: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn drop_item(&self, item: ItemStack, _retain_ownership: bool) -> PlayerFuture<'_, ()> {
+            let dropped = self.dropped.clone();
+            Box::pin(async move {
+                dropped.lock().await.push(item);
+            })
+        }
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+        fn is_creative(&self) -> bool {
+            false
+        }
+        fn experience_level(&self) -> i32 {
+            0
+        }
+        fn add_experience_levels(&self, _levels: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+        fn set_enchantment_seed(&self, _seed: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_inventory_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_cursor_packet<'a>(
+            &'a self,
+            _packet: &'a CSetCursorItem,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_property_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerProperty,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_set_packet<'a>(
+            &'a self,
+            _packet: &'a CSetPlayerInventory,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_set_held_item_packet<'a>(
+            &'a self,
+            _packet: &'a CSetSelectedSlot,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_equipment_change<'a>(
+            &'a self,
+            _slot: &'a EquipmentSlot,
+            _stack: &'a ItemStack,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn award_experience(&self, _amount: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn increment_stat(
+            &self,
+            _category: StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    #[tokio::test]
+    async fn stonecutter_button_click_and_close_drop() {
+        let player = TestPlayer::new();
+        let mut handler = StonecutterScreenHandler::new(1, &player.inventory);
+
+        // Put stone in input slot
+        let stone = ItemStack::new(10, &Item::STONE);
+        handler.input_inventory.set_stack(0, stone.clone()).await;
+
+        // Select recipe index 0 via on_button_click
+        let clicked = handler.on_button_click(&player, 0).await;
+        assert!(clicked);
+        assert_eq!(handler.selected_recipe.load(Ordering::Relaxed), 0);
+
+        // Output slot should have crafted item
+        let output = handler.output_inventory.get_stack(0).await;
+        assert!(!output.is_empty());
+
+        // Close stonecutter - input stone should be given or dropped to player
+        handler.on_closed(&player).await;
+        let input_after = handler.input_inventory.get_stack(0).await;
+        assert!(input_after.is_empty());
+        let output_after = handler.output_inventory.get_stack(0).await;
+        assert!(output_after.is_empty());
     }
 }

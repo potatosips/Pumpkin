@@ -1,9 +1,9 @@
 use pumpkin_util::text::TextComponent;
 use pumpkin_world::world::BlockFlags;
 
+use crate::command::args::ConsumedArgs;
 use crate::command::args::block::BlockArgumentConsumer;
 use crate::command::args::position_block::BlockPosArgumentConsumer;
-use crate::command::args::{ConsumedArgs, FindArg};
 use crate::command::tree::CommandTree;
 use crate::command::tree::builder::{argument, literal};
 use crate::command::{CommandError, CommandExecutor, CommandResult, CommandSender};
@@ -40,8 +40,7 @@ impl CommandExecutor for Executor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let block = BlockArgumentConsumer::find_arg(args, ARG_BLOCK)?;
-            let block_state_id = block.default_state.id;
+            let (_, block_state_id) = BlockArgumentConsumer::find_state_arg(args, ARG_BLOCK)?;
             let mode = self.0;
             let world = sender
                 .world_or_first(server)
@@ -52,7 +51,7 @@ impl CommandExecutor for Executor {
                 Mode::Destroy => {
                     world
                         .clone()
-                        .break_block(&pos, None, BlockFlags::SKIP_DROPS | BlockFlags::FORCE_STATE)
+                        .break_block(&pos, None, BlockFlags::FORCE_STATE)
                         .await;
                     world
                         .set_block_state(

@@ -1,5 +1,6 @@
 use super::{Controls, Goal, GoalFuture, to_goal_ticks};
 use crate::entity::{ai::pathfinder::NavigatorGoal, mob::Mob};
+use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 use rand::RngExt;
 
@@ -17,23 +18,47 @@ impl WanderAroundGoal {
             goal_control: Controls::MOVE,
             speed,
             target: None,
-            chance: to_goal_ticks(120),
+            chance: to_goal_ticks(40),
         }
     }
 
     fn find_wander_target(mob: &dyn Mob) -> Vector3<f64> {
         let entity = &mob.get_mob_entity().living_entity.entity;
+        let world = entity.world.load();
         let pos = entity.pos.load();
         let mut rng = mob.get_random();
 
-        let horizontal_range = 10.0;
-        let vertical_range = 7.0;
+        let horizontal_range = 8.0;
 
         let dx = rng.random_range(-horizontal_range..=horizontal_range);
-        let dy = rng.random_range(-vertical_range..=vertical_range);
         let dz = rng.random_range(-horizontal_range..=horizontal_range);
+        let target_x = pos.x + dx;
+        let target_z = pos.z + dz;
 
-        Vector3::new(pos.x + dx, pos.y + dy, pos.z + dz)
+        let start_y = pos.y.floor() as i32;
+        let mut best_y = pos.y;
+        for dy in -3..=3 {
+            let check_pos = BlockPos::new(
+                target_x.floor() as i32,
+                start_y + dy,
+                target_z.floor() as i32,
+            );
+            let (_, state) = world.get_block_and_state(&check_pos);
+            if !state.is_air() && !state.is_liquid() {
+                let above_pos = BlockPos::new(
+                    target_x.floor() as i32,
+                    start_y + dy + 1,
+                    target_z.floor() as i32,
+                );
+                let (_, state_above) = world.get_block_and_state(&above_pos);
+                if state_above.is_air() {
+                    best_y = f64::from(start_y + dy + 1);
+                    break;
+                }
+            }
+        }
+
+        Vector3::new(target_x, best_y, target_z)
     }
 }
 

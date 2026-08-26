@@ -38,7 +38,7 @@ impl BlockBehaviour for CactusBlock {
                 let mut i = 1;
                 while args.world.get_block(&args.position.down_height(i)) == &Block::CACTUS {
                     i += 1;
-                    if 1 == 3 && age == 15 {
+                    if i >= 3 && age == 15 {
                         return;
                     }
                 }
@@ -105,6 +105,7 @@ impl BlockBehaviour for CactusBlock {
             if !can_place_at(args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
+                return Block::AIR.default_state.id;
             }
 
             args.state_id
@@ -126,4 +127,38 @@ fn can_place_at(world: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
     let block = world.get_block(&block_pos.down());
     (block == &Block::CACTUS || block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CACTUS))
         && !world.get_block_state(&block_pos.up()).is_liquid()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::BlockId;
+
+    #[test]
+    fn cactus_block_id_parity() {
+        assert_eq!(Block::CACTUS.id, BlockId::CACTUS);
+    }
+
+    #[test]
+    fn cactus_properties_encoding_decoding_parity() {
+        for age in 0..=15 {
+            let props = CactusLikeProperties { age };
+            let state_id = props.to_state_id(&Block::CACTUS);
+            let decoded = CactusLikeProperties::from_state_id(state_id, &Block::CACTUS);
+            assert_eq!(decoded.age, age);
+        }
+    }
+
+    #[test]
+    fn cactus_default_state_parity() {
+        let default_props =
+            CactusLikeProperties::from_state_id(Block::CACTUS.default_state.id, &Block::CACTUS);
+        assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn sand_supports_cactus_tag_parity() {
+        assert!(Block::SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CACTUS));
+        assert!(Block::RED_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_CACTUS));
+    }
 }

@@ -221,11 +221,8 @@ impl BlockBehaviour for DropperBlock {
                         to_data3d(props.facing),
                     );
                 } else {
-                    args.world.sync_world_event(
-                        WorldEvent::SoundDispenserDispense,
-                        *args.position,
-                        0,
-                    );
+                    args.world
+                        .sync_world_event(WorldEvent::SoundDispenserFail, *args.position, 0);
                 }
             }
         })
@@ -244,5 +241,46 @@ impl BlockBehaviour for DropperBlock {
                 None
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn vanilla_dropper_facing_vectors_and_particles() {
+        assert_eq!(to_normal(Facing::North), Vector3::new(0.0, 0.0, -1.0));
+        assert_eq!(to_normal(Facing::East), Vector3::new(1.0, 0.0, 0.0));
+        assert_eq!(to_normal(Facing::South), Vector3::new(0.0, 0.0, 1.0));
+        assert_eq!(to_normal(Facing::West), Vector3::new(-1.0, 0.0, 0.0));
+        assert_eq!(to_normal(Facing::Up), Vector3::new(0.0, 1.0, 0.0));
+        assert_eq!(to_normal(Facing::Down), Vector3::new(0.0, -1.0, 0.0));
+
+        assert_eq!(to_data3d(Facing::Down), 0);
+        assert_eq!(to_data3d(Facing::Up), 1);
+        assert_eq!(to_data3d(Facing::North), 2);
+        assert_eq!(to_data3d(Facing::South), 3);
+        assert_eq!(to_data3d(Facing::West), 4);
+        assert_eq!(to_data3d(Facing::East), 5);
+    }
+
+    #[test]
+    fn vanilla_dropper_state_properties() {
+        let mut props = DispenserLikeProperties::default(&Block::DROPPER);
+        props.facing = Facing::Down;
+        props.triggered = false;
+
+        let state_id = props.to_state_id(&Block::DROPPER);
+        let roundtrip = DispenserLikeProperties::from_state_id(state_id, &Block::DROPPER);
+
+        assert_eq!(roundtrip.facing, Facing::Down);
+        assert!(!roundtrip.triggered);
+
+        props.triggered = true;
+        let trig_id = props.to_state_id(&Block::DROPPER);
+        let roundtrip_trig = DispenserLikeProperties::from_state_id(trig_id, &Block::DROPPER);
+        assert!(roundtrip_trig.triggered);
     }
 }

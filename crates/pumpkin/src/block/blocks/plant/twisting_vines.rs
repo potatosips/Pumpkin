@@ -98,3 +98,33 @@ impl PlantBlockBase for TwistingVinesBlock {
         block_state
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TwistingVinesBlock;
+    use crate::block::BlockMetadata;
+    use pumpkin_data::Block;
+    use pumpkin_data::BlockId;
+
+    #[test]
+    fn twisting_vines_block_id_parity() {
+        assert_eq!(Block::TWISTING_VINES.name, "twisting_vines");
+        assert_eq!(Block::TWISTING_VINES_PLANT.name, "twisting_vines_plant");
+        assert_eq!(
+            TwistingVinesBlock::ids().as_ref(),
+            &[BlockId::TWISTING_VINES, BlockId::TWISTING_VINES_PLANT]
+        );
+    }
+
+    #[test]
+    fn twisting_vines_default_state_parity() {
+        assert_ne!(
+            Block::TWISTING_VINES.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::TWISTING_VINES_PLANT.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

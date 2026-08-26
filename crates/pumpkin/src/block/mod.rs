@@ -465,6 +465,16 @@ pub async fn drop_loot(
     experience: bool,
     params: LootContextParameters,
 ) {
+    // Java's doTileDrops rule gates block loot and the experience generated as
+    // part of breaking that block. Entity drops use separate gamerules.
+    if !world.level_info.load().game_rules.block_drops {
+        return;
+    }
+
+    let has_silk_touch = params.tool.as_ref().is_some_and(|tool| {
+        tool.get_enchantment_level(&pumpkin_data::enchantment::Enchantment::SILK_TOUCH) > 0
+    });
+
     if let Some(loot_table) = &block.loot_table {
         let items = loot_table.get_loot(params);
         if !items.is_empty() {
@@ -486,10 +496,12 @@ pub async fn drop_loot(
         }
     }
 
-    if experience && let Some(experience) = &block.experience {
+    if experience
+        && let Some(experience) = &block.experience
+        && !has_silk_touch
+    {
         let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(get_seed()));
         let amount = experience.experience.get(&mut random);
-        // TODO: Silk touch gives no exp
         if amount > 0 {
             let mut event = crate::plugin::block::block_exp::BlockExpEvent {
                 block_pos: *pos,

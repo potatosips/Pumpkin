@@ -95,11 +95,19 @@ impl MoveControlTrait for MoveControl {
                 .store(Vector3::new(0.0, 0.0, speed));
 
             if entity.on_ground.load(Ordering::Relaxed) {
+                living_entity.jumping.store(false, Ordering::SeqCst);
                 self.operation = Operation::Wait;
             }
         }
 
         // Navigator owns movement input while this controller waits.
+    }
+
+    fn strafe(&mut self, forwards: f32, right: f32) {
+        self.operation = Operation::Strafe;
+        self.strafe_forwards = forwards;
+        self.strafe_right = right;
+        self.speed_modifier = 0.25;
     }
 }
 

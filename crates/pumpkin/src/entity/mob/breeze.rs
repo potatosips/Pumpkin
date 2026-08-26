@@ -53,6 +53,28 @@ impl BreezeEntity {
 
         mob_arc
     }
+
+    pub const MAX_TARGET_RANGE: f64 = 24.0;
+    pub const MIN_CHARGE_SHOOT_RANGE: f64 = 4.0;
+    pub const JUMP_COOLDOWN_TICKS: u32 = 40;
+    pub const SHOOT_COOLDOWN_TICKS: u32 = 30;
+    pub const PROJECTILE_SPEED: f64 = 0.7;
+
+    #[must_use]
+    pub fn is_valid_shooting_distance(distance: f64) -> bool {
+        (Self::MIN_CHARGE_SHOOT_RANGE..=Self::MAX_TARGET_RANGE).contains(&distance)
+    }
+
+    #[must_use]
+    pub fn should_deflect_projectile(entity_type: &EntityType) -> bool {
+        *entity_type == EntityType::ARROW
+            || *entity_type == EntityType::SPECTRAL_ARROW
+            || *entity_type == EntityType::TRIDENT
+            || *entity_type == EntityType::SNOWBALL
+            || *entity_type == EntityType::EGG
+            || *entity_type == EntityType::FIREWORK_ROCKET
+            || *entity_type == EntityType::WIND_CHARGE
+    }
 }
 
 impl NBTStorage for BreezeEntity {}
@@ -60,5 +82,40 @@ impl NBTStorage for BreezeEntity {}
 impl Mob for BreezeEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_breeze_shooting_distance_validation() {
+        assert!(BreezeEntity::is_valid_shooting_distance(4.0));
+        assert!(BreezeEntity::is_valid_shooting_distance(15.0));
+        assert!(BreezeEntity::is_valid_shooting_distance(24.0));
+
+        assert!(!BreezeEntity::is_valid_shooting_distance(3.9));
+        assert!(!BreezeEntity::is_valid_shooting_distance(24.1));
+    }
+
+    #[test]
+    fn vanilla_breeze_projectile_deflection() {
+        assert!(BreezeEntity::should_deflect_projectile(&EntityType::ARROW));
+        assert!(BreezeEntity::should_deflect_projectile(
+            &EntityType::SPECTRAL_ARROW
+        ));
+        assert!(BreezeEntity::should_deflect_projectile(
+            &EntityType::TRIDENT
+        ));
+        assert!(BreezeEntity::should_deflect_projectile(
+            &EntityType::SNOWBALL
+        ));
+        assert!(BreezeEntity::should_deflect_projectile(
+            &EntityType::WIND_CHARGE
+        ));
+        assert!(!BreezeEntity::should_deflect_projectile(
+            &EntityType::PLAYER
+        ));
     }
 }

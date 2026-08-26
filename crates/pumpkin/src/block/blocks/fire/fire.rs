@@ -115,9 +115,23 @@ impl FireBlock {
         total_burn_chance
     }
 
-    const fn is_near_rain(_world: &World, _pos: &BlockPos) -> bool {
-        // TODO: Implement proper rain checking when weather is implemented
-        // For now, return false to allow fire to work
+    async fn is_near_rain(world: &World, pos: &BlockPos) -> bool {
+        if world.is_raining_at(pos).await {
+            return true;
+        }
+        for direction in [
+            BlockDirection::North,
+            BlockDirection::South,
+            BlockDirection::West,
+            BlockDirection::East,
+        ] {
+            if world
+                .is_raining_at(&pos.offset(direction.to_offset()))
+                .await
+            {
+                return true;
+            }
+        }
         false
     }
 
@@ -154,7 +168,7 @@ impl FireBlock {
         if rand::rng().random_range(0..chance) < odds {
             let old_block = block;
             if rand::rng().random_range(0..(age + 10) as i32) < 5
-                && !Self::is_near_rain(world.as_ref(), pos)
+                && !Self::is_near_rain(world.as_ref(), pos).await
             {
                 let new_age = (age + (rand::rng().random_range(0..5) / 4)).min(15) as u8;
                 let state_id = self.get_state_for_position(world.as_ref(), &Block::FIRE, pos);
@@ -263,6 +277,19 @@ impl BlockBehaviour for FireBlock {
         Box::pin(async move {
             let (world, block, pos) = (args.world, args.block, args.position);
 
+            // Java 1.21.4 freezes scheduled fire processing while doFireTick is
+            // false. The compatibility mapping stores false as -1 and true as
+            // a non-negative internal radius value.
+            if world
+                .level_info
+                .load()
+                .game_rules
+                .fire_spread_radius_around_player
+                < 0
+            {
+                return;
+            }
+
             // Schedule next tick first
             world.schedule_block_tick(
                 block,
@@ -314,7 +341,7 @@ impl BlockBehaviour for FireBlock {
             let age = fire_props.age;
 
             // Check if rain should extinguish the fire
-            if !infiniburn && Self::is_near_rain(world.as_ref(), pos) {
+            if !infiniburn && Self::is_near_rain(world.as_ref(), pos).await {
                 let rain_chance = 0.2 + (age as f32) * 0.03;
                 if rand::random::<f32>() < rain_chance {
                     world
@@ -421,14 +448,6 @@ impl BlockBehaviour for FireBlock {
             )
             .await;
 
-            // Respect the `fire_spread_radius_around_player` gamerule.
-            // -1 = disabled (allow unlimited spread), 0 = disabled (no spread), >0 = radius in blocks
-            let spread_radius = world
-                .level_info
-                .load()
-                .game_rules
-                .fire_spread_radius_around_player;
-
             // Try to spread fire to nearby air blocks
             let difficulty = world.level_info.load().difficulty as i32;
             for xx in -1..=1 {
@@ -439,20 +458,6 @@ impl BlockBehaviour for FireBlock {
                             let ignite_odds = self.get_burn_chance(world, &offset_pos);
 
                             if ignite_odds > 0 {
-                                // Skip if spreding is disabled or if there are no players nearby
-                                if spread_radius == 0 {
-                                    continue;
-                                }
-                                if spread_radius != -1 {
-                                    let center = offset_pos.to_centered_f64();
-                                    if world
-                                        .get_closest_player(center, spread_radius as f64)
-                                        .is_none()
-                                    {
-                                        continue;
-                                    }
-                                }
-
                                 // Calculate spread rate based on height
                                 let rate = if yy > 1 { 100 + (yy - 1) * 100 } else { 100 };
 
@@ -467,7 +472,7 @@ impl BlockBehaviour for FireBlock {
 
                                 if odds > 0
                                     && rand::rng().random_range(0..rate) <= odds
-                                    && !Self::is_near_rain(world.as_ref(), &offset_pos)
+                                    && !Self::is_near_rain(world.as_ref(), &offset_pos).await
                                 {
                                     let spread_age = (new_age + rand::rng().random_range(0..5) / 4)
                                         .min(15)
@@ -501,5 +506,42 @@ impl BlockBehaviour for FireBlock {
         Box::pin(async move {
             FireBlockBase::broken(args.world, *args.position);
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, FireLikeProperties};
+
+    #[test]
+    fn fire_block_id_parity() {
+        assert_eq!(Block::FIRE.name, "fire");
+    }
+
+    #[test]
+    fn fire_default_state_parity() {
+        assert_ne!(Block::FIRE.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn fire_properties_roundtrip_parity() {
+        let props = FireLikeProperties {
+            age: 5,
+            east: true,
+            north: false,
+            south: true,
+            up: false,
+            west: true,
+        };
+        let state_id = props.to_state_id(&Block::FIRE);
+        let rt = FireLikeProperties::from_state_id(state_id, &Block::FIRE);
+        assert_eq!(rt.age, 5);
+        assert!(rt.east);
+        assert!(!rt.north);
+        assert!(rt.south);
+        assert!(!rt.up);
+        assert!(rt.west);
     }
 }

@@ -187,3 +187,17 @@ impl BreathManager {
         self.drowning_tick.store(0, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn breath_manager_constants_parity() {
+        assert_eq!(MAX_AIR, 300);
+        assert_eq!(AIR_RECOVERY_RATE, 4);
+        assert_eq!(AIR_DEPLETION_RATE, 1);
+        assert_eq!(DROWNING_INTERVAL, 20);
+        assert_eq!(DROWNING_DAMAGE, 2.0);
+    }
+}

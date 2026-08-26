@@ -61,7 +61,7 @@ impl NBTStorage for StriderEntity {
         nbt: &'a mut pumpkin_nbt::compound::NbtCompound,
     ) -> crate::entity::NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             nbt.put_bool("Saddle", self.is_saddled());
         })
     }
@@ -71,7 +71,7 @@ impl NBTStorage for StriderEntity {
         nbt: &'a pumpkin_nbt::compound::NbtCompound,
     ) -> crate::entity::NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(saddle) = nbt.get_byte("Saddle") {
                 self.set_saddled(saddle == 1);
             }

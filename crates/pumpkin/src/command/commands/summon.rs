@@ -3,7 +3,8 @@ use crate::{
     command::{
         CommandError, CommandExecutor, CommandResult, CommandSender,
         args::{
-            ConsumedArgs, FindArg, position_3d::Position3DArgumentConsumer,
+            ConsumedArgs, FindArg, nbt_compound::NbtCompoundArgumentConsumer,
+            position_3d::Position3DArgumentConsumer,
             summonable_entities::SummonableEntitiesArgumentConsumer,
         },
         tree::{CommandTree, builder::argument},
@@ -23,6 +24,7 @@ const DESCRIPTION: &str = "Spawns a Entity at position.";
 const ARG_ENTITY: &str = "entity";
 
 const ARG_POS: &str = "pos";
+const ARG_NBT: &str = "nbt";
 
 struct Executor;
 
@@ -66,6 +68,10 @@ impl CommandExecutor for Executor {
                 }
             };
             let entity = from_type(entity_type, pos, &world, Uuid::new_v4());
+            if let Ok(nbt) = NbtCompoundArgumentConsumer::find_arg(args, ARG_NBT) {
+                entity.read_nbt_non_mut(nbt).await;
+                entity.get_entity().set_pos(pos);
+            }
             let name = entity.get_display_name().await;
             world.spawn_entity(entity).await;
             sender
@@ -85,7 +91,10 @@ pub fn init_command_tree() -> CommandTree {
     CommandTree::new(NAMES, DESCRIPTION).then(
         argument(ARG_ENTITY, SummonableEntitiesArgumentConsumer)
             .execute(Executor)
-            .then(argument(ARG_POS, Position3DArgumentConsumer).execute(Executor)),
-        // TODO: Add NBT
+            .then(
+                argument(ARG_POS, Position3DArgumentConsumer)
+                    .execute(Executor)
+                    .then(argument(ARG_NBT, NbtCompoundArgumentConsumer).execute(Executor)),
+            ),
     )
 }

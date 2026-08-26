@@ -59,3 +59,32 @@ impl PlantBlockBase for LilyPadBlock {
             && above_fluid.is_air()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_data::Block;
+    use pumpkin_data::tag::{self, Taggable};
+
+    #[test]
+    fn lily_pad_block_id_parity() {
+        assert_eq!(Block::LILY_PAD.name, "lily_pad");
+    }
+
+    #[test]
+    fn lily_pad_default_state_parity() {
+        // Lily pad has no properties (single state)
+        assert_ne!(
+            Block::LILY_PAD.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn lily_pad_supports_tag_parity() {
+        // Water should support lily pad via fluid tag
+        assert!(
+            Block::WATER.has_tag(&tag::Fluid::MINECRAFT_SUPPORTS_LILY_PAD)
+                || Block::WATER.has_tag(&tag::Block::MINECRAFT_SUPPORTS_LILY_PAD)
+        );
+    }
+}

@@ -71,3 +71,30 @@ impl PlantBlockBase for WitherRoseBlock {
         support_block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_WITHER_ROSE)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn wither_rose_block_id_parity() {
+        assert_eq!(Block::WITHER_ROSE.name, "wither_rose");
+    }
+
+    #[test]
+    fn wither_rose_default_state_parity() {
+        assert_ne!(
+            Block::WITHER_ROSE.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn wither_rose_supports_tag_parity() {
+        assert!(Block::SOUL_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_WITHER_ROSE));
+        assert!(Block::SOUL_SOIL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_WITHER_ROSE));
+        assert!(Block::DIRT.has_tag(&tag::Block::MINECRAFT_SUPPORTS_WITHER_ROSE));
+        assert!(Block::NETHERRACK.has_tag(&tag::Block::MINECRAFT_SUPPORTS_WITHER_ROSE));
+    }
+}

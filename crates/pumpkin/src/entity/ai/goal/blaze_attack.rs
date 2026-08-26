@@ -1,3 +1,4 @@
+use pumpkin_data::attributes::Attributes;
 use pumpkin_protocol::java::client::play::CWorldEvent;
 use pumpkin_util::math::vector3::Vector3;
 use rand::RngExt;
@@ -28,11 +29,6 @@ impl BlazeShootFireballGoal {
             last_seen: 0,
         }
     }
-
-    const fn get_follow_distance() -> f64 {
-        // TODO: use FOLLOW_RANGE
-        48.0
-    }
 }
 
 impl Goal for BlazeShootFireballGoal {
@@ -42,12 +38,7 @@ impl Goal for BlazeShootFireballGoal {
                 return false;
             };
             let target = blaze.entity.target.lock().await.clone();
-            if target.is_some() {
-                // TODO: check is_alive
-                true
-            } else {
-                false
-            }
+            target.is_some_and(|target| target.get_entity().is_alive())
         })
     }
 
@@ -57,12 +48,7 @@ impl Goal for BlazeShootFireballGoal {
                 return false;
             };
             let target = blaze.entity.target.lock().await.clone();
-            if target.is_some() {
-                // TODO: check is_alive
-                true
-            } else {
-                false
-            }
+            target.is_some_and(|target| target.get_entity().is_alive())
         })
     }
 
@@ -98,8 +84,15 @@ impl Goal for BlazeShootFireballGoal {
                 return;
             };
 
-            // TODO: hasLineOfSight check
-            let has_line_of_sight = true;
+            let world = blaze.entity.living_entity.entity.world.load();
+            let has_line_of_sight = world
+                .raycast(
+                    blaze.entity.living_entity.entity.get_eye_pos(),
+                    target.get_entity().get_eye_pos(),
+                    async |block_pos, world| world.get_block_state(block_pos).is_solid(),
+                )
+                .await
+                .is_none();
 
             if has_line_of_sight {
                 self.last_seen = 0;
@@ -123,11 +116,20 @@ impl Goal for BlazeShootFireballGoal {
 
                 if self.attack_time <= 0 {
                     self.attack_time = 20;
-                    // TODO: doHurtTarget
+                    if blaze.entity.try_attack(&*blaze, target.as_ref()).await {
+                        blaze.on_successful_attack(target.as_ref()).await;
+                    }
                 }
 
                 // TODO: set wanted position to target
-            } else if distance_sq < Self::get_follow_distance().powi(2) && has_line_of_sight {
+            } else if distance_sq
+                < blaze
+                    .entity
+                    .living_entity
+                    .get_attribute_value(&Attributes::FOLLOW_RANGE)
+                    .powi(2)
+                && has_line_of_sight
+            {
                 let target_y_offset = target_pos.y + 0.5; // roughly target.getY(0.5)
                 let blaze_y_offset = blaze_pos.y + 0.5; // roughly blaze.getY(0.5)
                 let yd = target_y_offset - blaze_y_offset;

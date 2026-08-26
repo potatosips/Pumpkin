@@ -13,7 +13,6 @@ use pumpkin_util::GameMode;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 use pumpkin_world::world::BlockFlags;
-use rand::{RngExt, rng};
 
 pub struct ShovelItem;
 
@@ -46,6 +45,11 @@ impl ItemBehaviour for ShovelItem {
                 && face != BlockDirection::Down
                 && world.get_block_state(&location.up()).is_air()
             {
+                world.play_sound(
+                    Sound::ItemShovelFlatten,
+                    SoundCategory::Blocks,
+                    &location.to_f64(),
+                );
                 world
                     .set_block_state(
                         &location,
@@ -73,23 +77,11 @@ impl ItemBehaviour for ShovelItem {
                             BlockFlags::NOTIFY_ALL,
                         )
                         .await;
-                    let seed = rng().random::<f64>();
-                    player
-                        .play_sound(
-                            Sound::BlockFireExtinguish as u16,
-                            SoundCategory::Ambient,
-                            &location.to_f64(),
-                            0.5,
-                            2.0,
-                            seed,
-                        )
-                        .await;
                     changed = true;
                 }
             }
 
             if changed && player.gamemode.load() != GameMode::Creative {
-                // TODO: Handle DamageResult::Broken to broadcast item break and update player slot.
                 let _ = item.damage_item(1);
             }
         })

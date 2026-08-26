@@ -157,3 +157,47 @@ impl LeverLikePropertiesExt for LeverLikeProperties {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        AttachFace, BlockProperties, HorizontalFacing, LeverLikeProperties,
+    };
+
+    #[test]
+    fn lever_block_id_parity() {
+        assert_eq!(Block::LEVER.name, "lever");
+    }
+
+    #[test]
+    fn lever_default_state_parity() {
+        assert_ne!(Block::LEVER.default_state.id, Block::AIR.default_state.id);
+    }
+
+    #[test]
+    fn lever_properties_roundtrip_parity() {
+        for face in [AttachFace::Floor, AttachFace::Wall, AttachFace::Ceiling] {
+            for facing in [
+                HorizontalFacing::North,
+                HorizontalFacing::South,
+                HorizontalFacing::East,
+                HorizontalFacing::West,
+            ] {
+                for powered in [true, false] {
+                    let props = LeverLikeProperties {
+                        face,
+                        facing,
+                        powered,
+                    };
+                    let state_id = props.to_state_id(&Block::LEVER);
+                    let rt = LeverLikeProperties::from_state_id(state_id, &Block::LEVER);
+                    assert_eq!(rt.face, face);
+                    assert_eq!(rt.facing, facing);
+                    assert_eq!(rt.powered, powered);
+                }
+            }
+        }
+    }
+}

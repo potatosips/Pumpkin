@@ -10,8 +10,14 @@ use crate::entity::{
     ai::goal::{active_target::ActiveTargetGoal, look_at_entity::LookAtEntityGoal},
 };
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::{tag, tag::Taggable};
 use pumpkin_nbt::compound::NbtCompound;
-use std::sync::{Arc, Weak};
+use pumpkin_protocol::java::client::play::CWorldEvent;
+use pumpkin_util::math::position::BlockPos;
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicI32, Ordering},
+};
 
 pub mod drowned;
 pub mod husk;
@@ -21,12 +27,18 @@ pub mod zombie_villager;
 
 pub struct ZombieEntityBase {
     pub mob_entity: MobEntity,
+    in_water_time: AtomicI32,
+    conversion_time: AtomicI32,
 }
 
 impl ZombieEntityBase {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
-        let zombie = Self { mob_entity };
+        let zombie = Self {
+            mob_entity,
+            in_water_time: AtomicI32::new(-1),
+            conversion_time: AtomicI32::new(-1),
+        };
         let mob_arc = Arc::new(zombie);
         let mob_weak: Weak<dyn Mob> = {
             let mob_arc: Arc<dyn Mob> = mob_arc.clone();
@@ -76,15 +88,122 @@ impl ZombieEntityBase {
 
         mob_arc
     }
+
+    pub async fn tick_underwater_conversion(
+        &self,
+        caller: &Arc<dyn crate::entity::EntityBase>,
+        target_type: &'static EntityType,
+    ) -> bool {
+        let entity = &self.mob_entity.living_entity.entity;
+        let eye = entity.get_eye_pos();
+        let eye_pos = BlockPos::floored(eye.x, eye.y, eye.z);
+        let eye_submerged_by_block = entity
+            .world
+            .load()
+            .get_fluid(&eye_pos)
+            .has_tag(&tag::Fluid::MINECRAFT_WATER);
+        // Fluid collision already computes the water surface relative to the
+        // entity's feet. Use it as well so conversion is not lost while a mob
+        // is moving across a chunk/block boundary between fluid-state updates.
+        let eye_submerged = eye_submerged_by_block
+            || (entity.touching_water.load(Ordering::Relaxed)
+                && entity.water_height.load()
+                    > f64::from(entity.entity_dimension.load().eye_height));
+        if !eye_submerged {
+            self.in_water_time.store(-1, Ordering::Relaxed);
+            self.conversion_time.store(-1, Ordering::Relaxed);
+            return false;
+        }
+
+        let submerged_ticks = self.in_water_time.fetch_add(1, Ordering::Relaxed) + 1;
+        if submerged_ticks < 600 {
+            return false;
+        }
+
+        let remaining = self.conversion_time.load(Ordering::Relaxed);
+        if remaining < 0 {
+            self.conversion_time.store(300, Ordering::Relaxed);
+            return false;
+        }
+        if remaining > 1 {
+            self.conversion_time.fetch_sub(1, Ordering::Relaxed);
+            return false;
+        }
+
+        let mut nbt = NbtCompound::new();
+        self.mob_entity.write_nbt(&mut nbt).await;
+        let equipment = self
+            .mob_entity
+            .living_entity
+            .entity_equipment
+            .lock()
+            .await
+            .clone();
+        let source = caller.get_entity();
+        let world = source.world.load();
+        let replacement = crate::entity::r#type::from_type(
+            target_type,
+            source.pos.load(),
+            &world,
+            uuid::Uuid::new_v4(),
+        );
+        if let Some(living) = replacement.get_living_entity() {
+            living.read_nbt_non_mut(&nbt).await;
+            *living.entity_equipment.lock().await = equipment.clone();
+        }
+        replacement
+            .get_entity()
+            .age
+            .store(source.age.load(Ordering::Relaxed), Ordering::Relaxed);
+        let replacement_id = replacement.get_entity().entity_id;
+        world.spawn_entity(replacement.clone()).await;
+        if world.get_entity_by_id(replacement_id).is_none() {
+            return false;
+        }
+        if let Some(living) = replacement.get_living_entity() {
+            let changes = equipment.equipment.into_iter().collect::<Vec<_>>();
+            if !changes.is_empty() {
+                living.send_equipment_changes(&changes);
+            }
+        }
+
+        let event_id = if target_type.id == EntityType::DROWNED.id {
+            1040
+        } else {
+            1041
+        };
+        world.broadcast_to_chunk(
+            source.chunk_pos.load(),
+            &CWorldEvent::new(event_id, source.block_pos.load(), 0, false),
+        );
+        source.remove().await;
+        true
+    }
 }
 
 impl NBTStorage for ZombieEntityBase {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
-        self.mob_entity.living_entity.write_nbt(nbt)
+        Box::pin(async move {
+            self.mob_entity.write_nbt(nbt).await;
+            nbt.put_int("InWaterTime", self.in_water_time.load(Ordering::Relaxed));
+            nbt.put_int(
+                "DrownedConversionTime",
+                self.conversion_time.load(Ordering::Relaxed),
+            );
+        })
     }
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
-        self.mob_entity.living_entity.read_nbt_non_mut(nbt)
+        Box::pin(async move {
+            self.mob_entity.read_nbt_non_mut(nbt).await;
+            if let Some(in_water_time) = nbt.get_int("InWaterTime") {
+                self.in_water_time.store(in_water_time, Ordering::Relaxed);
+            }
+            if let Some(conversion_time) = nbt.get_int("DrownedConversionTime") {
+                self.conversion_time
+                    .store(conversion_time, Ordering::Relaxed);
+            }
+        })
     }
 }
 

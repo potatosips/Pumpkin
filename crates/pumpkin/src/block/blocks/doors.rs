@@ -359,3 +359,65 @@ fn has_support(world: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
         .get_block_state(&block_pos.down())
         .is_side_solid(BlockDirection::Up)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{
+        BlockProperties, DoorHinge, DoubleBlockHalf, HorizontalFacing, OakDoorLikeProperties,
+    };
+
+    #[test]
+    fn door_ids_parity() {
+        assert_eq!(Block::OAK_DOOR.name, "oak_door");
+        assert_eq!(Block::IRON_DOOR.name, "iron_door");
+        assert_eq!(Block::COPPER_DOOR.name, "copper_door");
+    }
+
+    #[test]
+    fn door_default_state_parity() {
+        assert_ne!(
+            Block::OAK_DOOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+        assert_ne!(
+            Block::IRON_DOOR.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn door_properties_roundtrip_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::East,
+            HorizontalFacing::West,
+        ] {
+            for half in [DoubleBlockHalf::Upper, DoubleBlockHalf::Lower] {
+                for hinge in [DoorHinge::Left, DoorHinge::Right] {
+                    for open in [true, false] {
+                        for powered in [true, false] {
+                            let props = OakDoorLikeProperties {
+                                facing,
+                                half,
+                                hinge,
+                                open,
+                                powered,
+                            };
+                            let state_id = props.to_state_id(&Block::OAK_DOOR);
+                            let rt =
+                                OakDoorLikeProperties::from_state_id(state_id, &Block::OAK_DOOR);
+                            assert_eq!(rt.facing, facing);
+                            assert_eq!(rt.half, half);
+                            assert_eq!(rt.hinge, hinge);
+                            assert_eq!(rt.open, open);
+                            assert_eq!(rt.powered, powered);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

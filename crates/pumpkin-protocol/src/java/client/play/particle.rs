@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use pumpkin_data::{
+    BlockStateId, block_state_remap::remap_block_state_for_version,
     packet::clientbound::PLAY_LEVEL_PARTICLES, particle_id_remap::remap_particle_id_for_version,
 };
 use pumpkin_macros::java_packet;
@@ -38,6 +39,21 @@ pub struct CParticle<'a> {
     /// Extra data required by specific particles (e.g., block states for
     /// `block` particles or RGB values for `dust`).
     pub data: &'a [u8],
+}
+
+/// Encodes the version-correct block-state payload used by block particles.
+#[must_use]
+pub fn block_particle_data_for_version(
+    state_id: BlockStateId,
+    version: JavaMinecraftVersion,
+) -> Vec<u8> {
+    let remapped = remap_block_state_for_version(state_id.as_u16(), version);
+    let mut data = Vec::with_capacity(VarInt::MAX_SIZE.get());
+    // Writing to a Vec cannot fail.
+    VarInt(i32::from(remapped))
+        .encode(&mut data)
+        .expect("encoding a VarInt into memory must succeed");
+    data
 }
 
 impl<'a> CParticle<'a> {
@@ -109,12 +125,23 @@ impl ClientPacket for CParticle<'_> {
 mod tests {
     use std::io::{Cursor, Seek, SeekFrom};
 
-    use pumpkin_data::particle::Particle;
+    use pumpkin_data::{Block, particle::Particle};
     use pumpkin_util::{math::vector3::Vector3, version::JavaMinecraftVersion};
 
     use crate::{ClientPacket, VarInt};
 
-    use super::CParticle;
+    use super::{CParticle, block_particle_data_for_version};
+
+    #[test]
+    fn block_particle_payload_uses_version_remapped_state() {
+        let data = block_particle_data_for_version(
+            Block::OAK_PLANKS.default_state.id,
+            JavaMinecraftVersion::V_1_21_4,
+        );
+        let mut cursor = Cursor::new(data);
+        let encoded = VarInt::decode(&mut cursor).unwrap();
+        assert_eq!(encoded, VarInt(15));
+    }
 
     fn encoded_particle_id(version: JavaMinecraftVersion) -> VarInt {
         let packet = CParticle::new(

@@ -20,3 +20,22 @@ impl BlockBehaviour for RedstoneBlock {
         Box::pin(async move { true })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn redstone_block_id_parity() {
+        assert_eq!(Block::REDSTONE_BLOCK.name, "redstone_block");
+    }
+
+    #[test]
+    fn redstone_block_default_state_parity() {
+        assert_ne!(
+            Block::REDSTONE_BLOCK.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+}

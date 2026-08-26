@@ -64,6 +64,17 @@ pub enum Furnace {
     MaximumProgress,
 }
 
+impl WindowPropertyTrait for Furnace {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::FireIcon => 0,
+            Self::MaximumFuelBurnTime => 1,
+            Self::ProgressArrow => 2,
+            Self::MaximumProgress => 3,
+        }
+    }
+}
+
 /// Enchantment table window properties.
 pub enum EnchantmentTable {
     /// Experience level requirement for a specific slot.
@@ -102,6 +113,16 @@ pub enum Beacon {
     SecondPotionEffect,
 }
 
+impl WindowPropertyTrait for Beacon {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::PowerLevel => 0,
+            Self::FirstPotionEffect => 1,
+            Self::SecondPotionEffect => 2,
+        }
+    }
+}
+
 /// Anvil window properties.
 pub enum Anvil {
     /// Total repair cost in experience levels.
@@ -124,10 +145,27 @@ pub enum BrewingStand {
     FuelTime,
 }
 
+impl WindowPropertyTrait for BrewingStand {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::BrewTime => 0,
+            Self::FuelTime => 1,
+        }
+    }
+}
+
 /// Stonecutter window properties.
 pub enum Stonecutter {
     /// ID of the selected recipe.
     SelectedRecipe,
+}
+
+impl WindowPropertyTrait for Stonecutter {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::SelectedRecipe => 0,
+        }
+    }
 }
 
 /// Loom window properties.
@@ -136,8 +174,52 @@ pub enum Loom {
     SelectedPattern,
 }
 
+impl WindowPropertyTrait for Loom {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::SelectedPattern => 0,
+        }
+    }
+}
+
 /// Lectern window properties.
 pub enum Lectern {
     /// Current page number being viewed.
     PageNumber,
+}
+
+impl WindowPropertyTrait for Lectern {
+    fn to_id(self) -> i16 {
+        match self {
+            Self::PageNumber => 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_property_ids_parity() {
+        assert_eq!(Furnace::FireIcon.to_id(), 0);
+        assert_eq!(Furnace::MaximumFuelBurnTime.to_id(), 1);
+        assert_eq!(Furnace::ProgressArrow.to_id(), 2);
+        assert_eq!(Furnace::MaximumProgress.to_id(), 3);
+
+        assert_eq!(Beacon::PowerLevel.to_id(), 0);
+        assert_eq!(Beacon::FirstPotionEffect.to_id(), 1);
+        assert_eq!(Beacon::SecondPotionEffect.to_id(), 2);
+
+        assert_eq!(BrewingStand::BrewTime.to_id(), 0);
+        assert_eq!(BrewingStand::FuelTime.to_id(), 1);
+
+        assert_eq!(Anvil::RepairCost.to_id(), 0);
+        assert_eq!(Stonecutter::SelectedRecipe.to_id(), 0);
+        assert_eq!(Loom::SelectedPattern.to_id(), 0);
+        assert_eq!(Lectern::PageNumber.to_id(), 0);
+
+        let wp = WindowProperty::new(Furnace::ProgressArrow, 100);
+        assert_eq!(wp.into_tuple(), (2, 100));
+    }
 }

@@ -399,7 +399,7 @@ impl CreakingEntity {
 impl NBTStorage for CreakingEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.write_nbt(nbt).await;
+            self.mob_entity.write_nbt(nbt).await;
             if let Some(pos) = self.get_home_pos() {
                 let mut sub = NbtCompound::new();
                 sub.put_int("x", pos.0.x);
@@ -412,7 +412,7 @@ impl NBTStorage for CreakingEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.mob_entity.living_entity.read_nbt_non_mut(nbt).await;
+            self.mob_entity.read_nbt_non_mut(nbt).await;
             if let Some(sub) = nbt.get_compound("home_pos")
                 && let (Some(x), Some(y), Some(z)) =
                     (sub.get_int("x"), sub.get_int("y"), sub.get_int("z"))
@@ -542,5 +542,21 @@ impl Mob for CreakingEntity {
             }
             true
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creaking_constants_and_timing_parity() {
+        assert_eq!(MAX_HEALTH, 1.0);
+        assert_eq!(ATTACK_DAMAGE, 3.0);
+        assert_eq!(FOLLOW_RANGE, 32.0);
+        assert_eq!(ATTACK_INTERVAL, 40);
+        assert_eq!(INVULNERABILITY_ANIMATION_DURATION, 8);
+        assert_eq!(TWITCH_DEATH_DURATION, 45);
+        assert_eq!(MAX_PLAYER_STUCK_COUNTER, 4);
     }
 }

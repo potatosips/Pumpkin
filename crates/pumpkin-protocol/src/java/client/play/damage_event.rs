@@ -56,7 +56,8 @@ impl ClientPacket for CDamageEvent {
         _version: &JavaMinecraftVersion,
     ) -> Result<(), crate::ser::WritingError> {
         write.write_var_int(&self.entity_id)?;
-        write.write_var_int(&self.source_type_id)?;
+        let source_type_id = damage_type_id_for_version(self.source_type_id.0, _version);
+        write.write_var_int(&VarInt(source_type_id))?;
         write.write_var_int(&self.source_cause_id)?;
         write.write_var_int(&self.source_direct_id)?;
         if let Some(pos) = &self.source_position {
@@ -68,5 +69,38 @@ impl ClientPacket for CDamageEvent {
             write.write_bool(false)?;
         }
         Ok(())
+    }
+}
+
+fn damage_type_id_for_version(id: i32, version: &JavaMinecraftVersion) -> i32 {
+    if *version != JavaMinecraftVersion::V_1_21_4 {
+        return id;
+    }
+
+    match id {
+        // Spear does not exist in 1.21.4; player attack is the closest Vanilla source.
+        37 => 34,
+        // Sulfur-cube heat does not exist in 1.21.4; use hot floor.
+        42 => 20,
+        // 26.2 inserted spear at 37 and sulfur_cube_hot at 42.
+        38..=41 => id - 1,
+        43..=50 => id - 2,
+        _ => id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remaps_post_1_21_4_damage_registry_insertions() {
+        let version = JavaMinecraftVersion::V_1_21_4;
+        assert_eq!(damage_type_id_for_version(49, &version), 47); // wither
+        assert_eq!(damage_type_id_for_version(50, &version), 48); // wither skull
+        assert_eq!(damage_type_id_for_version(43, &version), 41); // sweet berry bush
+        assert_eq!(damage_type_id_for_version(36, &version), 36); // sonic boom
+        assert_eq!(damage_type_id_for_version(37, &version), 34); // spear fallback
+        assert_eq!(damage_type_id_for_version(42, &version), 20); // sulfur heat fallback
     }
 }

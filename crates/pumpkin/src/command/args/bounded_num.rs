@@ -329,3 +329,27 @@ where
         self.name.expect("Only use *_default variants of methods with a BoundedNumArgumentConsumer that has a name.")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_num_conversion_and_bounds_parity() {
+        let consumer_i32 = BoundedNumArgumentConsumer::<i32>::new().min(1).max(10);
+        assert_eq!(consumer_i32.min_inclusive, Some(1));
+        assert_eq!(consumer_i32.max_inclusive, Some(10));
+
+        let num_i32 = 5i32.to_number();
+        assert_eq!(i32::from_number(&num_i32), Some(5));
+        assert_eq!(f64::from_number(&num_i32), None);
+
+        let consumer_f64 = BoundedNumArgumentConsumer::<f64>::new().min(0.0).max(1.0);
+        assert_eq!(consumer_f64.min_inclusive, Some(0.0));
+        assert_eq!(consumer_f64.max_inclusive, Some(1.0));
+
+        let num_f64 = 0.75f64.to_number();
+        assert_eq!(f64::from_number(&num_f64), Some(0.75));
+        assert_eq!(i32::from_number(&num_f64), None);
+    }
+}

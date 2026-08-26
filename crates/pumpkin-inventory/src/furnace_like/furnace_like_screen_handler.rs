@@ -217,3 +217,194 @@ impl ScreenHandler for FurnaceLikeScreenHandler {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::screen_handler::PlayerFuture;
+    use pumpkin_data::data_component_impl::EquipmentSlot;
+    use pumpkin_data::item::Item;
+    use pumpkin_data::statistic::StatisticCategory;
+    use pumpkin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+    use pumpkin_world::inventory::SimpleInventory;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicI32;
+    use tokio::sync::Mutex;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+        awarded_xp: Arc<AtomicI32>,
+    }
+
+    impl TestPlayer {
+        fn new() -> Self {
+            let equipment = Arc::new(Mutex::new(EntityEquipment::new()));
+            let mut equipment_slots = HashMap::new();
+            equipment_slots.insert(40, EquipmentSlot::OFF_HAND);
+            let inventory = Arc::new(PlayerInventory::new(equipment, Arc::new(equipment_slots)));
+            Self {
+                inventory,
+                awarded_xp: Arc::new(AtomicI32::new(0)),
+            }
+        }
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn drop_item(&self, _item: ItemStack, _retain_ownership: bool) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+        fn is_creative(&self) -> bool {
+            false
+        }
+        fn experience_level(&self) -> i32 {
+            0
+        }
+        fn add_experience_levels(&self, _levels: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+        fn set_enchantment_seed(&self, _seed: i32) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_inventory_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_cursor_packet<'a>(
+            &'a self,
+            _packet: &'a CSetCursorItem,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_property_packet<'a>(
+            &'a self,
+            _packet: &'a CSetContainerProperty,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_slot_set_packet<'a>(
+            &'a self,
+            _packet: &'a CSetPlayerInventory,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_set_held_item_packet<'a>(
+            &'a self,
+            _packet: &'a CSetSelectedSlot,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn enqueue_equipment_change<'a>(
+            &'a self,
+            _slot: &'a EquipmentSlot,
+            _stack: &'a ItemStack,
+        ) -> PlayerFuture<'a, ()> {
+            Box::pin(async {})
+        }
+        fn award_experience(&self, amount: i32) -> PlayerFuture<'_, ()> {
+            let xp = self.awarded_xp.clone();
+            Box::pin(async move {
+                xp.fetch_add(amount, std::sync::atomic::Ordering::Relaxed);
+            })
+        }
+        fn increment_stat(
+            &self,
+            _category: StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) -> PlayerFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    struct MockExperienceContainer {
+        xp: AtomicI32,
+    }
+
+    impl ExperienceContainer for MockExperienceContainer {
+        fn extract_experience(&self) -> i32 {
+            self.xp.swap(0, std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    struct MockPropertyDelegate;
+    impl PropertyDelegate for MockPropertyDelegate {
+        fn get_property(&self, _index: i32) -> i32 {
+            0
+        }
+        fn set_property(&self, _index: i32, _value: i32) {}
+        fn get_properties_size(&self) -> i32 {
+            4
+        }
+    }
+
+    #[tokio::test]
+    async fn furnace_slots_filtering_and_quick_move() {
+        let player = TestPlayer::new();
+        let inv = Arc::new(SimpleInventory::new(3));
+        let xp_container = Arc::new(MockExperienceContainer {
+            xp: AtomicI32::new(10),
+        });
+        let prop_delegate = Arc::new(MockPropertyDelegate);
+
+        let mut handler = FurnaceLikeScreenHandler::new(
+            1,
+            &player.inventory,
+            inv.clone(),
+            prop_delegate,
+            xp_container,
+            WindowType::Furnace,
+        )
+        .await;
+
+        // Slot 0 (top/input) accepts raw iron
+        let raw_iron = ItemStack::new(10, &Item::RAW_IRON);
+        assert!(handler.behaviour.slots[0].can_insert(&raw_iron).await);
+
+        // Slot 1 (fuel) accepts coal, rejects raw iron
+        let coal = ItemStack::new(10, &Item::COAL);
+        assert!(handler.behaviour.slots[1].can_insert(&coal).await);
+        assert!(!handler.behaviour.slots[1].can_insert(&raw_iron).await);
+
+        // Slot 2 (output) rejects manual insertion
+        let iron_ingot = ItemStack::new(10, &Item::IRON_INGOT);
+        assert!(!handler.behaviour.slots[2].can_insert(&iron_ingot).await);
+
+        // Taking from output slot awards XP
+        handler.behaviour.slots[2]
+            .set_stack(iron_ingot.clone())
+            .await;
+        let taken = handler.quick_move(&player, 2).await;
+        assert_eq!(taken.item_count, 10);
+        assert_eq!(
+            player.awarded_xp.load(std::sync::atomic::Ordering::Relaxed),
+            10
+        );
+    }
+}

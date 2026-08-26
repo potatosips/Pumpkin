@@ -7,13 +7,25 @@ use pumpkin_macros::pumpkin_block;
 use pumpkin_world::world::BlockFlags;
 
 use crate::block::registry::BlockActionResult;
-use crate::block::{BlockBehaviour, BlockFuture, NormalUseArgs, UseWithItemArgs};
+use crate::block::{
+    BlockBehaviour, BlockFuture, GetComparatorOutputArgs, NormalUseArgs, UseWithItemArgs,
+};
 use crate::entity::EntityBase;
 
 #[pumpkin_block("minecraft:respawn_anchor")]
 pub struct RespawnAnchorBlock;
 
 impl BlockBehaviour for RespawnAnchorBlock {
+    fn get_comparator_output<'a>(
+        &'a self,
+        args: GetComparatorOutputArgs<'a>,
+    ) -> BlockFuture<'a, Option<u8>> {
+        Box::pin(async move {
+            let props = RespawnAnchorLikeProperties::from_state_id(args.state.id, args.block);
+            Some(Self::calculate_comparator_output(props.charges))
+        })
+    }
+
     fn use_with_item<'a>(
         &'a self,
         args: UseWithItemArgs<'a>,
@@ -62,7 +74,7 @@ impl BlockBehaviour for RespawnAnchorBlock {
                     .break_block(args.position, None, BlockFlags::SKIP_DROPS)
                     .await;
                 args.world
-                    .explode(args.position.to_centered_f64(), 5.0)
+                    .explode_with_fire(args.position.to_centered_f64(), 5.0)
                     .await;
                 return BlockActionResult::SuccessServer;
             }
@@ -113,5 +125,32 @@ impl BlockBehaviour for RespawnAnchorBlock {
 
             BlockActionResult::SuccessServer
         })
+    }
+}
+
+impl RespawnAnchorBlock {
+    #[must_use]
+    pub const fn calculate_comparator_output(charges: u8) -> u8 {
+        match charges {
+            1 => 3,
+            2 => 7,
+            3 => 11,
+            4 => 15,
+            _ => 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_respawn_anchor_comparator_charges_scaling() {
+        assert_eq!(RespawnAnchorBlock::calculate_comparator_output(0), 0);
+        assert_eq!(RespawnAnchorBlock::calculate_comparator_output(1), 3);
+        assert_eq!(RespawnAnchorBlock::calculate_comparator_output(2), 7);
+        assert_eq!(RespawnAnchorBlock::calculate_comparator_output(3), 11);
+        assert_eq!(RespawnAnchorBlock::calculate_comparator_output(4), 15);
     }
 }

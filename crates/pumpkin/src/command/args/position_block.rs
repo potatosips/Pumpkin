@@ -197,3 +197,20 @@ impl BlockPosArgumentConsumer {
         Ok(pos)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_and_world_block_position_parsing_parity() {
+        assert_eq!(parse_local_coordinate("^"), Some(0.0));
+        assert_eq!(parse_local_coordinate("^5.5"), Some(5.5));
+        assert_eq!(parse_local_coordinate("^-3"), Some(-3.0));
+        assert_eq!(parse_local_coordinate("10"), None);
+
+        // Local coordinate forward offset facing South (yaw=0, pitch=0)
+        let offset = apply_local_coordinates((0.0, 0.0), Vector3::new(0.0, 0.0, 5.0));
+        assert!((offset.y).abs() < 1e-5);
+    }
+}

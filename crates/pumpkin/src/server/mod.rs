@@ -2,6 +2,7 @@ use crate::block::registry::BlockRegistry;
 use crate::command::commands::default_dispatcher;
 use crate::command::commands::defaultgamemode::DefaultGamemode;
 use crate::data::VanillaData;
+use crate::data::command_storage::CommandStorage;
 use crate::data::player_server::ServerPlayerData;
 use crate::entity::{EntityBase, NBTStorage};
 use crate::item::registry::ItemRegistry;
@@ -63,7 +64,8 @@ pub mod ticker;
 pub use recipe::RecipeManager;
 
 use crate::command::args::entities::{
-    EntityFilter, EntityFilterSort, EntitySelectorType, TargetSelector, ValueCondition,
+    ComparableValueCondition, EntityFilter, EntityFilterSort, EntitySelectorType, TargetSelector,
+    ValueCondition,
 };
 use crate::data::advancement_data::AdvancementManager;
 use crate::server::scheduler::TaskScheduler;
@@ -118,6 +120,8 @@ pub struct Server {
     pub defaultgamemode: Mutex<DefaultGamemode>,
     /// Manages player data storage
     pub player_data_storage: ServerPlayerData,
+    /// Server-wide persistent NBT values used by `/data storage` and dynamic text components.
+    pub command_storage: CommandStorage,
     // Manages player advancement
     pub advancement_manager: Arc<AdvancementManager>,
     // Whether the server whitelist is on or off
@@ -228,6 +232,7 @@ impl Server {
             Duration::from_secs(advanced_config.player_data.save_player_cron_interval),
             advanced_config.player_data.save_player_data,
         );
+        let command_storage = CommandStorage::load(&world_path);
         let advancement_manager = Arc::new(AdvancementManager::new(
             players_dir.clone(),
             advanced_config.advancement.save_advancements,
@@ -278,6 +283,7 @@ impl Server {
             map_manager: MapManager::new(),
             defaultgamemode,
             player_data_storage,
+            command_storage,
             advancement_manager,
             white_list,
             tick_rate_manager,
@@ -557,8 +563,25 @@ impl Server {
             return Err(format!("Failed to save player advancements: {err}"));
         }
 
+        if let Err(err) = self.command_storage.save().await {
+            error!("Failed to save command storage: {err}");
+            return Err(format!("Failed to save command storage: {err}"));
+        }
+
         for world in self.worlds.load().iter() {
             world.save().await;
+        }
+
+        // `/save-all` must persist level.dat as well as chunks/player data.
+        // Gamerules and other LevelData fields live here in Java Edition and
+        // must survive a crash or forced stop after a successful save response.
+        let level_data = self.level_info.load();
+        if let Err(err) = self
+            .world_info_writer
+            .write_world_info(&level_data, &self.basic_config.get_world_path())
+        {
+            error!("Failed to save level.dat: {err}");
+            return Err(format!("Failed to save level.dat: {err}"));
         }
 
         Ok(())
@@ -693,6 +716,10 @@ impl Server {
         debug!("Awaiting tasks for server");
         self.tasks.wait().await;
         debug!("Done awaiting tasks for server");
+
+        if let Err(err) = self.command_storage.save().await {
+            error!("Failed to save command storage: {err}");
+        }
 
         info!("Starting worlds");
         for world in self.worlds.load().iter() {
@@ -1188,7 +1215,7 @@ impl Server {
     }
 
     #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
-    pub fn select_entities(
+    pub async fn select_entities(
         &self,
         target_selector: &TargetSelector,
         source: Option<&CommandSender>,
@@ -1261,6 +1288,198 @@ impl Server {
                 && (type_included.is_empty()
                     || type_included.contains(&entity.get_entity().entity_type))
         });
+
+        let source_pos = source.and_then(CommandSender::position).unwrap_or_default();
+        let exact = |condition: &ComparableValueCondition<f64>| match condition {
+            ComparableValueCondition::Equals(value) => Some(*value),
+            _ => None,
+        };
+        let coordinate = |pick: fn(&EntityFilter) -> Option<&ComparableValueCondition<f64>>,
+                          default| {
+            target_selector
+                .conditions
+                .iter()
+                .filter_map(pick)
+                .filter_map(exact)
+                .next_back()
+                .unwrap_or(default)
+        };
+        let origin = pumpkin_util::math::vector3::Vector3::new(
+            coordinate(
+                |f| {
+                    if let EntityFilter::X(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                source_pos.x,
+            ),
+            coordinate(
+                |f| {
+                    if let EntityFilter::Y(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                source_pos.y,
+            ),
+            coordinate(
+                |f| {
+                    if let EntityFilter::Z(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                source_pos.z,
+            ),
+        );
+
+        for condition in &target_selector.conditions {
+            if let EntityFilter::Distance(bounds) = condition {
+                entities.retain(|entity| {
+                    let distance = entity
+                        .get_entity()
+                        .pos
+                        .load()
+                        .squared_distance_to_vec(&origin)
+                        .sqrt();
+                    bounds.matches(&distance)
+                });
+            }
+        }
+
+        let delta = pumpkin_util::math::vector3::Vector3::new(
+            coordinate(
+                |f| {
+                    if let EntityFilter::Dx(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                0.0,
+            ),
+            coordinate(
+                |f| {
+                    if let EntityFilter::Dy(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                0.0,
+            ),
+            coordinate(
+                |f| {
+                    if let EntityFilter::Dz(v) = f {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                },
+                0.0,
+            ),
+        );
+        if target_selector.conditions.iter().any(|condition| {
+            matches!(
+                condition,
+                EntityFilter::Dx(_) | EntityFilter::Dy(_) | EntityFilter::Dz(_)
+            )
+        }) {
+            let bounds = pumpkin_util::math::boundingbox::BoundingBox::new(
+                pumpkin_util::math::vector3::Vector3::new(
+                    delta.x.min(0.0),
+                    delta.y.min(0.0),
+                    delta.z.min(0.0),
+                ),
+                pumpkin_util::math::vector3::Vector3::new(
+                    delta.x.max(0.0) + 1.0,
+                    delta.y.max(0.0) + 1.0,
+                    delta.z.max(0.0) + 1.0,
+                ),
+            )
+            .shift(origin);
+            entities.retain(|entity| entity.get_entity().bounding_box.load().intersects(&bounds));
+        }
+
+        // The legacy command argument consumers use this selector path. Apply
+        // scoreboard-tag predicates here as well; previously they were parsed
+        // but silently ignored, so `@e[tag=...]` selected arbitrary entities.
+        for condition in &target_selector.conditions {
+            let EntityFilter::Tag(condition) = condition else {
+                continue;
+            };
+            let mut filtered = Vec::with_capacity(entities.len());
+            for entity in entities {
+                let tags = entity.get_entity().scoreboard_tags.lock().await;
+                let matches = match condition {
+                    ValueCondition::Equals(tag) if tag.is_empty() => tags.is_empty(),
+                    ValueCondition::NotEquals(tag) if tag.is_empty() => !tags.is_empty(),
+                    ValueCondition::Equals(tag) => tags.contains(tag),
+                    ValueCondition::NotEquals(tag) => !tags.contains(tag),
+                };
+                drop(tags);
+                if matches {
+                    filtered.push(entity);
+                }
+            }
+            entities = filtered;
+        }
+
+        for condition in &target_selector.conditions {
+            let EntityFilter::Name(condition) = condition else {
+                continue;
+            };
+            entities.retain(|entity| {
+                let actual_name = if let Some(player) = entity.get_player() {
+                    player.gameprofile.name.clone()
+                } else if let Some(custom_name) = &**entity.get_entity().custom_name.load() {
+                    custom_name.clone().get_text()
+                } else {
+                    entity.get_entity().entity_type.resource_name.to_owned()
+                };
+                condition.matches(&actual_name)
+            });
+        }
+
+        for condition in &target_selector.conditions {
+            let EntityFilter::Team(condition) = condition else {
+                continue;
+            };
+            let mut filtered = Vec::with_capacity(entities.len());
+            for entity in entities {
+                let score_holder_name = if let Some(player) = entity.get_player() {
+                    player.gameprofile.name.clone()
+                } else {
+                    entity.get_entity().entity_uuid.to_string()
+                };
+                let world = entity.get_entity().world.load();
+                let scoreboard = world.scoreboard.lock().await;
+                let actual_team = scoreboard.get_teams().iter().find_map(|(team_name, team)| {
+                    team.players
+                        .contains(&score_holder_name)
+                        .then_some(team_name.as_str())
+                });
+                let matches = match condition {
+                    ValueCondition::Equals(expected) if expected.is_empty() => {
+                        actual_team.is_none()
+                    }
+                    ValueCondition::NotEquals(expected) if expected.is_empty() => {
+                        actual_team.is_some()
+                    }
+                    ValueCondition::Equals(expected) => actual_team == Some(expected.as_str()),
+                    ValueCondition::NotEquals(expected) => actual_team != Some(expected.as_str()),
+                };
+                drop(scoreboard);
+                if matches {
+                    filtered.push(entity);
+                }
+            }
+            entities = filtered;
+        }
 
         let limit = target_selector.get_limit();
         if limit == 0 {

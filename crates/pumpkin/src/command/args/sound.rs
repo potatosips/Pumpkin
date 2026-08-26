@@ -67,3 +67,26 @@ impl<'a> FindArg<'a> for SoundArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn vanilla_sound_lookup_and_invalid_sound_parity() {
+        let mut args = HashMap::new();
+        args.insert(
+            "available_sounds",
+            Arg::Block("entity.experience_orb.pickup"),
+        );
+
+        let res = SoundArgumentConsumer::find_arg(&args, "available_sounds");
+        assert!(res.is_ok());
+
+        let mut invalid_args = HashMap::new();
+        invalid_args.insert("available_sounds", Arg::Block("invalid.nonexistent.sound"));
+        let err_res = SoundArgumentConsumer::find_arg(&invalid_args, "available_sounds");
+        assert!(err_res.is_err());
+    }
+}

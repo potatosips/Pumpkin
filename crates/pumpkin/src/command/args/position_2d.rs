@@ -14,7 +14,8 @@ use super::{Arg, DefaultNameArgConsumer, FindArg, GetClientSideArgParser};
 
 /// x and z coordinates only
 ///
-/// todo: implement ~ ^ notations
+/// Supports Vanilla's absolute and `~` relative forms. The 1.21.4 `vec2`
+/// argument deliberately uses world coordinates and does not accept `^`.
 pub struct Position2DArgumentConsumer;
 
 impl GetClientSideArgParser for Position2DArgumentConsumer {
@@ -81,5 +82,22 @@ impl<'a> FindArg<'a> for Position2DArgumentConsumer {
             Some(Arg::Pos2D(data)) => Ok(*data),
             _ => Err(CommandError::InvalidConsumption(Some(name.to_string()))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_vec2_resolves_relative_coordinates() {
+        let result = MaybeRelativePosition2D::try_new("~1.5", "~-2")
+            .and_then(|position| position.try_to_absolute(Some(Vector3::new(10.0, 64.0, 20.0))));
+        assert_eq!(result, Some(Vector2::new(11.5, 18.0)));
+    }
+
+    #[test]
+    fn vanilla_vec2_rejects_local_coordinates() {
+        assert!(MaybeRelativePosition2D::try_new("^1", "^2").is_none());
     }
 }

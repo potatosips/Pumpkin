@@ -87,3 +87,48 @@ pub async fn handle_big_dripleaf_breaking(world: &Arc<World>, position: &BlockPo
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::block_properties::HorizontalFacing;
+
+    #[test]
+    fn big_dripleaf_stem_block_id_parity() {
+        assert_eq!(Block::BIG_DRIPLEAF_STEM.name, "big_dripleaf_stem");
+    }
+
+    #[test]
+    fn big_dripleaf_stem_properties_encoding_decoding_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::West,
+            HorizontalFacing::East,
+        ] {
+            for waterlogged in [false, true] {
+                let props = BigDripleafStemLikeProperties {
+                    facing,
+                    waterlogged,
+                };
+                let state_id = props.to_state_id(&Block::BIG_DRIPLEAF_STEM);
+                let decoded = BigDripleafStemLikeProperties::from_state_id(
+                    state_id,
+                    &Block::BIG_DRIPLEAF_STEM,
+                );
+                assert_eq!(decoded.facing, facing);
+                assert_eq!(decoded.waterlogged, waterlogged);
+            }
+        }
+    }
+
+    #[test]
+    fn big_dripleaf_stem_default_state_parity() {
+        let default_props = BigDripleafStemLikeProperties::from_state_id(
+            Block::BIG_DRIPLEAF_STEM.default_state.id,
+            &Block::BIG_DRIPLEAF_STEM,
+        );
+        assert_eq!(default_props.facing, HorizontalFacing::North);
+        assert!(!default_props.waterlogged);
+    }
+}

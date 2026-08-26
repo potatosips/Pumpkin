@@ -232,3 +232,28 @@ impl Player {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bossbar_color_and_division_bedrock_mappings_parity() {
+        assert_eq!(BossbarColor::Pink.to_bedrock(), VarInt(0));
+        assert_eq!(BossbarColor::Blue.to_bedrock(), VarInt(1));
+        assert_eq!(BossbarColor::Red.to_bedrock(), VarInt(2));
+        assert_eq!(BossbarColor::Green.to_bedrock(), VarInt(3));
+        assert_eq!(BossbarColor::Yellow.to_bedrock(), VarInt(4));
+        assert_eq!(BossbarColor::Purple.to_bedrock(), VarInt(5));
+        assert_eq!(BossbarColor::White.to_bedrock(), VarInt(6));
+
+        assert_eq!(BossbarDivisions::NoDivision.to_bedrock(), VarInt(0));
+        assert_eq!(BossbarDivisions::Notches6.to_bedrock(), VarInt(1));
+        assert_eq!(BossbarDivisions::Notches10.to_bedrock(), VarInt(2));
+        assert_eq!(BossbarDivisions::Notches12.to_bedrock(), VarInt(3));
+        assert_eq!(BossbarDivisions::Notches20.to_bedrock(), VarInt(4));
+
+        let flags = BossbarFlags::DARKEN_SKY | BossbarFlags::CREATE_FOG;
+        assert_eq!(flags.bits(), 0x01 | 0x04);
+    }
+}

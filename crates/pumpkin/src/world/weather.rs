@@ -78,7 +78,7 @@ impl Weather {
     }
 
     pub fn tick_weather(&mut self, world: &World) {
-        if !self.weather_cycle_enabled {
+        if self.weather_cycle_enabled {
             self.advance_weather_cycle();
         }
 
@@ -169,5 +169,34 @@ impl Clone for Weather {
             old_thunder_level: self.old_thunder_level,
             weather_cycle_enabled: self.weather_cycle_enabled,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_weather_cycle_initializes_clear_weather_delay() {
+        let mut weather = Weather::new();
+        weather.advance_weather_cycle();
+        assert!((RAIN_DELAY_MIN..=RAIN_DELAY_MAX).contains(&weather.rain_time));
+        assert!((THUNDER_DELAY_MIN..=THUNDER_DELAY_MAX).contains(&weather.thunder_time));
+        assert!(!weather.raining);
+        assert!(!weather.thundering);
+    }
+
+    #[test]
+    fn vanilla_weather_cycle_counts_down_active_timers() {
+        let mut weather = Weather::new();
+        weather.raining = true;
+        weather.thundering = true;
+        weather.rain_time = 2;
+        weather.thunder_time = 2;
+        weather.advance_weather_cycle();
+        assert_eq!(weather.rain_time, 1);
+        assert_eq!(weather.thunder_time, 1);
+        assert!(weather.raining);
+        assert!(weather.thundering);
     }
 }

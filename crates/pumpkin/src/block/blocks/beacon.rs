@@ -74,3 +74,19 @@ impl BlockBehaviour for BeaconBlock {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+
+    #[test]
+    fn beacon_block_id_parity() {
+        assert_eq!(Block::BEACON.name, "beacon");
+    }
+
+    #[test]
+    fn beacon_default_state_parity() {
+        assert_ne!(Block::BEACON.default_state.id, Block::AIR.default_state.id);
+    }
+}

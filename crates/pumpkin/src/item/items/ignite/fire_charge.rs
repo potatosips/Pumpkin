@@ -28,7 +28,7 @@ impl ItemMetadata for FireChargeItem {
 impl ItemBehaviour for FireChargeItem {
     fn use_on_block<'a>(
         &'a self,
-        _item: &'a mut ItemStack,
+        item: &'a mut ItemStack,
         player: &'a Player,
         location: BlockPos,
         face: BlockDirection,
@@ -38,7 +38,7 @@ impl ItemBehaviour for FireChargeItem {
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
             let world = player.world();
-            Ignition::ignite_block(
+            let ignited = Ignition::ignite_block(
                 |world: Arc<World>, pos: BlockPos, new_state_id: BlockStateId| async move {
                     world
                         .set_block_state(&pos, new_state_id, BlockFlags::NOTIFY_ALL)
@@ -52,6 +52,10 @@ impl ItemBehaviour for FireChargeItem {
                 block,
             )
             .await;
+
+            if ignited {
+                item.decrement_unless_creative(player.gamemode.load(), 1);
+            }
         })
     }
 

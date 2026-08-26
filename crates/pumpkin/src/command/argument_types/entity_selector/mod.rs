@@ -21,6 +21,7 @@ use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::math::wrap_degrees;
 use rand::seq::SliceRandom;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
@@ -125,18 +126,25 @@ impl EntitySelector {
             let bounding_box = self.absolute_bounding_box(origin);
             let predicate = self.predicate(origin, bounding_box);
             if self.is_current_entity {
-                Ok(source
-                    .entity
-                    .as_ref()
-                    .filter(|p| predicate.test(p.as_ref()))
-                    .map_or_else(Vec::new, |p| vec![p.clone()]))
+                if let Some(entity) = source.entity.as_ref()
+                    && predicate.test(entity.as_ref()).await
+                {
+                    Ok(vec![entity.clone()])
+                } else {
+                    Ok(Vec::new())
+                }
             } else {
                 let mut list = Vec::new();
                 if self.is_world_limited {
-                    self.add_entities(&mut list, source.world().as_ref(), bounding_box, &predicate);
+                    self.add_entities(&mut list, source.world().as_ref(), bounding_box, &predicate)
+                        .await;
                 } else {
                     for world in source.server().worlds.load().iter() {
-                        self.add_entities(&mut list, world, bounding_box, &predicate);
+                        self.add_entities(&mut list, world, bounding_box, &predicate)
+                            .await;
+                        if list.len() >= self.result_limit() {
+                            break;
+                        }
                     }
                 }
 
@@ -145,7 +153,7 @@ impl EntitySelector {
         }
     }
 
-    fn add_entities(
+    async fn add_entities(
         &self,
         list: &mut Vec<Arc<dyn EntityBase>>,
         world: &World,
@@ -153,10 +161,22 @@ impl EntitySelector {
         predicate: &EntitySelectorPredicate,
     ) {
         let limit = self.result_limit();
+        if list.len() >= limit {
+            return;
+        }
+        let mut candidates = Vec::new();
         if let Some(b) = bounding_box {
-            world.extend_entities_in_box_where(list, limit, b, |e| predicate.test(e));
+            world.extend_entities_in_box_where(&mut candidates, usize::MAX, b, |_| true);
         } else {
-            world.extend_entities_where(list, limit, |e| predicate.test(e));
+            world.extend_entities_where(&mut candidates, usize::MAX, |_| true);
+        }
+        for entity in candidates {
+            if predicate.test(entity.as_ref()).await {
+                list.push(entity);
+                if list.len() >= limit {
+                    break;
+                }
+            }
         }
     }
 
@@ -202,22 +222,25 @@ impl EntitySelector {
             let bounding_box = self.absolute_bounding_box(origin);
             let predicate = self.predicate(origin, bounding_box);
             if self.is_current_entity {
-                Ok(source
-                    .entity
-                    .as_ref()
-                    .and_then(|e| {
-                        source
-                            .server()
-                            .get_player_by_uuid(e.get_entity().entity_uuid)
-                    })
-                    .filter(|p| predicate.test(p.as_ref()))
-                    .map_or_else(Vec::new, |p| vec![p]))
+                let player = source.entity.as_ref().and_then(|e| {
+                    source
+                        .server()
+                        .get_player_by_uuid(e.get_entity().entity_uuid)
+                });
+                if let Some(player) = player
+                    && predicate.test(player.as_ref()).await
+                {
+                    Ok(vec![player])
+                } else {
+                    Ok(Vec::new())
+                }
             } else {
                 let limit = self.result_limit();
                 let mut list = Vec::new();
                 if limit > 0 {
                     if self.is_world_limited {
-                        Self::add_players_from_world(source.world(), &mut list, &predicate, limit);
+                        Self::add_players_from_world(source.world(), &mut list, &predicate, limit)
+                            .await;
                     } else {
                         for world in source.server().worlds.load().iter() {
                             Self::add_players_from_world(
@@ -225,7 +248,11 @@ impl EntitySelector {
                                 &mut list,
                                 &predicate,
                                 limit,
-                            );
+                            )
+                            .await;
+                            if list.len() >= limit {
+                                break;
+                            }
                         }
                     }
                 }
@@ -235,14 +262,17 @@ impl EntitySelector {
         }
     }
 
-    fn add_players_from_world(
+    async fn add_players_from_world(
         world: &World,
         list: &mut Vec<Arc<Player>>,
         predicate: &EntitySelectorPredicate,
         limit: usize,
     ) {
+        if list.len() >= limit {
+            return;
+        }
         for player in world.players.load().iter() {
-            if predicate.test(player.as_ref()) {
+            if predicate.test(player.as_ref()).await {
                 list.push(player.clone());
                 if list.len() >= limit {
                     return;
@@ -485,102 +515,113 @@ impl EntitySelectorPredicate {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn test(&self, entity: &dyn EntityBase) -> bool {
-        match self {
-            Self::IsAlive => entity.get_entity().is_alive(),
-            Self::GameMode(mode, invert) => entity
-                .get_player()
-                .is_some_and(|p| (p.gamemode.load() == *mode) ^ invert),
-            Self::ExperienceLevel(bounds) => entity
-                .get_player()
-                .is_some_and(|p| bounds.matches(p.experience_level.load(Ordering::Relaxed))),
-            Self::Rotation(bounds, f) => {
-                let min = wrap_degrees(bounds.min().unwrap_or(0.0f32));
-                let max = wrap_degrees(bounds.max().unwrap_or(360.0f32));
-                let degrees = wrap_degrees(f.value_from_entity(entity));
-                if min > max {
-                    degrees >= min || degrees <= max
-                } else {
-                    degrees >= min && degrees <= max
-                }
-            }
-            Self::BoundingBox(bounding_box) => entity
-                .get_entity()
-                .bounding_box
-                .load()
-                .intersects(bounding_box),
-            Self::Distance(bounds, pos) => {
-                bounds.matches_square(entity.get_entity().pos.load().squared_distance_to_vec(pos))
-            }
-            Self::EntityType(expected_type, invert) => {
-                let actual_type = entity.get_entity().entity_type;
-                (actual_type.id == expected_type.id) ^ invert
-            }
-            Self::Name(expected_name, invert) => {
-                let actual_name = entity_actual_name(entity);
-                (actual_name == *expected_name) ^ invert
-            }
-            Self::Tag(expected_tag, invert) => {
-                let has_tag = entity
-                    .get_entity()
-                    .scoreboard_tags
-                    .blocking_lock()
-                    .contains(expected_tag);
-                has_tag ^ invert
-            }
-            Self::Team(expected_team, invert) => {
-                let actual_name = entity_actual_name(entity);
-                let world = entity.get_entity().world.load();
-                let scoreboard = world.scoreboard.blocking_lock();
-                let has_team = scoreboard.get_teams().iter().any(|(name, team)| {
-                    name == expected_team && team.players.contains(&actual_name)
-                });
-                has_team ^ invert
-            }
-            Self::Scores(scores_map) => {
-                let actual_name = entity_actual_name(entity);
-                let world = entity.get_entity().world.load();
-                let scoreboard = world.scoreboard.blocking_lock();
-                let entity_scores = scoreboard.get_scores().get(&actual_name);
-                for (objective, bounds) in scores_map {
-                    let score_val = entity_scores
-                        .and_then(|obj_map| obj_map.get(objective))
-                        .map_or(0, |score| score.value.0);
-                    if !bounds.matches(score_val) {
-                        return false;
+    pub fn test<'a>(
+        &'a self,
+        entity: &'a dyn EntityBase,
+    ) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        Box::pin(async move {
+            match self {
+                Self::IsAlive => entity.get_entity().is_alive(),
+                Self::GameMode(mode, invert) => entity
+                    .get_player()
+                    .is_some_and(|p| (p.gamemode.load() == *mode) ^ invert),
+                Self::ExperienceLevel(bounds) => entity
+                    .get_player()
+                    .is_some_and(|p| bounds.matches(p.experience_level.load(Ordering::Relaxed))),
+                Self::Rotation(bounds, f) => {
+                    let min = wrap_degrees(bounds.min().unwrap_or(0.0f32));
+                    let max = wrap_degrees(bounds.max().unwrap_or(360.0f32));
+                    let degrees = wrap_degrees(f.value_from_entity(entity));
+                    if min > max {
+                        degrees >= min || degrees <= max
+                    } else {
+                        degrees >= min && degrees <= max
                     }
                 }
-                true
-            }
-            Self::Advancements(advancements_map) => {
-                let Some(player) = entity.get_player() else {
-                    return false;
-                };
-                let adv_mgr = player.advancements.blocking_lock();
-                for (adv_id, expected_done) in advancements_map {
-                    if let Some(advancement) = Advancement::from_name(adv_id) {
-                        let progress = adv_mgr.progress.map.get(advancement);
-                        let is_done = progress.is_some_and(AdvancementProgress::is_done);
-                        if is_done != *expected_done {
+                Self::BoundingBox(bounding_box) => entity
+                    .get_entity()
+                    .bounding_box
+                    .load()
+                    .intersects(bounding_box),
+                Self::Distance(bounds, pos) => bounds
+                    .matches_square(entity.get_entity().pos.load().squared_distance_to_vec(pos)),
+                Self::EntityType(expected_type, invert) => {
+                    let actual_type = entity.get_entity().entity_type;
+                    (actual_type.id == expected_type.id) ^ invert
+                }
+                Self::Name(expected_name, invert) => {
+                    let actual_name = entity_actual_name(entity);
+                    (actual_name == *expected_name) ^ invert
+                }
+                Self::Tag(expected_tag, invert) => {
+                    let has_tag = entity
+                        .get_entity()
+                        .scoreboard_tags
+                        .lock()
+                        .await
+                        .contains(expected_tag);
+                    has_tag ^ invert
+                }
+                Self::Team(expected_team, invert) => {
+                    let actual_name = entity_actual_name(entity);
+                    let world = entity.get_entity().world.load();
+                    let scoreboard = world.scoreboard.lock().await;
+                    let has_team = scoreboard.get_teams().iter().any(|(name, team)| {
+                        name == expected_team && team.players.contains(&actual_name)
+                    });
+                    has_team ^ invert
+                }
+                Self::Scores(scores_map) => {
+                    let actual_name = entity_actual_name(entity);
+                    let world = entity.get_entity().world.load();
+                    let scoreboard = world.scoreboard.lock().await;
+                    let entity_scores = scoreboard.get_scores().get(&actual_name);
+                    for (objective, bounds) in scores_map {
+                        let score_val = entity_scores
+                            .and_then(|obj_map| obj_map.get(objective))
+                            .map_or(0, |score| score.value.0);
+                        if !bounds.matches(score_val) {
                             return false;
                         }
-                    } else {
-                        return false;
                     }
+                    true
                 }
-                true
+                Self::Advancements(advancements_map) => {
+                    let Some(player) = entity.get_player() else {
+                        return false;
+                    };
+                    let adv_mgr = player.advancements.lock().await;
+                    for (adv_id, expected_done) in advancements_map {
+                        if let Some(advancement) = Advancement::from_name(adv_id) {
+                            let progress = adv_mgr.progress.map.get(advancement);
+                            let is_done = progress.is_some_and(AdvancementProgress::is_done);
+                            if is_done != *expected_done {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    }
+                    true
+                }
+                Self::Nbt(expected_nbt, invert) => {
+                    let mut actual_nbt = NbtCompound::default();
+                    entity.write_nbt(&mut actual_nbt).await;
+                    matches_nbt_compound(expected_nbt, &actual_nbt) ^ invert
+                }
+                Self::Predicate(_predicate_id, invert) => {
+                    // Since loot-table predicates are not yet fully implemented, we default to false (or true ^ invert)
+                    false ^ invert
+                }
+                Self::AllOf(predicates) => {
+                    for predicate in predicates {
+                        if !predicate.test(entity).await {
+                            return false;
+                        }
+                    }
+                    true
+                }
             }
-            Self::Nbt(expected_nbt, invert) => {
-                let mut actual_nbt = NbtCompound::default();
-                // write_nbt is asynchronous, so we can poll it synchronously because it does not do IO.
-                futures::executor::block_on(entity.write_nbt(&mut actual_nbt));
-                matches_nbt_compound(expected_nbt, &actual_nbt) ^ invert
-            }
-            Self::Predicate(_predicate_id, invert) => {
-                // Since loot-table predicates are not yet fully implemented, we default to false (or true ^ invert)
-                false ^ invert
-            }
-            Self::AllOf(predicates) => predicates.iter().all(|predicate| predicate.test(entity)),
-        }
+        })
     }
 }

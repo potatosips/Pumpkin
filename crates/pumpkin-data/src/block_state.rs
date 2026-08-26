@@ -94,7 +94,7 @@ impl BlockState {
 
     #[must_use]
     pub const fn replaceable(&self) -> bool {
-        self.state_flags & REPLACEABLE != 0
+        self.is_air() || (self.state_flags & REPLACEABLE != 0)
     }
 
     #[must_use]

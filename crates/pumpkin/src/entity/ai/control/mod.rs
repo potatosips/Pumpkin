@@ -14,4 +14,5 @@ pub trait Control: Send + Sync {
 
 pub trait MoveControlTrait: Control {
     fn tick(&mut self, mob: &dyn Mob);
+    fn strafe(&mut self, _forwards: f32, _right: f32) {}
 }

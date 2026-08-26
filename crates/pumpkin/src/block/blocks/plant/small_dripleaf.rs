@@ -136,3 +136,59 @@ fn supports_small_dripleaf(support_block: &Block, underwater: bool) -> bool {
     }
     underwater && support_block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BIG_DRIPLEAF)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::block_properties::HorizontalFacing;
+
+    #[test]
+    fn small_dripleaf_block_id_parity() {
+        assert_eq!(Block::SMALL_DRIPLEAF.name, "small_dripleaf");
+    }
+
+    #[test]
+    fn small_dripleaf_properties_encoding_decoding_parity() {
+        for facing in [
+            HorizontalFacing::North,
+            HorizontalFacing::South,
+            HorizontalFacing::West,
+            HorizontalFacing::East,
+        ] {
+            for half in [DoubleBlockHalf::Lower, DoubleBlockHalf::Upper] {
+                for waterlogged in [false, true] {
+                    let props = SmallDripleafLikeProperties {
+                        facing,
+                        half,
+                        waterlogged,
+                    };
+                    let state_id = props.to_state_id(&Block::SMALL_DRIPLEAF);
+                    let decoded = SmallDripleafLikeProperties::from_state_id(
+                        state_id,
+                        &Block::SMALL_DRIPLEAF,
+                    );
+                    assert_eq!(decoded.facing, facing);
+                    assert_eq!(decoded.half, half);
+                    assert_eq!(decoded.waterlogged, waterlogged);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn small_dripleaf_default_state_parity() {
+        let default_props = SmallDripleafLikeProperties::from_state_id(
+            Block::SMALL_DRIPLEAF.default_state.id,
+            &Block::SMALL_DRIPLEAF,
+        );
+        assert_eq!(default_props.facing, HorizontalFacing::North);
+        assert_eq!(default_props.half, DoubleBlockHalf::Lower);
+        assert!(!default_props.waterlogged);
+    }
+
+    #[test]
+    fn small_dripleaf_supports_tag_parity() {
+        assert!(Block::CLAY.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SMALL_DRIPLEAF));
+        assert!(Block::MOSS_BLOCK.has_tag(&tag::Block::MINECRAFT_SUPPORTS_SMALL_DRIPLEAF));
+    }
+}

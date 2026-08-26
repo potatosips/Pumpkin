@@ -267,7 +267,7 @@ impl SlimeEntity {
 impl NBTStorage for SlimeEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.entity.living_entity.write_nbt(nbt).await;
+            self.entity.write_nbt(nbt).await;
             nbt.put_int("Size", self.get_size() - 1);
             nbt.put_bool("wasOnGround", self.was_on_ground.load(Ordering::Relaxed));
         })
@@ -275,12 +275,13 @@ impl NBTStorage for SlimeEntity {
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
-            self.entity.living_entity.read_nbt_non_mut(nbt).await;
-            self.set_size(nbt.get_int("Size").unwrap_or(0) + 1, false);
-            self.was_on_ground.store(
-                nbt.get_bool("wasOnGround").unwrap_or(false),
-                Ordering::Relaxed,
-            );
+            self.entity.read_nbt_non_mut(nbt).await;
+            if let Some(size) = nbt.get_int("Size") {
+                self.set_size(size + 1, false);
+            }
+            if let Some(was_on_ground) = nbt.get_bool("wasOnGround") {
+                self.was_on_ground.store(was_on_ground, Ordering::Relaxed);
+            }
         })
     }
 }
@@ -675,5 +676,12 @@ mod tests {
         );
         assert_eq!(SlimeEntity::hurt_sound_for_size(0), Sound::EntitySlimeHurt);
         assert_eq!(SlimeEntity::hurt_sound_for_size(2), Sound::EntitySlimeHurt);
+    }
+
+    #[test]
+    fn rot_lerp_clamping_and_wrapping() {
+        assert_eq!(SlimeEntity::rot_lerp(0.0, 45.0, 90.0), 45.0);
+        assert_eq!(SlimeEntity::rot_lerp(0.0, 180.0, 90.0), 90.0);
+        assert_eq!(SlimeEntity::rot_lerp(350.0, 10.0, 90.0), 370.0);
     }
 }

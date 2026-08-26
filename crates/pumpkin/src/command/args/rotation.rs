@@ -87,3 +87,23 @@ impl<'a> FindArg<'a> for RotationArgumentConsumer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_angle_normalization_and_relative_offsets_parity() {
+        // Absolute angles normalize to [-180, 180)
+        assert_eq!(parse_rotation_component("0.0"), Some((0.0, false)));
+        assert_eq!(parse_rotation_component("90.0"), Some((90.0, false)));
+        assert_eq!(parse_rotation_component("270.0"), Some((-90.0, false)));
+        assert_eq!(parse_rotation_component("360.0"), Some((0.0, false)));
+        assert_eq!(parse_rotation_component("450.0"), Some((90.0, false)));
+
+        // Relative angles
+        assert_eq!(parse_rotation_component("~"), Some((0.0, true)));
+        assert_eq!(parse_rotation_component("~45.0"), Some((45.0, true)));
+        assert_eq!(parse_rotation_component("~-15.5"), Some((-15.5, true)));
+    }
+}

@@ -142,3 +142,43 @@ impl ObserverBlock {
         world.schedule_block_tick(&Block::OBSERVER, *block_pos, 2, TickPriority::Normal);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pumpkin_data::Block;
+    use pumpkin_data::block_properties::{BlockProperties, Facing, ObserverLikeProperties};
+
+    #[test]
+    fn observer_block_id_parity() {
+        assert_eq!(Block::OBSERVER.name, "observer");
+    }
+
+    #[test]
+    fn observer_default_state_parity() {
+        assert_ne!(
+            Block::OBSERVER.default_state.id,
+            Block::AIR.default_state.id
+        );
+    }
+
+    #[test]
+    fn observer_properties_roundtrip_parity() {
+        for facing in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            for powered in [true, false] {
+                let props = ObserverLikeProperties { facing, powered };
+                let state_id = props.to_state_id(&Block::OBSERVER);
+                let rt = ObserverLikeProperties::from_state_id(state_id, &Block::OBSERVER);
+                assert_eq!(rt.facing, facing);
+                assert_eq!(rt.powered, powered);
+            }
+        }
+    }
+}

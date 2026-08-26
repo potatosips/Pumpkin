@@ -45,11 +45,8 @@ enum Mode {
 
 struct Executor(Mode);
 
-fn not_in_filter(filter: &BlockPredicate, old_block: &Block) -> bool {
-    match filter {
-        BlockPredicate::Tag(tag) => !tag.contains(&old_block.id.as_u16()),
-        BlockPredicate::Block(block) => *block != old_block.id,
-    }
+fn not_in_filter(filter: &BlockPredicate, old_block: &Block, old_state: BlockStateId) -> bool {
+    !filter.matches(old_block, old_state)
 }
 
 enum FillerResult {
@@ -115,8 +112,10 @@ trait Filler {
 struct DestroyFiller;
 impl Filler for DestroyFiller {
     async fn execute_for_pos(context: &Context, block_position: BlockPos) -> FillerResult {
+        let old_block = context.world.get_block(&block_position);
+        let old_state = context.world.get_block_state_id(&block_position);
         if let Some(filter) = &context.option_filter
-            && not_in_filter(filter, context.world.get_block(&block_position))
+            && not_in_filter(filter, old_block, old_state)
         {
             return FillerResult::DidNotPlaceBlock;
         }
@@ -143,8 +142,10 @@ impl Filler for DestroyFiller {
 struct HollowFiller;
 impl Filler for HollowFiller {
     async fn execute_for_pos(context: &Context, block_position: BlockPos) -> FillerResult {
+        let old_block = context.world.get_block(&block_position);
+        let old_state = context.world.get_block_state_id(&block_position);
         if let Some(filter) = &context.option_filter
-            && not_in_filter(filter, context.world.get_block(&block_position))
+            && not_in_filter(filter, old_block, old_state)
         {
             return FillerResult::DidNotPlaceBlock;
         }
@@ -173,7 +174,7 @@ impl Filler for KeepFiller {
         let (old_block, old_state) = context.world.get_block_and_state(&block_position);
         if old_state.is_air() {
             if let Some(filter) = &context.option_filter
-                && not_in_filter(filter, old_block)
+                && not_in_filter(filter, old_block, old_state.id)
             {
                 return FillerResult::DidNotPlaceBlock;
             }
@@ -198,8 +199,10 @@ impl Filler for OutlineFiller {
         if !context.is_edge(block_position) {
             return FillerResult::DidNotPlaceBlock;
         }
+        let old_block = context.world.get_block(&block_position);
+        let old_state = context.world.get_block_state_id(&block_position);
         if let Some(filter) = &context.option_filter
-            && not_in_filter(filter, context.world.get_block(&block_position))
+            && not_in_filter(filter, old_block, old_state)
         {
             return FillerResult::DidNotPlaceBlock;
         }
@@ -218,8 +221,10 @@ impl Filler for OutlineFiller {
 struct ReplaceFiller;
 impl Filler for ReplaceFiller {
     async fn execute_for_pos(context: &Context, block_position: BlockPos) -> FillerResult {
+        let old_block = context.world.get_block(&block_position);
+        let old_state = context.world.get_block_state_id(&block_position);
         if let Some(filter) = &context.option_filter
-            && not_in_filter(filter, context.world.get_block(&block_position))
+            && not_in_filter(filter, old_block, old_state)
         {
             return FillerResult::DidNotPlaceBlock;
         }
@@ -238,8 +243,10 @@ impl Filler for ReplaceFiller {
 struct StrictFiller;
 impl Filler for StrictFiller {
     async fn execute_for_pos(context: &Context, block_position: BlockPos) -> FillerResult {
+        let old_block = context.world.get_block(&block_position);
+        let old_state = context.world.get_block_state_id(&block_position);
         if let Some(filter) = &context.option_filter
-            && not_in_filter(filter, context.world.get_block(&block_position))
+            && not_in_filter(filter, old_block, old_state)
         {
             return FillerResult::DidNotPlaceBlock;
         }
@@ -263,8 +270,7 @@ impl CommandExecutor for Executor {
         args: &'a ConsumedArgs<'a>,
     ) -> CommandResult<'a> {
         Box::pin(async move {
-            let block = BlockArgumentConsumer::find_arg(args, ARG_BLOCK)?;
-            let block_state_id = block.default_state.id;
+            let (_, block_state_id) = BlockArgumentConsumer::find_state_arg(args, ARG_BLOCK)?;
             let from = BlockPosArgumentConsumer::find_arg(args, ARG_FROM)?;
             let to = BlockPosArgumentConsumer::find_arg(args, ARG_TO)?;
             let mode = self.0;

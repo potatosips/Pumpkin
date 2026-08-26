@@ -13,6 +13,7 @@ pub mod arrow;
 pub mod egg;
 pub mod ender_pearl;
 pub mod evoker_fangs;
+pub mod experience_bottle;
 pub mod eye_of_ender;
 pub mod fireball;
 pub mod firework_rocket;
@@ -36,6 +37,7 @@ pub fn is_projectile(entity_type: &EntityType) -> bool {
         || *entity_type == EntityType::SPLASH_POTION
         || *entity_type == EntityType::LINGERING_POTION
         || *entity_type == EntityType::ENDER_PEARL
+        || *entity_type == EntityType::EXPERIENCE_BOTTLE
         || *entity_type == EntityType::SHULKER_BULLET
         || *entity_type == EntityType::FIREBALL
         || *entity_type == EntityType::SMALL_FIREBALL
@@ -124,7 +126,9 @@ impl ThrownItemEntity {
 
         // Apply gravity and inertia
         let mut velocity = entity.velocity.load();
-        velocity.y -= self.get_gravity();
+        if !entity.has_no_gravity() {
+            velocity.y -= self.get_gravity();
+        }
 
         let inertia = if entity.touching_water.load(Ordering::Relaxed) {
             0.8
@@ -358,5 +362,26 @@ impl ProjectileHit {
             Self::Block { face, .. } => Some(*face),
             Self::Entity { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projectile_type_coverage() {
+        assert!(is_projectile(&EntityType::ARROW));
+        assert!(is_projectile(&EntityType::TRIDENT));
+        assert!(is_projectile(&EntityType::SNOWBALL));
+        assert!(is_projectile(&EntityType::EGG));
+        assert!(is_projectile(&EntityType::WIND_CHARGE));
+        assert!(is_projectile(&EntityType::ENDER_PEARL));
+        assert!(is_projectile(&EntityType::EXPERIENCE_BOTTLE));
+        assert!(is_projectile(&EntityType::FIREBALL));
+        assert!(is_projectile(&EntityType::SMALL_FIREBALL));
+        assert!(is_projectile(&EntityType::FISHING_BOBBER));
+        assert!(!is_projectile(&EntityType::ZOMBIE));
+        assert!(!is_projectile(&EntityType::PLAYER));
     }
 }
