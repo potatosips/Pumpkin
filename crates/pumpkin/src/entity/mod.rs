@@ -799,6 +799,23 @@ fn collision_rules_allow(
     true
 }
 
+fn suffocation_eye_level_box(
+    mut bounding_box: BoundingBox,
+    eye_height: f64,
+    entity_width: f32,
+) -> BoundingBox {
+    let eye_width = f64::from(entity_width) * 0.8;
+    let shrink_x = (bounding_box.max.x - bounding_box.min.x - eye_width) / 2.0;
+    let shrink_z = (bounding_box.max.z - bounding_box.min.z - eye_width) / 2.0;
+    bounding_box.min.x += shrink_x;
+    bounding_box.max.x -= shrink_x;
+    bounding_box.min.z += shrink_z;
+    bounding_box.max.z -= shrink_z;
+    bounding_box.min.y += eye_height;
+    bounding_box.max.y = bounding_box.min.y;
+    bounding_box
+}
+
 pub async fn pushable_by(source: &Arc<dyn EntityBase>, candidate: &Arc<dyn EntityBase>) -> bool {
     if !candidate.is_pushable() {
         return false;
@@ -1682,10 +1699,7 @@ impl Entity {
         let min = aabb.min_block_pos();
         let max = aabb.max_block_pos();
 
-        let eye_height = self.get_eye_height();
-        let mut eye_level_box = aabb;
-        eye_level_box.min.y += eye_height;
-        eye_level_box.max.y = eye_level_box.min.y;
+        let eye_level_box = suffocation_eye_level_box(aabb, self.get_eye_height(), self.width());
 
         let mut suffocating = false;
         let world = self.world.load();
@@ -4234,6 +4248,22 @@ mod tests {
             1.0,
         );
         assert_eq!(floor, Vector3::new(0.2, 0.0, 0.0));
+    }
+
+    #[test]
+    fn suffocation_probe_uses_vanillas_narrow_eye_slice() {
+        let probe = suffocation_eye_level_box(
+            BoundingBox::new(Vector3::new(1.0, 2.0, 3.0), Vector3::new(2.0, 4.0, 4.0)),
+            1.62,
+            1.0,
+        );
+
+        assert!((probe.min.x - 1.1).abs() < f64::EPSILON);
+        assert!((probe.max.x - 1.9).abs() < f64::EPSILON);
+        assert!((probe.min.z - 3.1).abs() < f64::EPSILON);
+        assert!((probe.max.z - 3.9).abs() < f64::EPSILON);
+        assert!((probe.min.y - 3.62).abs() < f64::EPSILON);
+        assert_eq!(probe.max.y, probe.min.y);
     }
 
     #[test]
