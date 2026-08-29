@@ -2,6 +2,30 @@
 
 High-performance, multithreaded Minecraft server written in Rust, featuring comprehensive vanilla parity across Java 1.21.4.
 
+> ## 🎮 Join the Public Server
+>
+> **Server address:** `pumpkinmc.dnslab.win`<br>
+> **Supported versions:** Java Edition **1.7.2–26.2**<br>
+> **Recommended version:** Java Edition **1.21.4**<br>
+> **Location:** Singapore<br>
+> **Server hardware:** 2 vCPU (Arm Neoverse-N1) and 11 GiB RAM
+>
+> Add the address in **Multiplayer → Add Server**. For the most thoroughly tested
+> experience and best compatibility, connect with an unmodified 1.21.4 client.
+
+> ## 🐛 Found a Problem on the Server?
+>
+> If you find any bug, crash, disconnect, Vanilla behavior mismatch, or other issue
+> while playing on the Pumpkin server, please create a **super-detailed GitHub issue**.
+> Include what happened, what you expected, your exact Minecraft version, reproduction
+> steps, relevant logs or screenshots, and whether the problem happens consistently.
+>
+> **If you know how to fix the problem, please also submit a pull request** containing
+> the solution, focused tests, and a clear explanation of how you validated it.
+>
+> [Create a detailed issue](https://github.com/potatosips/Pumpkin/issues/new) ·
+> [Open a pull request](https://github.com/potatosips/Pumpkin/compare)
+
 ---
 
 ## ⚡ Quick Navigation
