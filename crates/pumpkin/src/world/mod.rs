@@ -5113,7 +5113,10 @@ impl World {
         }
     }
 
-    /// Sets a block and returns the old block id
+    /// Sets a block and returns the old block id.
+    ///
+    /// Callers must not hold `portal_poi` while awaiting this method because block updates may
+    /// acquire that lock to maintain point-of-interest state.
     #[expect(clippy::too_many_lines)]
     pub async fn set_block_state(
         self: &Arc<Self>,
