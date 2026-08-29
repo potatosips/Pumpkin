@@ -289,6 +289,16 @@ impl EntityBase for TridentEntity {
             if let Some(h) = hit
                 && !self.has_hit.swap(true, Ordering::SeqCst)
             {
+                if let ProjectileHit::Block { pos, .. } = &h {
+                    super::handle_block_breaking_projectile_impact(
+                        &world,
+                        entity.entity_type,
+                        self.owner_id,
+                        entity.velocity.load(),
+                        pos,
+                    )
+                    .await;
+                }
                 caller.on_hit(h).await;
             }
         })

@@ -11,12 +11,14 @@ use crate::command::errors::error_types::CommandErrorType;
 use crate::command::node::dispatcher::CommandDispatcher;
 use crate::command::node::{CommandExecutor, CommandExecutorResult};
 use crate::entity::EntityBase;
-use crate::world::scoreboard::{CollisionRule, NameTagVisibility, Team};
+use crate::world::scoreboard::{CollisionRule, DeathMessageVisibility, NameTagVisibility, Team};
 use pumpkin_data::translation;
 use pumpkin_util::PermissionLvl;
 use pumpkin_util::permission::{Permission, PermissionDefault, PermissionRegistry};
-use pumpkin_util::text::TextComponent;
+use pumpkin_util::text::click::ClickEvent;
 use pumpkin_util::text::color::NamedColor;
+use pumpkin_util::text::hover::HoverEvent;
+use pumpkin_util::text::{TextComponent, TextContent, TranslationArgument};
 
 const DESCRIPTION: &str = "Manages teams.";
 const PERMISSION: &str = "minecraft:command.team";
@@ -37,7 +39,7 @@ const TEAM_NOT_FOUND_ERROR: CommandErrorType<1> = CommandErrorType::new(
     translation::java::TEAM_NOTFOUND,
 );
 
-const EMPTY_UNCHANGED_ERROR: CommandErrorType<1> = CommandErrorType::new(
+const EMPTY_UNCHANGED_ERROR: CommandErrorType<0> = CommandErrorType::new(
     translation::java::COMMANDS_TEAM_EMPTY_UNCHANGED,
     translation::java::COMMANDS_TEAM_EMPTY_UNCHANGED,
 );
@@ -55,6 +57,11 @@ const NAME_UNCHANGED_ERROR: CommandErrorType<0> = CommandErrorType::new(
 const NAMETAG_VISIBILITY_UNCHANGED_ERROR: CommandErrorType<0> = CommandErrorType::new(
     translation::java::COMMANDS_TEAM_OPTION_NAMETAGVISIBILITY_UNCHANGED,
     translation::java::COMMANDS_TEAM_OPTION_NAMETAGVISIBILITY_UNCHANGED,
+);
+
+const DEATH_MESSAGE_VISIBILITY_UNCHANGED_ERROR: CommandErrorType<0> = CommandErrorType::new(
+    translation::java::COMMANDS_TEAM_OPTION_DEATHMESSAGEVISIBILITY_UNCHANGED,
+    translation::java::COMMANDS_TEAM_OPTION_DEATHMESSAGEVISIBILITY_UNCHANGED,
 );
 
 const COLLISION_RULE_UNCHANGED_ERROR: CommandErrorType<0> = CommandErrorType::new(
@@ -89,6 +96,41 @@ fn get_entity_scoreboard_name(entity: &dyn EntityBase) -> String {
     )
 }
 
+fn formatted_team_display_name(team: &Team) -> TextComponent {
+    let display_name = team
+        .display_name
+        .clone()
+        .hover_event(HoverEvent::show_text(TextComponent::text(
+            team.name.clone(),
+        )))
+        .insertion(team.name.clone());
+    TextComponent::translate_cross(
+        translation::java::CHAT_SQUARE_BRACKETS,
+        translation::java::CHAT_SQUARE_BRACKETS,
+        [display_name],
+    )
+}
+
+fn formatted_score_holder(name: &str) -> TextComponent {
+    TextComponent::text(name.to_string())
+        .click_event(ClickEvent::SuggestCommand {
+            command: format!("/tell {name} ").into(),
+        })
+        .hover_event(HoverEvent::show_text(TextComponent::text(name.to_string())))
+        .insertion(name.to_string())
+}
+
+fn formatted_joined_score_holder(team: &Team, name: &str) -> TextComponent {
+    let mut component = formatted_score_holder(name);
+    component.0.content = Box::new(TextContent::Text { text: "".into() });
+    component.0.extra = vec![
+        team.player_prefix.0.clone(),
+        TextComponent::text(name.to_string()).0,
+        team.player_suffix.0.clone(),
+    ];
+    component
+}
+
 struct TeamAddExecutor {
     has_display_name: bool,
 }
@@ -115,12 +157,15 @@ impl CommandExecutor for TeamAddExecutor {
                 display_name: display_name.clone(),
                 options: 0,
                 nametag_visibility: NameTagVisibility::Always,
+                death_message_visibility: DeathMessageVisibility::Always,
                 collision_rule: CollisionRule::Always,
                 color: NamedColor::White,
                 player_prefix: TextComponent::empty(),
                 player_suffix: TextComponent::empty(),
                 players: vec![],
             };
+
+            let formatted_display_name = formatted_team_display_name(&new_team);
 
             scoreboard.add_team(world, new_team).await;
 
@@ -130,7 +175,7 @@ impl CommandExecutor for TeamAddExecutor {
                     TextComponent::translate_cross(
                         translation::java::COMMANDS_TEAM_ADD_SUCCESS,
                         translation::java::COMMANDS_TEAM_ADD_SUCCESS,
-                        [display_name],
+                        [formatted_display_name],
                     ),
                     true,
                 )
@@ -156,7 +201,7 @@ impl CommandExecutor for TeamRemoveExecutor {
                     .create_without_context(TextComponent::text(team_name.to_string()))
             })?;
 
-            let team_display_name = team.display_name.clone();
+            let team_display_name = formatted_team_display_name(team);
 
             scoreboard.remove_team(world, team_name).await;
 
@@ -192,11 +237,11 @@ impl CommandExecutor for TeamEmptyExecutor {
                     .create_without_context(TextComponent::text(team_name.to_string()))
             })?;
 
-            let team_display_name = team.display_name.clone();
+            let team_display_name = formatted_team_display_name(team);
             let players_to_remove = team.players.clone();
 
             if players_to_remove.is_empty() {
-                return Err(EMPTY_UNCHANGED_ERROR.create_without_context(team_display_name));
+                return Err(EMPTY_UNCHANGED_ERROR.create_without_context());
             }
 
             for player in &players_to_remove {
@@ -208,12 +253,12 @@ impl CommandExecutor for TeamEmptyExecutor {
             context
                 .source
                 .send_feedback(
-                    TextComponent::translate_cross(
+                    TextComponent::translate_cross_args(
                         translation::java::COMMANDS_TEAM_EMPTY_SUCCESS,
                         translation::java::COMMANDS_TEAM_EMPTY_SUCCESS,
-                        [
-                            TextComponent::text(players_to_remove.len().to_string()),
-                            team_display_name,
+                        vec![
+                            TranslationArgument::from(players_to_remove.len() as i32),
+                            TranslationArgument::from(team_display_name),
                         ],
                     ),
                     true,
@@ -242,7 +287,8 @@ impl CommandExecutor for TeamJoinExecutor {
                     .create_without_context(TextComponent::text(team_name.to_string()))
             })?;
 
-            let team_display_name = team.display_name.clone();
+            let team_display_name = formatted_team_display_name(team);
+            let joined_team = team.clone();
 
             let entity_names = if self.has_members {
                 let targets =
@@ -274,15 +320,18 @@ impl CommandExecutor for TeamJoinExecutor {
                     translation::java::COMMANDS_TEAM_JOIN_SUCCESS_SINGLE,
                     translation::java::COMMANDS_TEAM_JOIN_SUCCESS_SINGLE,
                     [
-                        TextComponent::text(entity_names[0].clone()),
+                        formatted_joined_score_holder(&joined_team, &entity_names[0]),
                         team_display_name,
                     ],
                 )
             } else {
-                TextComponent::translate_cross(
+                TextComponent::translate_cross_args(
                     translation::java::COMMANDS_TEAM_JOIN_SUCCESS_MULTIPLE,
                     translation::java::COMMANDS_TEAM_JOIN_SUCCESS_MULTIPLE,
-                    [TextComponent::text(count.to_string()), team_display_name],
+                    vec![
+                        TranslationArgument::from(count as i32),
+                        TranslationArgument::from(team_display_name),
+                    ],
                 )
             };
 
@@ -342,13 +391,13 @@ impl CommandExecutor for TeamLeaveExecutor {
                 TextComponent::translate_cross(
                     translation::java::COMMANDS_TEAM_LEAVE_SUCCESS_SINGLE,
                     translation::java::COMMANDS_TEAM_LEAVE_SUCCESS_SINGLE,
-                    [TextComponent::text(entity_names[0].clone())],
+                    [formatted_score_holder(&entity_names[0])],
                 )
             } else {
-                TextComponent::translate_cross(
+                TextComponent::translate_cross_args(
                     translation::java::COMMANDS_TEAM_LEAVE_SUCCESS_MULTIPLE,
                     translation::java::COMMANDS_TEAM_LEAVE_SUCCESS_MULTIPLE,
-                    [TextComponent::text(removed_count.to_string())],
+                    vec![TranslationArgument::from(removed_count)],
                 )
             };
 
@@ -383,30 +432,31 @@ impl CommandExecutor for TeamListExecutor {
                             TextComponent::translate_cross(
                                 translation::java::COMMANDS_TEAM_LIST_MEMBERS_EMPTY,
                                 translation::java::COMMANDS_TEAM_LIST_MEMBERS_EMPTY,
-                                [team.display_name.clone()],
+                                [formatted_team_display_name(team)],
                             ),
                             false,
                         )
                         .await;
                 } else {
-                    let mut list_comp = TextComponent::empty();
-                    for (i, player) in team.players.iter().enumerate() {
-                        if i > 0 {
-                            list_comp = list_comp.add_child(TextComponent::text(", "));
-                        }
-                        list_comp = list_comp.add_child(TextComponent::text(player.clone()));
+                    let mut players = team.players.iter();
+                    let mut list_comp = TextComponent::text(players.next().unwrap().clone())
+                        .color_named(NamedColor::Green);
+                    for player in players {
+                        list_comp = list_comp.add_child(TextComponent::text(", ")).add_child(
+                            TextComponent::text(player.clone()).color_named(NamedColor::Green),
+                        );
                     }
 
                     context
                         .source
                         .send_feedback(
-                            TextComponent::translate_cross(
+                            TextComponent::translate_cross_args(
                                 translation::java::COMMANDS_TEAM_LIST_MEMBERS_SUCCESS,
                                 translation::java::COMMANDS_TEAM_LIST_MEMBERS_SUCCESS,
-                                [
-                                    team.display_name.clone(),
-                                    TextComponent::text(team.players.len().to_string()),
-                                    list_comp,
+                                vec![
+                                    TranslationArgument::from(formatted_team_display_name(team)),
+                                    TranslationArgument::from(team.players.len() as i32),
+                                    TranslationArgument::from(list_comp),
                                 ],
                             ),
                             false,
@@ -429,21 +479,24 @@ impl CommandExecutor for TeamListExecutor {
                         )
                         .await;
                 } else {
-                    let mut list_comp = TextComponent::empty();
-                    for (i, team) in teams.values().enumerate() {
-                        if i > 0 {
-                            list_comp = list_comp.add_child(TextComponent::text(", "));
-                        }
-                        list_comp = list_comp.add_child(team.display_name.clone());
+                    let mut teams_iter = teams.values();
+                    let mut list_comp = formatted_team_display_name(teams_iter.next().unwrap());
+                    for team in teams_iter {
+                        list_comp = list_comp
+                            .add_child(TextComponent::text(", "))
+                            .add_child(formatted_team_display_name(team));
                     }
 
                     context
                         .source
                         .send_feedback(
-                            TextComponent::translate_cross(
+                            TextComponent::translate_cross_args(
                                 translation::java::COMMANDS_TEAM_LIST_TEAMS_SUCCESS,
                                 translation::java::COMMANDS_TEAM_LIST_TEAMS_SUCCESS,
-                                [TextComponent::text(teams.len().to_string()), list_comp],
+                                vec![
+                                    TranslationArgument::from(teams.len() as i32),
+                                    TranslationArgument::from(list_comp),
+                                ],
                             ),
                             false,
                         )
@@ -858,7 +911,7 @@ impl CommandExecutor for TeamModifyNametagVisibilityExecutor {
 }
 
 struct TeamModifyDeathMessageVisibilityExecutor {
-    value: &'static str,
+    value: DeathMessageVisibility,
 }
 
 impl CommandExecutor for TeamModifyDeathMessageVisibilityExecutor {
@@ -867,14 +920,24 @@ impl CommandExecutor for TeamModifyDeathMessageVisibilityExecutor {
             let team_name = TeamArgumentType::get(context, ARG_TEAM)?;
 
             let world = context.world();
-            let scoreboard = world.scoreboard.lock().await;
+            let mut scoreboard = world.scoreboard.lock().await;
 
-            let team = scoreboard.get_teams().get(team_name).ok_or_else(|| {
-                TEAM_NOT_FOUND_ERROR
-                    .create_without_context(TextComponent::text(team_name.to_string()))
-            })?;
+            let mut team = scoreboard
+                .get_teams()
+                .get(team_name)
+                .ok_or_else(|| {
+                    TEAM_NOT_FOUND_ERROR
+                        .create_without_context(TextComponent::text(team_name.to_string()))
+                })?
+                .clone();
 
-            let team_display_name = team.display_name.clone();
+            if team.death_message_visibility == self.value {
+                return Err(DEATH_MESSAGE_VISIBILITY_UNCHANGED_ERROR.create_without_context());
+            }
+
+            let team_display_name = formatted_team_display_name(&team);
+            team.death_message_visibility = self.value;
+            scoreboard.update_team(world, team).await;
 
             context
                 .source
@@ -882,10 +945,7 @@ impl CommandExecutor for TeamModifyDeathMessageVisibilityExecutor {
                     TextComponent::translate_cross(
                         translation::java::COMMANDS_TEAM_OPTION_DEATHMESSAGEVISIBILITY_SUCCESS,
                         translation::java::COMMANDS_TEAM_OPTION_DEATHMESSAGEVISIBILITY_SUCCESS,
-                        [
-                            team_display_name,
-                            TextComponent::text(self.value.to_string()),
-                        ],
+                        [team_display_name, TextComponent::text(self.value.to_str())],
                     ),
                     true,
                 )
@@ -1074,21 +1134,23 @@ fn modify_branch() -> LiteralArgumentBuilder {
             .then(
                 literal("deathMessageVisibility")
                     .then(
-                        literal("always")
-                            .executes(TeamModifyDeathMessageVisibilityExecutor { value: "always" }),
+                        literal("always").executes(TeamModifyDeathMessageVisibilityExecutor {
+                            value: DeathMessageVisibility::Always,
+                        }),
                     )
                     .then(
-                        literal("never")
-                            .executes(TeamModifyDeathMessageVisibilityExecutor { value: "never" }),
+                        literal("never").executes(TeamModifyDeathMessageVisibilityExecutor {
+                            value: DeathMessageVisibility::Never,
+                        }),
                     )
                     .then(literal("hideForOtherTeams").executes(
                         TeamModifyDeathMessageVisibilityExecutor {
-                            value: "hideForOtherTeams",
+                            value: DeathMessageVisibility::HideForOtherTeams,
                         },
                     ))
                     .then(literal("hideForOwnTeam").executes(
                         TeamModifyDeathMessageVisibilityExecutor {
-                            value: "hideForOwnTeam",
+                            value: DeathMessageVisibility::HideForOwnTeam,
                         },
                     )),
             )

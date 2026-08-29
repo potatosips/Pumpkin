@@ -229,7 +229,7 @@ impl TextComponent {
                 text.push_str(&get_translation_text(
                     format!("minecraft:{translate}"),
                     locale,
-                    with.clone(),
+                    super::translation_components(with),
                 ));
             }
             TextContent::EntityNames { selector, .. } => text.push_str(selector),

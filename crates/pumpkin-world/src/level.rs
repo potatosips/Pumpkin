@@ -527,11 +527,20 @@ impl Level {
         });
     }
 
-    pub fn get_tick_data(&self, active_chunks: &FxHashSet<Vector2<i32>>) -> TickData {
+    pub fn get_tick_data(
+        &self,
+        active_chunks: &FxHashSet<Vector2<i32>>,
+        random_tick_speed: u32,
+    ) -> TickData {
         let mut ticks = TickData {
             block_ticks: Vec::new(),
             fluid_ticks: Vec::new(),
-            random_ticks: Vec::with_capacity(active_chunks.len() * 3),
+            // This is only a capacity hint: most random positions do not hold
+            // a randomly ticking block/fluid, and a very large gamerule must
+            // not force an equally large allocation before sampling starts.
+            random_ticks: Vec::with_capacity(
+                active_chunks.len() * usize::try_from(random_tick_speed.min(16)).unwrap_or(16),
+            ),
         };
 
         // 1. Process active chunks (random ticks, block entities)
@@ -557,7 +566,7 @@ impl Level {
                             continue;
                         }
                         let y_base = min_y + (i as i32 * 16);
-                        for _ in 0..3 {
+                        for _ in 0..random_tick_speed {
                             let r = rand::random::<u32>();
                             let x_offset = (r & 0xF) as usize;
                             let z_offset = (r >> 8 & 0xF) as usize;

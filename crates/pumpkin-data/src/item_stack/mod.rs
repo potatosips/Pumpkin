@@ -1,9 +1,9 @@
 use crate::data_component::DataComponent;
 use crate::data_component::DataComponent::Enchantments;
 use crate::data_component_impl::{
-    BlocksAttacksImpl, ConsumableImpl, CustomDataImpl, DamageImpl, DataComponentImpl,
-    EnchantmentsImpl, IDSet, MaxDamageImpl, MaxStackSizeImpl, ToolImpl, UnbreakableImpl,
-    UseCooldownImpl, get, get_mut, read_data,
+    BlocksAttacksImpl, ConsumableImpl, CustomDataImpl, CustomNameImpl, DamageImpl,
+    DataComponentImpl, EnchantmentsImpl, IDSet, ItemNameImpl, MaxDamageImpl, MaxStackSizeImpl,
+    ToolImpl, UnbreakableImpl, UseCooldownImpl, get, get_mut, read_data,
 };
 use crate::item::Item;
 use crate::recipes::RecipeResultStruct;
@@ -12,8 +12,10 @@ use crate::{Block, Enchantment};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
 use pumpkin_util::GameMode;
+use pumpkin_util::text::{TextComponent, color::NamedColor, hover::HoverEvent};
 use rand;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::cmp::{max, min};
 use std::num::NonZero;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -406,7 +408,6 @@ impl ItemStack {
     }
 
     pub fn set_custom_name(&mut self, name: String) {
-        use crate::data_component_impl::CustomNameImpl;
         let component = Some(
             CustomNameImpl {
                 name: pumpkin_util::text::TextComponent::text(name),
@@ -422,6 +423,74 @@ impl ItemStack {
         } else {
             self.patch.push((DataComponent::CustomName, component));
         }
+    }
+
+    /// Returns the name Vanilla exposes for an item entity.
+    ///
+    /// This intentionally uses `item_name`, not `custom_name`: Vanilla preserves a
+    /// renamed stack's custom name but dropped-item entity command feedback uses
+    /// the stack's item-name component.
+    #[must_use]
+    #[allow(deprecated)] // The translation key is runtime item data, so the static macro cannot apply.
+    pub fn get_item_entity_name(&self) -> TextComponent {
+        if let Some(item_name) = self.get_data_component::<ItemNameImpl>() {
+            if let Ok(component) = serde_json::from_str::<TextComponent>(&item_name.name) {
+                return component;
+            }
+            return TextComponent::translate_cross(
+                item_name.name.clone(),
+                item_name.name.clone(),
+                [],
+            );
+        }
+
+        TextComponent::translate_cross(
+            format!("item.minecraft.{}", self.item.registry_key),
+            format!("item.minecraft.{}", self.item.registry_key),
+            [],
+        )
+    }
+
+    /// Returns the stack's visible hover name. Unlike an item entity's own
+    /// display name, item-stack presentation prefers `custom_name`.
+    #[must_use]
+    pub fn get_hover_name(&self) -> TextComponent {
+        self.get_data_component::<CustomNameImpl>()
+            .map_or_else(|| self.get_item_entity_name(), |name| name.name.clone())
+    }
+
+    /// Builds Vanilla's bracketed, hoverable stack component used by command feedback.
+    #[must_use]
+    pub fn to_hoverable_text(&self, count: i32) -> TextComponent {
+        let components: BTreeMap<Cow<'static, str>, Cow<'static, str>> = self
+            .patch
+            .iter()
+            .filter_map(|(id, value)| {
+                let value = value.as_ref()?.write_data();
+                let NbtTag::String(value) = value else {
+                    return None;
+                };
+                Some((
+                    Cow::Owned(format!("minecraft:{}", id.to_name())),
+                    Cow::Owned(value.into()),
+                ))
+            })
+            .collect();
+
+        let visible_name = TextComponent::empty()
+            .italic()
+            .add_child(self.get_hover_name());
+        TextComponent::translate_cross(
+            crate::translation::java::CHAT_SQUARE_BRACKETS,
+            crate::translation::java::CHAT_SQUARE_BRACKETS,
+            [visible_name],
+        )
+        .color_named(NamedColor::White)
+        .hover_event(HoverEvent::ShowItem {
+            id: Cow::Owned(format!("minecraft:{}", self.item.registry_key)),
+            count: Some(count),
+            components: (!components.is_empty()).then_some(components),
+        })
     }
 
     #[must_use]
@@ -962,6 +1031,90 @@ mod tests {
                 .expect("item name should decode")
                 .name,
             "filled_map.mansion"
+        );
+    }
+
+    #[test]
+    fn item_entity_name_uses_item_name_and_ignores_custom_name() {
+        let plain = ItemStack::new(1, &Item::ITEM_FRAME);
+        assert_eq!(
+            plain
+                .get_item_entity_name()
+                .0
+                .to_nbt_compound()
+                .get_string("translate"),
+            Some("item.minecraft.item_frame")
+        );
+
+        let mut custom = plain.clone();
+        custom.set_custom_name("Parity frame".to_string());
+        assert_eq!(
+            custom
+                .get_item_entity_name()
+                .0
+                .to_nbt_compound()
+                .get_string("translate"),
+            Some("item.minecraft.item_frame")
+        );
+
+        let rich_item_name = ItemStack::new_with_component(
+            1,
+            &Item::DIAMOND,
+            vec![(
+                DataComponent::ItemName,
+                Some(
+                    ItemNameImpl {
+                        name: Cow::Borrowed(r#"{"text":"Artifact","color":"aqua"}"#),
+                    }
+                    .to_dyn(),
+                ),
+            )],
+        );
+        let compound = rich_item_name.get_item_entity_name().0.to_nbt_compound();
+        assert_eq!(compound.get_string("text"), Some("Artifact"));
+        assert_eq!(compound.get_string("color"), Some("aqua"));
+    }
+
+    #[test]
+    fn hover_name_preserves_rich_custom_name_json() {
+        let component = CustomNameImpl::read_data(&NbtTag::String(
+            r#"{"text":"Parity Gem","color":"gold","italic":false}"#.into(),
+        ))
+        .expect("valid custom name");
+        let stack = ItemStack::new_with_component(
+            1,
+            &Item::DIAMOND,
+            vec![(DataComponent::CustomName, Some(component.to_dyn()))],
+        );
+
+        let compound = stack.get_hover_name().0.to_nbt_compound();
+        assert_eq!(compound.get_string("text"), Some("Parity Gem"));
+        assert_eq!(compound.get_string("color"), Some("gold"));
+        assert_eq!(compound.get_bool("italic"), Some(false));
+
+        let encoded = stack
+            .get_data_component::<CustomNameImpl>()
+            .expect("custom name")
+            .write_data();
+        let NbtTag::String(encoded) = encoded else {
+            panic!("custom name must use the item component JSON-string representation");
+        };
+        let decoded: TextComponent = serde_json::from_str(&encoded).expect("round-trip component");
+        assert_eq!(decoded.0.to_nbt_compound(), compound);
+
+        let display = stack.to_hoverable_text(1).0.to_nbt_compound();
+        assert_eq!(display.get_string("translate"), Some("chat.square_brackets"));
+        assert_eq!(display.get_string("color"), Some("white"));
+        let hover = display.get_compound("hoverEvent").expect("show item hover");
+        let contents = hover.get_compound("contents").expect("hover contents");
+        assert_eq!(contents.get_string("id"), Some("minecraft:diamond"));
+        assert_eq!(contents.get_int("count"), Some(1));
+        assert!(
+            contents
+                .get_compound("components")
+                .expect("components")
+                .get_string("minecraft:custom_name")
+                .is_some_and(|json| json.contains("Parity Gem"))
         );
     }
 

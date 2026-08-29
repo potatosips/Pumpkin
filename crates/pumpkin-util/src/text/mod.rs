@@ -96,6 +96,21 @@ pub struct TextComponentBase {
 }
 
 impl TextComponentBase {
+    /// Encodes simple, unstyled literal components as their native primitive
+    /// string form. Java's component codec uses compounds only when content,
+    /// style, or siblings require one.
+    #[must_use]
+    pub fn to_nbt_tag(&self) -> pumpkin_nbt::tag::NbtTag {
+        if self.extra.is_empty()
+            && *self.style == Style::default()
+            && let TextContent::Text { text } = &*self.content
+        {
+            pumpkin_nbt::tag::NbtTag::String(text.to_string().into())
+        } else {
+            pumpkin_nbt::tag::NbtTag::Compound(self.to_nbt_compound())
+        }
+    }
+
     /// Converts this component to an NBT compound tag.
     #[expect(clippy::too_many_lines)]
     #[must_use]
@@ -110,11 +125,22 @@ impl TextComponentBase {
             } => {
                 compound.put_string("translate", translate.to_string());
                 if !with.is_empty() {
-                    let list = with
+                    if with
                         .iter()
-                        .map(|w| pumpkin_nbt::tag::NbtTag::Compound(w.to_nbt_compound()))
-                        .collect();
-                    compound.put_list("with", list);
+                        .all(|argument| matches!(argument, TranslationArgument::Int(_)))
+                    {
+                        let values = with
+                            .iter()
+                            .map(|argument| match argument {
+                                TranslationArgument::Int(value) => *value,
+                                _ => unreachable!("all arguments were checked as integers"),
+                            })
+                            .collect();
+                        compound.put("with", pumpkin_nbt::tag::NbtTag::IntArray(values));
+                    } else {
+                        let list = with.iter().map(TranslationArgument::to_nbt_tag).collect();
+                        compound.put_list("with", list);
+                    }
                 }
             }
             TextContent::EntityNames {
@@ -203,36 +229,39 @@ impl TextComponentBase {
         if let Some(obfuscated) = self.style.obfuscated {
             compound.put_byte("obfuscated", i8::from(obfuscated));
         }
+        if let Some(insertion) = &self.style.insertion {
+            compound.put_string("insertion", insertion.clone());
+        }
 
         if let Some(ref click) = self.style.click_event {
             let mut click_tag = pumpkin_nbt::NbtCompound::new();
             match click {
                 ClickEvent::OpenUrl { url } => {
                     click_tag.put_string("action", "open_url".to_string());
-                    click_tag.put_string("url", url.to_string());
+                    click_tag.put_string("value", url.to_string());
                 }
                 ClickEvent::OpenFile { path } => {
                     click_tag.put_string("action", "open_file".to_string());
-                    click_tag.put_string("path", path.to_string());
+                    click_tag.put_string("value", path.to_string());
                 }
                 ClickEvent::RunCommand { command } => {
                     click_tag.put_string("action", "run_command".to_string());
-                    click_tag.put_string("command", command.to_string());
+                    click_tag.put_string("value", command.to_string());
                 }
                 ClickEvent::SuggestCommand { command } => {
                     click_tag.put_string("action", "suggest_command".to_string());
-                    click_tag.put_string("command", command.to_string());
+                    click_tag.put_string("value", command.to_string());
                 }
                 ClickEvent::ChangePage { page } => {
                     click_tag.put_string("action", "change_page".to_string());
-                    click_tag.put_int("page", *page as i32);
+                    click_tag.put_string("value", page.to_string());
                 }
                 ClickEvent::CopyToClipboard { value } => {
                     click_tag.put_string("action", "copy_to_clipboard".to_string());
                     click_tag.put_string("value", value.to_string());
                 }
             }
-            compound.put_compound("click_event", click_tag);
+            compound.put_compound("clickEvent", click_tag);
         }
 
         if let Some(ref hover) = self.style.hover_event {
@@ -240,48 +269,70 @@ impl TextComponentBase {
             match hover {
                 HoverEvent::ShowText { value } => {
                     hover_tag.put_string("action", "show_text".to_string());
-                    if value.len() == 1 {
-                        hover_tag.put_compound("value", value[0].to_nbt_compound());
+                    if let [component] = value.as_slice() {
+                        hover_tag.put("contents", component.to_nbt_tag());
                     } else {
-                        let list = value
-                            .iter()
-                            .map(|e| pumpkin_nbt::tag::NbtTag::Compound(e.to_nbt_compound()))
-                            .collect();
-                        hover_tag.put_list("value", list);
+                        let combined = TextComponentBase {
+                            content: Box::new(TextContent::Text { text: "".into() }),
+                            style: Box::default(),
+                            extra: value.clone(),
+                        };
+                        hover_tag.put("contents", combined.to_nbt_tag());
                     }
                 }
-                HoverEvent::ShowItem { id, count } => {
+                HoverEvent::ShowItem {
+                    id,
+                    count,
+                    components,
+                } => {
                     hover_tag.put_string("action", "show_item".to_string());
-                    hover_tag.put_string("id", id.to_string());
+                    let mut contents = pumpkin_nbt::NbtCompound::new();
+                    contents.put_string("id", id.to_string());
                     if let Some(cnt) = count {
-                        hover_tag.put_int("count", *cnt);
+                        contents.put_int("count", *cnt);
                     }
+                    if let Some(components) = components {
+                        let mut component_tags = pumpkin_nbt::NbtCompound::new();
+                        for (key, value) in components {
+                            component_tags.put_string(key, value.to_string());
+                        }
+                        contents.put_compound("components", component_tags);
+                    }
+                    hover_tag.put_compound("contents", contents);
                 }
                 HoverEvent::ShowEntity { id, uuid, name } => {
                     hover_tag.put_string("action", "show_entity".to_string());
-                    hover_tag.put_string("id", id.to_string());
-                    hover_tag.put_string("uuid", uuid.to_string());
+                    let mut contents = pumpkin_nbt::NbtCompound::new();
+                    contents.put_string("type", id.to_string());
+                    if let Ok(uuid) = uuid::Uuid::parse_str(uuid) {
+                        contents.put_uuid("id", uuid);
+                    } else {
+                        // Preserve custom/plugin-provided values that are not UUIDs.
+                        contents.put_string("id", uuid.to_string());
+                    }
                     if let Some(n) = name {
-                        if n.len() == 1 {
-                            hover_tag.put_compound("name", n[0].to_nbt_compound());
+                        if let [component] = n.as_slice() {
+                            contents.put("name", component.to_nbt_tag());
                         } else {
-                            let list = n
-                                .iter()
-                                .map(|e| pumpkin_nbt::tag::NbtTag::Compound(e.to_nbt_compound()))
-                                .collect();
-                            hover_tag.put_list("name", list);
+                            let combined = TextComponentBase {
+                                content: Box::new(TextContent::Text { text: "".into() }),
+                                style: Box::default(),
+                                extra: n.clone(),
+                            };
+                            contents.put("name", combined.to_nbt_tag());
                         }
                     }
+                    hover_tag.put_compound("contents", contents);
                 }
             }
-            compound.put_compound("hover_event", hover_tag);
+            compound.put_compound("hoverEvent", hover_tag);
         }
 
         if !self.extra.is_empty() {
             let list = self
                 .extra
                 .iter()
-                .map(|e| pumpkin_nbt::tag::NbtTag::Compound(e.to_nbt_compound()))
+                .map(TextComponentBase::to_nbt_tag)
                 .collect();
             compound.put_list("extra", list);
         }
@@ -306,7 +357,11 @@ impl TextComponentBase {
                 with,
             } => {
                 let key = bedrock_translate.as_ref().unwrap_or(&translate);
-                translation_to_pretty(format!("minecraft:{key}"), Locale::EnUs, with)
+                translation_to_pretty(
+                    format!("minecraft:{key}"),
+                    Locale::EnUs,
+                    translation_components(&with),
+                )
             }
             TextContent::EntityNames {
                 selector,
@@ -428,7 +483,11 @@ impl TextComponentBase {
                 with,
             } => {
                 let key = bedrock_translate.as_ref().unwrap_or(translate);
-                text.push_str(&get_translation_text(key.to_string(), locale, with.clone()));
+                text.push_str(&get_translation_text(
+                    key.to_string(),
+                    locale,
+                    translation_components(with),
+                ));
             }
             TextContent::EntityNames { selector, .. } => text.push_str(selector),
             TextContent::Keybind { keybind } => text.push_str(keybind),
@@ -470,7 +529,11 @@ impl TextComponentBase {
                 with,
             } => {
                 let key = bedrock_translate.as_ref().unwrap_or(&translate);
-                get_translation_text(format!("minecraft:{key}"), locale, with)
+                get_translation_text(
+                    format!("minecraft:{key}"),
+                    locale,
+                    translation_components(&with),
+                )
             }
             TextContent::EntityNames {
                 selector,
@@ -525,9 +588,14 @@ impl TextComponentBase {
                         })
                     },
                 ),
-                HoverEvent::ShowItem { id, count } => Some(HoverEvent::ShowItem {
+                HoverEvent::ShowItem {
+                    id,
+                    count,
+                    components,
+                } => Some(HoverEvent::ShowItem {
                     id: id.clone(),
                     count: count.to_owned(),
+                    components: components.clone(),
                 }),
             };
         }
@@ -546,10 +614,10 @@ impl TextComponentBase {
                 bedrock_translate,
                 with,
             } => {
-                let mut translated_with = vec![];
-                for w in with {
-                    translated_with.push(w.to_translated());
-                }
+                let translated_with = with
+                    .into_iter()
+                    .map(TranslationArgument::to_translated)
+                    .collect();
                 Self {
                     content: Box::new(TextContent::Translate {
                         translate,
@@ -673,7 +741,11 @@ impl TextComponent {
             content: Box::new(TextContent::Translate {
                 translate: key.into(),
                 bedrock_translate: None,
-                with: with.into().into_iter().map(|x| x.0).collect(),
+                with: with
+                    .into()
+                    .into_iter()
+                    .map(|x| TranslationArgument::Component(x.0))
+                    .collect(),
             }),
             style: Box::new(Style::default()),
             extra: vec![],
@@ -707,7 +779,35 @@ impl TextComponent {
             content: Box::new(TextContent::Translate {
                 translate: java_key.into(),
                 bedrock_translate: Some(bedrock_key.into()),
-                with: with.into().into_iter().map(|x| x.0).collect(),
+                with: with
+                    .into()
+                    .into_iter()
+                    .map(|x| TranslationArgument::Component(x.0))
+                    .collect(),
+            }),
+            style: Box::new(Style::default()),
+            extra: vec![],
+        })
+    }
+
+    /// Creates a translated component with Java primitive or nested-component
+    /// substitution arguments. Local and Bedrock rendering converts primitive
+    /// arguments to text, while Java preserves their native NBT tag types.
+    #[must_use]
+    pub fn translate_cross_args<
+        K1: Into<Cow<'static, str>>,
+        K2: Into<Cow<'static, str>>,
+        W: Into<Vec<TranslationArgument>>,
+    >(
+        java_key: K1,
+        bedrock_key: K2,
+        with: W,
+    ) -> Self {
+        Self(TextComponentBase {
+            content: Box::new(TextContent::Translate {
+                translate: java_key.into(),
+                bedrock_translate: Some(bedrock_key.into()),
+                with: with.into(),
             }),
             style: Box::new(Style::default()),
             extra: vec![],
@@ -1225,6 +1325,86 @@ impl std::hash::Hash for ProfileNbt {
     }
 }
 
+/// A substitution value in a translatable Java text component.
+///
+/// Java 1.21.4 permits both nested components and primitive values in the
+/// `with` NBT list. Keeping strings and integers as primitives is required for
+/// byte-accurate command feedback instead of wrapping every argument in a
+/// `{text: ...}` compound.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(untagged)]
+pub enum TranslationArgument {
+    Component(TextComponentBase),
+    String(Cow<'static, str>),
+    Int(i32),
+}
+
+impl From<TextComponent> for TranslationArgument {
+    fn from(value: TextComponent) -> Self {
+        Self::Component(value.0)
+    }
+}
+
+impl From<String> for TranslationArgument {
+    fn from(value: String) -> Self {
+        Self::String(Cow::Owned(value))
+    }
+}
+
+impl From<&'static str> for TranslationArgument {
+    fn from(value: &'static str) -> Self {
+        Self::String(Cow::Borrowed(value))
+    }
+}
+
+impl From<i32> for TranslationArgument {
+    fn from(value: i32) -> Self {
+        Self::Int(value)
+    }
+}
+
+impl TranslationArgument {
+    #[must_use]
+    pub fn to_bedrock_string(&self) -> String {
+        match self {
+            Self::Component(component) => component.to_bedrock_string(),
+            Self::String(value) => value.to_string(),
+            Self::Int(value) => value.to_string(),
+        }
+    }
+
+    fn to_nbt_tag(&self) -> pumpkin_nbt::tag::NbtTag {
+        match self {
+            Self::Component(component) => component.to_nbt_tag(),
+            Self::String(value) => pumpkin_nbt::tag::NbtTag::String(value.to_string().into()),
+            Self::Int(value) => pumpkin_nbt::tag::NbtTag::Int(*value),
+        }
+    }
+
+    fn into_component(self) -> TextComponentBase {
+        match self {
+            Self::Component(component) => component,
+            Self::String(value) => TextComponent::text(value).0,
+            Self::Int(value) => TextComponent::text(value.to_string()).0,
+        }
+    }
+
+    fn to_translated(self) -> Self {
+        match self {
+            Self::Component(component) => Self::Component(component.to_translated()),
+            primitive => primitive,
+        }
+    }
+}
+
+fn translation_components(arguments: &[TranslationArgument]) -> Vec<TextComponentBase> {
+    arguments
+        .iter()
+        .cloned()
+        .map(TranslationArgument::into_component)
+        .collect()
+}
+
 /// The content type of the text component.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(untagged)]
@@ -1240,7 +1420,7 @@ pub enum TextContent {
         bedrock_translate: Option<Cow<'static, str>>,
         /// Substitution parameters for the translation.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        with: Vec<TextComponentBase>,
+        with: Vec<TranslationArgument>,
     },
     /// Displays the name of one or more entities found by a selector.
     EntityNames {
@@ -1282,7 +1462,8 @@ pub enum TextContent {
 /// Tests for the text component implementations.
 #[cfg(test)]
 mod test {
-    use crate::text::{TextComponent, color::NamedColor, hover::HoverEvent};
+    use crate::text::{TextComponent, TranslationArgument, color::NamedColor, hover::HoverEvent};
+    use pumpkin_nbt::tag::NbtTag;
     use std::borrow::Cow;
 
     #[test]
@@ -1305,23 +1486,53 @@ mod test {
         assert_eq!(decoded, expected_compound.into());
     }
 
-    /// The client expects the hover event payload to be inlined next to `action`.
-    /// Nesting it under `item`/`entity` makes the component fail to decode and
-    /// kicks the player off the server.
     #[test]
-    fn hover_event_payload_is_inlined() {
+    fn translation_arguments_preserve_java_primitive_nbt_types() {
+        let component = TextComponent::translate_cross_args(
+            "test.translation",
+            "test.translation",
+            vec![
+                TranslationArgument::from("raw"),
+                TranslationArgument::from(7),
+                TranslationArgument::from(TextComponent::text("nested")),
+            ],
+        );
+        let compound = component.0.to_nbt_compound();
+        let arguments = compound.get_list("with").unwrap();
+
+        assert_eq!(arguments[0], NbtTag::String("raw".into()));
+        assert_eq!(arguments[1], NbtTag::Int(7));
+        assert_eq!(arguments[2], NbtTag::String("nested".into()));
+
+        // Encoding must also accept this heterogeneous list. The NBT writer
+        // wraps scalar entries in empty-key compounds as required by NbtOps.
+        assert!(!component.encode().is_empty());
+
+        let integer_arguments = TextComponent::translate_cross_args(
+            "argument.integer.low",
+            "argument.integer.low",
+            vec![TranslationArgument::from(0), TranslationArgument::from(-1)],
+        )
+        .0
+        .to_nbt_compound();
+        assert_eq!(integer_arguments.get_int_array("with"), Some(&[0, -1][..]));
+    }
+
+    #[test]
+    fn hover_event_payload_uses_java_1_21_4_contents_shape() {
         let show_item = TextComponent::text("sword")
             .hover_event(HoverEvent::ShowItem {
                 id: Cow::Borrowed("minecraft:diamond_sword"),
                 count: Some(1),
+                components: None,
             })
             .0
             .to_nbt_compound();
-        let hover = show_item.get_compound("hover_event").unwrap();
+        let hover = show_item.get_compound("hoverEvent").unwrap();
         assert_eq!(hover.get_string("action"), Some("show_item"));
-        assert_eq!(hover.get_string("id"), Some("minecraft:diamond_sword"));
-        assert_eq!(hover.get_int("count"), Some(1));
-        assert!(hover.get_compound("item").is_none());
+        let contents = hover.get_compound("contents").unwrap();
+        assert_eq!(contents.get_string("id"), Some("minecraft:diamond_sword"));
+        assert_eq!(contents.get_int("count"), Some(1));
 
         let show_entity = TextComponent::text("pig")
             .hover_event(HoverEvent::show_entity(
@@ -1331,14 +1542,14 @@ mod test {
             ))
             .0
             .to_nbt_compound();
-        let hover = show_entity.get_compound("hover_event").unwrap();
+        let hover = show_entity.get_compound("hoverEvent").unwrap();
         assert_eq!(hover.get_string("action"), Some("show_entity"));
-        assert_eq!(hover.get_string("id"), Some("minecraft:pig"));
+        let contents = hover.get_compound("contents").unwrap();
+        assert_eq!(contents.get_string("type"), Some("minecraft:pig"));
         assert_eq!(
-            hover.get_string("uuid"),
-            Some("6ba1a740-9a3b-4b7c-8f2c-8f5a5c1a0a11")
+            contents.get_int_array("id"),
+            Some(&[1805756224, -1707390084, -1892905126, 1545210385][..])
         );
-        assert!(hover.get_compound("entity").is_none());
     }
 
     /// `count` is optional for the client, so it must stay out of the payload
@@ -1349,10 +1560,17 @@ mod test {
             .hover_event(HoverEvent::ShowItem {
                 id: Cow::Borrowed("minecraft:diamond_sword"),
                 count: None,
+                components: None,
             })
             .0
             .to_nbt_compound();
-        let hover = compound.get_compound("hover_event").unwrap();
-        assert!(hover.get_int("count").is_none());
+        let hover = compound.get_compound("hoverEvent").unwrap();
+        assert!(
+            hover
+                .get_compound("contents")
+                .unwrap()
+                .get_int("count")
+                .is_none()
+        );
     }
 }

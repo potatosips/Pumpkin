@@ -172,6 +172,10 @@ impl FireworkRocketEntity {
             .map_or(0, |fireworks| fireworks.explosions.len());
         let base_damage = Self::explosion_base_damage(explosion_count);
         if base_damage > 0.0 {
+            let owner = self
+                .entity
+                .owner_id
+                .and_then(|owner_id| world.get_entity_by_id(owner_id));
             if let Some(target) = direct_hit
                 && target.get_living_entity().is_some()
             {
@@ -181,8 +185,8 @@ impl FireworkRocketEntity {
                         base_damage,
                         DamageType::FIREWORKS,
                         Some(entity.pos.load()),
-                        None,
                         Some(self),
+                        owner.as_deref(),
                     )
                     .await;
             }
@@ -233,8 +237,8 @@ impl FireworkRocketEntity {
                             damage,
                             DamageType::FIREWORKS,
                             Some(origin),
-                            None,
                             Some(self),
+                            owner.as_deref(),
                         )
                         .await;
                 }

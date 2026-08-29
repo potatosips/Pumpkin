@@ -5,8 +5,7 @@ use crate::command::dispatcher::CommandError::InvalidConsumption;
 use crate::command::{
     CommandExecutor, CommandSender,
     args::{
-        Arg, ConsumedArgs, position_block::BlockPosArgumentConsumer,
-        rotation::RotationArgumentConsumer,
+        Arg, ConsumedArgs, angle::AngleArgumentConsumer, position_block::BlockPosArgumentConsumer,
     },
     dispatcher::CommandError,
     tree::{CommandTree, builder::argument},
@@ -84,13 +83,11 @@ impl CommandExecutor for AngleWorldSpawnExecutor {
                 return Err(InvalidConsumption(Some(ARG_BLOCK_POS.into())));
             };
 
-            // Note: Rotation argument is (yaw, is_yaw_relative, pitch, is_pitch_relative)
-            // For setworldspawn, we use absolute values only (ignore relative flags)
-            let Some(Arg::Rotation(yaw, _, pitch, _)) = args.get(ARG_ANGLE) else {
+            let Some(Arg::Angle(yaw)) = args.get(ARG_ANGLE) else {
                 return Err(InvalidConsumption(Some(ARG_ANGLE.into())));
             };
 
-            setworldspawn(sender, server, *block_pos, *yaw, *pitch).await
+            setworldspawn(sender, server, *block_pos, *yaw, 0.0).await
         })
     }
 }
@@ -180,8 +177,6 @@ pub fn init_command_tree() -> CommandTree {
         .then(
             argument(ARG_BLOCK_POS, BlockPosArgumentConsumer)
                 .execute(DefaultWorldSpawnExecutor)
-                .then(
-                    argument(ARG_ANGLE, RotationArgumentConsumer).execute(AngleWorldSpawnExecutor),
-                ),
+                .then(argument(ARG_ANGLE, AngleArgumentConsumer).execute(AngleWorldSpawnExecutor)),
         )
 }

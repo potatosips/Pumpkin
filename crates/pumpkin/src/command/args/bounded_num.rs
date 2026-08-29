@@ -3,12 +3,14 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use pumpkin_protocol::java::client::play::ArgumentType;
-use pumpkin_util::text::TextComponent;
+use pumpkin_util::text::{TextComponent, TranslationArgument};
 
 use crate::command::CommandSender;
-use crate::command::args::ConsumeResult;
+use crate::command::args::{ConsumeResult, ConsumeResultWithSyntax};
 use crate::command::dispatcher::CommandError;
-use crate::command::tree::RawArgs;
+use crate::command::errors::command_syntax_error::{CommandSyntaxError, CommandSyntaxErrorContext};
+use crate::command::errors::error_types;
+use crate::command::tree::{RawArg, RawArgs};
 use crate::server::Server;
 
 use super::super::args::ArgumentConsumer;
@@ -57,6 +59,16 @@ where
 
         Box::pin(async move { result })
     }
+
+    fn consume_with_syntax<'a>(
+        &'a self,
+        _sender: &'a CommandSender,
+        _server: &'a Server,
+        args: &mut RawArgs<'a>,
+    ) -> ConsumeResultWithSyntax<'a> {
+        let result = args.pop().map(|raw| self.parse_raw(raw));
+        Box::pin(async move { result.transpose() })
+    }
 }
 
 impl<'a, T: 'static + ToFromNumber> FindArg<'a> for BoundedNumArgumentConsumer<T> {
@@ -88,6 +100,17 @@ impl From<NotInBounds> for CommandError {
     fn from(value: NotInBounds) -> Self {
         match value {
             NotInBounds::LowerBound(val, min) => {
+                if let (Number::I32(value), Number::I32(minimum)) = (val, min) {
+                    let key = pumpkin_data::translation::java::ARGUMENT_INTEGER_LOW;
+                    return Self::CommandFailed(TextComponent::translate_cross_args(
+                        key,
+                        key,
+                        vec![
+                            TranslationArgument::from(minimum),
+                            TranslationArgument::from(value),
+                        ],
+                    ));
+                }
                 let (key, min_text, val_text) = match val {
                     Number::F64(_) | Number::F32(_) => (
                         pumpkin_data::translation::java::ARGUMENT_DOUBLE_LOW,
@@ -112,6 +135,17 @@ impl From<NotInBounds> for CommandError {
                 ))
             }
             NotInBounds::UpperBound(val, max) => {
+                if let (Number::I32(value), Number::I32(maximum)) = (val, max) {
+                    let key = pumpkin_data::translation::java::ARGUMENT_INTEGER_BIG;
+                    return Self::CommandFailed(TextComponent::translate_cross_args(
+                        key,
+                        key,
+                        vec![
+                            TranslationArgument::from(maximum),
+                            TranslationArgument::from(value),
+                        ],
+                    ));
+                }
                 let (key, max_text, val_text) = match val {
                     Number::F64(_) | Number::F32(_) => (
                         pumpkin_data::translation::java::ARGUMENT_DOUBLE_BIG,
@@ -195,11 +229,83 @@ impl<T: ToFromNumber> BoundedNumArgumentConsumer<T> {
         self.name = Some(name);
         self
     }
+
+    fn parse_raw<'a>(&self, raw: RawArg<'a>) -> Result<Arg<'a>, CommandSyntaxError> {
+        let context = CommandSyntaxErrorContext {
+            input: raw.input.to_string(),
+            cursor: raw.start,
+        };
+        let value = raw
+            .value
+            .parse::<T>()
+            .map_err(|_| T::invalid_error(&context, raw.value))?;
+        if let Some(maximum) = self.max_inclusive
+            && value > maximum
+        {
+            return Err(bound_error(
+                &context,
+                value.to_number(),
+                maximum.to_number(),
+                false,
+            ));
+        }
+        if let Some(minimum) = self.min_inclusive
+            && value < minimum
+        {
+            return Err(bound_error(
+                &context,
+                value.to_number(),
+                minimum.to_number(),
+                true,
+            ));
+        }
+        Ok(Arg::Num(Ok(value.to_number())))
+    }
+}
+
+fn bound_error(
+    context: &CommandSyntaxErrorContext,
+    value: Number,
+    bound: Number,
+    low: bool,
+) -> CommandSyntaxError {
+    let text_args = || {
+        [
+            TextComponent::text(bound.to_string()),
+            TextComponent::text(value.to_string()),
+        ]
+    };
+    match (value, bound, low) {
+        (Number::I32(value), Number::I32(bound), true) => error_types::INTEGER_TOO_LOW
+            .create_translation_args(context, [bound.into(), value.into()]),
+        (Number::I32(value), Number::I32(bound), false) => error_types::INTEGER_TOO_HIGH
+            .create_translation_args(context, [bound.into(), value.into()]),
+        (Number::I64(_), Number::I64(_), true) => {
+            error_types::LONG_TOO_LOW.create_args_slice(context, &text_args())
+        }
+        (Number::I64(_), Number::I64(_), false) => {
+            error_types::LONG_TOO_HIGH.create_args_slice(context, &text_args())
+        }
+        (Number::F32(_), Number::F32(_), true) => {
+            error_types::FLOAT_TOO_LOW.create_args_slice(context, &text_args())
+        }
+        (Number::F32(_), Number::F32(_), false) => {
+            error_types::FLOAT_TOO_HIGH.create_args_slice(context, &text_args())
+        }
+        (Number::F64(_), Number::F64(_), true) => {
+            error_types::DOUBLE_TOO_LOW.create_args_slice(context, &text_args())
+        }
+        (Number::F64(_), Number::F64(_), false) => {
+            error_types::DOUBLE_TOO_HIGH.create_args_slice(context, &text_args())
+        }
+        _ => unreachable!("numeric value and bound types must match"),
+    }
 }
 
 pub trait ToFromNumber: PartialOrd + Copy + Send + Sync + FromStr {
     fn to_number(self) -> Number;
     fn from_number(arg: &Number) -> Option<Self>;
+    fn invalid_error(context: &CommandSyntaxErrorContext, value: &str) -> CommandSyntaxError;
 }
 
 impl<T: ToFromNumber> Default for BoundedNumArgumentConsumer<T> {
@@ -218,6 +324,10 @@ impl ToFromNumber for f64 {
             Number::F64(x) => Some(*x),
             _ => None,
         }
+    }
+
+    fn invalid_error(context: &CommandSyntaxErrorContext, value: &str) -> CommandSyntaxError {
+        error_types::READER_INVALID_DOUBLE.create(context, TextComponent::text(value.to_string()))
     }
 }
 
@@ -247,6 +357,10 @@ impl ToFromNumber for f32 {
             _ => None,
         }
     }
+
+    fn invalid_error(context: &CommandSyntaxErrorContext, value: &str) -> CommandSyntaxError {
+        error_types::READER_INVALID_FLOAT.create(context, TextComponent::text(value.to_string()))
+    }
 }
 
 impl GetClientSideArgParser for BoundedNumArgumentConsumer<f32> {
@@ -275,6 +389,11 @@ impl ToFromNumber for i32 {
             _ => None,
         }
     }
+
+    fn invalid_error(context: &CommandSyntaxErrorContext, value: &str) -> CommandSyntaxError {
+        error_types::READER_INVALID_INT
+            .create_translation_args(context, [TranslationArgument::from(value.to_string())])
+    }
 }
 
 impl GetClientSideArgParser for BoundedNumArgumentConsumer<i32> {
@@ -302,6 +421,10 @@ impl ToFromNumber for i64 {
             Number::I64(x) => Some(*x),
             _ => None,
         }
+    }
+
+    fn invalid_error(context: &CommandSyntaxErrorContext, value: &str) -> CommandSyntaxError {
+        error_types::READER_INVALID_LONG.create(context, TextComponent::text(value.to_string()))
     }
 }
 
@@ -351,5 +474,59 @@ mod tests {
         let num_f64 = 0.75f64.to_number();
         assert_eq!(f64::from_number(&num_f64), Some(0.75));
         assert_eq!(i32::from_number(&num_f64), None);
+    }
+
+    #[test]
+    fn integer_bound_errors_preserve_native_integer_arguments() {
+        let error = CommandError::from(NotInBounds::LowerBound(Number::I32(-1), Number::I32(0)));
+        let CommandError::CommandFailed(component) = error else {
+            panic!("expected a command failure");
+        };
+        let nbt = component.0.to_nbt_compound();
+
+        assert_eq!(nbt.get_string("translate"), Some("argument.integer.low"));
+        assert_eq!(nbt.get_int_array("with"), Some(&[0, -1][..]));
+    }
+
+    #[test]
+    fn integer_parser_errors_preserve_brigadier_type_arguments_and_cursor() {
+        let input = "gamerule spawnChunkRadius -1";
+        let start = input.rfind("-1").unwrap();
+        let consumer = BoundedNumArgumentConsumer::<i32>::new().min(0).max(32);
+        let low = consumer
+            .parse_raw(RawArg {
+                value: "-1",
+                start,
+                end: input.len(),
+                input,
+            })
+            .err()
+            .expect("out-of-range integer must be a syntax error");
+        assert!(low.is(&error_types::INTEGER_TOO_LOW));
+        assert_eq!(low.context.unwrap().cursor, start);
+        assert_eq!(
+            low.message.0.to_nbt_compound().get_int_array("with"),
+            Some(&[0, -1][..])
+        );
+
+        let invalid_input = "gamerule snowAccumulationHeight 2147483648";
+        let invalid_start = invalid_input.rfind("2147483648").unwrap();
+        let invalid = BoundedNumArgumentConsumer::<i32>::new()
+            .parse_raw(RawArg {
+                value: "2147483648",
+                start: invalid_start,
+                end: invalid_input.len(),
+                input: invalid_input,
+            })
+            .err()
+            .expect("overflowing integer must be a syntax error");
+        assert!(invalid.is(&error_types::READER_INVALID_INT));
+        assert_eq!(invalid.context.unwrap().cursor, invalid_start);
+        let nbt = invalid.message.0.to_nbt_compound();
+        assert_eq!(nbt.get_string("translate"), Some("parsing.int.invalid"));
+        assert_eq!(
+            nbt.get_list("with").unwrap().first(),
+            Some(&pumpkin_nbt::tag::NbtTag::String("2147483648".into()))
+        );
     }
 }

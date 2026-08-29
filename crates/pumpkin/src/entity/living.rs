@@ -1,3 +1,6 @@
+use pumpkin_data::block_properties::{
+    BlockProperties, LadderLikeProperties, OakTrapdoorLikeProperties,
+};
 use pumpkin_data::item::Item;
 use pumpkin_data::particle::Particle;
 use pumpkin_data::potion::Effect;
@@ -22,7 +25,7 @@ use std::{collections::HashMap, sync::atomic::AtomicI32};
 use tracing::warn;
 
 use super::experience_orb::ExperienceOrbEntity;
-use super::{Entity, EntityBase, NBTStorage, NBTStorageInit};
+use super::{Entity, EntityBase, NBTStorage, NBTStorageInit, pushable_by};
 use crate::block::OnLandedUponArgs;
 use crate::entity::attributes::AttributeInstance;
 use crate::entity::attributes::Modifier;
@@ -1243,54 +1246,31 @@ impl LivingEntity {
     }
 
     fn check_climbing(&self) {
-        // If spectator: return false
+        let mut pos = self.entity.block_pos.load();
+        let world = self.entity.world.load();
+        let (block, state) = world.get_block_and_state(&pos);
 
-        // TODO
-        // let mut pos = self.entity.block_pos.load();
+        if block.has_tag(&tag::Block::MINECRAFT_CLIMBABLE) {
+            self.climbing.store(true, Relaxed);
+            self.climbing_pos.store(Some(pos));
+            return;
+        }
 
-        // let world = self.entity.world.read().await;
-
-        // let (block, state) = world.get_block_and_state(&pos);
-
-        // let name = block.properties(state.id).map(|props| props.name());
-
-        // if let Some(name) = name {
-        //     if name == "LadderLikeProperties"
-        //         || name == "ScaffoldingLikeProperties"
-        //         || name == "CaveVinesLikeProperties"
-        //         || name == "CaveVinesPlantLikeProperties"
-        //     {
-        //         self.climbing.store(true, Relaxed);
-
-        //         self.climbing_pos.store(Some(pos));
-
-        //         return;
-        //     }
-
-        //     if name == "OakTrapdoorLikeProperties" {
-        //         let trapdoor = OakTrapdoorLikeProperties::from_state_id(state.id, &block);
-
-        //         pos.0.y -= 1;
-
-        //         let (down_block, down_state) = world.get_block_and_state(&pos);
-
-        //         let is_ladder = down_block
-        //             .properties(down_state.id)
-        //             .is_some_and(|down_props| down_props.name() == "LadderLikeProperties");
-
-        //         if is_ladder {
-        //             let ladder = LadderLikeProperties::from_state_id(down_state.id, &down_block);
-
-        //             if trapdoor.r#facing == ladder.r#facing {
-        //                 self.climbing.store(true, Relaxed);
-
-        //                 self.climbing_pos.store(Some(pos));
-
-        //                 return;
-        //             }
-        //         }
-        //     }
-        // }
+        if block.has_tag(&tag::Block::MINECRAFT_TRAPDOORS) {
+            let trapdoor = OakTrapdoorLikeProperties::from_state_id(state.id, block);
+            if trapdoor.open {
+                pos.0.y -= 1;
+                let (below_block, below_state) = world.get_block_and_state(&pos);
+                if below_block == &Block::LADDER {
+                    let ladder = LadderLikeProperties::from_state_id(below_state.id, below_block);
+                    if trapdoor.r#facing == ladder.r#facing {
+                        self.climbing.store(true, Relaxed);
+                        self.climbing_pos.store(Some(pos));
+                        return;
+                    }
+                }
+            }
+        }
 
         self.climbing.store(false, Relaxed);
 
@@ -1554,6 +1534,16 @@ impl LivingEntity {
             // Statistics updates
             self.update_death_stats(&*dyn_self, cause).await;
 
+            if dyn_self.get_player().is_some()
+                && world
+                    .level_info
+                    .load()
+                    .game_rules
+                    .ender_pearls_vanish_on_death
+            {
+                world.remove_owned_ender_pearls(self.entity.entity_id).await;
+            }
+
             // Plays the death sound
             world.send_entity_status(
                 &self.entity,
@@ -1693,7 +1683,26 @@ impl LivingEntity {
             //TODO: KillCredit
             let death_message = Self::get_death_message(dyn_self, damage_type, source, cause).await;
             if let Some(server) = world.server.upgrade() {
-                for player in server.get_all_players() {
+                let all_players = server.get_all_players();
+                let recipients = if let Some(victim) = dyn_self.get_player() {
+                    let scoreboard = world.scoreboard.lock().await;
+                    scoreboard.get_entity_team(&victim.gameprofile.name).map_or(
+                        all_players.clone(),
+                        |team| {
+                            all_players
+                                .iter()
+                                .filter(|player| {
+                                    let same_team = team.players.contains(&player.gameprofile.name);
+                                    team.death_message_visibility.allows_recipient(same_team)
+                                })
+                                .cloned()
+                                .collect()
+                        },
+                    )
+                } else {
+                    all_players
+                };
+                for player in recipients {
                     player.send_system_message(&death_message).await;
                 }
             }
@@ -2971,6 +2980,33 @@ impl EntityBase for LivingEntity {
                 self.health.load() <= 0.0 && self.death_time.load(Relaxed) < 20;
             if is_alive || (in_death_animation && self.entity.entity_type != &EntityType::PLAYER) {
                 self.tick_movement(server, caller).await;
+                let world = self.entity.world.load();
+                let max_entity_cramming = world.level_info.load().game_rules.max_entity_cramming;
+                if max_entity_cramming > 0 {
+                    let entity_id = self.entity.entity_id;
+                    let mut nearby = Vec::new();
+                    for other in world.get_all_at_box(&self.entity.bounding_box.load()) {
+                        if other.get_entity().entity_id != entity_id
+                            && pushable_by(caller, &other).await
+                        {
+                            nearby.push(other);
+                        }
+                    }
+
+                    if cramming_threshold_exceeded(max_entity_cramming, nearby.len())
+                        && rand::rng().random_range(0..4) == 0
+                    {
+                        let mut non_passengers = 0;
+                        for other in &nearby {
+                            if !other.is_passenger().await {
+                                non_passengers += 1;
+                            }
+                        }
+                        if cramming_threshold_exceeded(max_entity_cramming, non_passengers) {
+                            caller.damage(&**caller, 6.0, DamageType::CRAMMING).await;
+                        }
+                    }
+                }
                 // Entity pushing / collisions (vanilla parity):
                 // Mobs and players push each other when colliding instead of merging together.
                 let _ = caller.push_entities(caller).await;
@@ -3190,7 +3226,9 @@ impl EntityBase for LivingEntity {
     }
 
     fn is_pushable(&self) -> bool {
-        self.health.load() > 0.0 && !self.dead.load(Relaxed)
+        self.health.load() > 0.0
+            && !self.dead.load(Relaxed)
+            && !self.climbing.load(Ordering::Relaxed)
     }
 
     fn cast_any(&self) -> &dyn std::any::Any {
@@ -3200,6 +3238,10 @@ impl EntityBase for LivingEntity {
     fn as_nbt_storage(&self) -> &dyn NBTStorage {
         self
     }
+}
+
+fn cramming_threshold_exceeded(max_entity_cramming: i64, nearby_entities: usize) -> bool {
+    max_entity_cramming > 0 && (nearby_entities as u128) > (max_entity_cramming - 1) as u128
 }
 
 impl LivingEntity {
@@ -3365,6 +3407,16 @@ fn store_float_if_present(target: &AtomicCell<f32>, value: Option<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vanilla_cramming_threshold_counts_other_entities_and_disables_at_nonpositive_values() {
+        assert!(!cramming_threshold_exceeded(0, usize::MAX));
+        assert!(!cramming_threshold_exceeded(-1, usize::MAX));
+        assert!(!cramming_threshold_exceeded(24, 23));
+        assert!(cramming_threshold_exceeded(24, 24));
+        assert!(!cramming_threshold_exceeded(1, 0));
+        assert!(cramming_threshold_exceeded(1, 1));
+    }
 
     #[test]
     fn vanilla_partial_nbt_preserves_omitted_living_values() {

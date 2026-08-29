@@ -15,6 +15,7 @@ use pumpkin_protocol::codec::var_ulong::VarULong;
 use pumpkin_protocol::java::client::play::{CSetEntityMetadata, Metadata};
 use pumpkin_util::math::atomic_f32::AtomicF32;
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_util::text::{TextComponent, hover::HoverEvent};
 use std::sync::atomic::Ordering::{AcqRel, Relaxed};
 
 use std::sync::{
@@ -116,6 +117,19 @@ impl ItemEntity {
 
     pub const fn get_entity(&self) -> &Entity {
         &self.entity
+    }
+
+    /// Replaces the stack represented by this item entity and synchronizes the
+    /// tracked item metadata to observing clients.
+    pub async fn set_item_stack(&self, item_stack: ItemStack) {
+        *self.item_stack.lock().await = item_stack.clone();
+        self.entity.send_meta_data(
+            &[Metadata::new(
+                pumpkin_data::tracked_data::item::ITEM,
+                &ItemStackSerializer::from(item_stack),
+            )],
+            None,
+        );
     }
 
     async fn can_merge(&self) -> bool {
@@ -473,6 +487,20 @@ impl NBTStorage for ItemEntity {
 }
 
 impl EntityBase for ItemEntity {
+    fn get_display_name(&self) -> EntityBaseFuture<'_, TextComponent> {
+        Box::pin(async move {
+            let entity = &self.entity;
+            let name = self.item_stack.lock().await.get_item_entity_name();
+            name.clone()
+                .hover_event(HoverEvent::show_entity(
+                    entity.entity_uuid.to_string(),
+                    "minecraft:item".to_string(),
+                    Some(name),
+                ))
+                .insertion(entity.entity_uuid.to_string())
+        })
+    }
+
     fn tick<'a>(
         &'a self,
         caller: &'a Arc<dyn EntityBase>,

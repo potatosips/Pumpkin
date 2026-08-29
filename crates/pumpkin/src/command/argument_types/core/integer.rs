@@ -1,11 +1,9 @@
 use crate::command::{
-    argument_types::{
-        argument_type::{ArgumentType, JavaClientArgumentType},
-        core::within_or_err,
-    },
+    argument_types::argument_type::{ArgumentType, JavaClientArgumentType},
     errors::{command_syntax_error::CommandSyntaxError, error_types},
     string_reader::StringReader,
 };
+use pumpkin_util::text::TranslationArgument;
 
 /// Represents an argument type parsing an [`i32`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -20,15 +18,27 @@ impl ArgumentType for IntegerArgumentType {
     fn parse(&self, reader: &mut StringReader) -> Result<i32, CommandSyntaxError> {
         let reader_start = reader.cursor();
         let result = reader.read_int()?;
-        within_or_err(
-            reader,
-            reader_start,
-            result,
-            self.min,
-            self.max,
-            &error_types::INTEGER_TOO_LOW,
-            &error_types::INTEGER_TOO_HIGH,
-        )
+        if result < self.min {
+            reader.set_cursor(reader_start);
+            Err(error_types::INTEGER_TOO_LOW.create_translation_args(
+                reader,
+                [
+                    TranslationArgument::from(self.min),
+                    TranslationArgument::from(result),
+                ],
+            ))
+        } else if result > self.max {
+            reader.set_cursor(reader_start);
+            Err(error_types::INTEGER_TOO_HIGH.create_translation_args(
+                reader,
+                [
+                    TranslationArgument::from(self.max),
+                    TranslationArgument::from(result),
+                ],
+            ))
+        } else {
+            Ok(result)
+        }
     }
 
     fn client_side_parser(&'_ self) -> JavaClientArgumentType {

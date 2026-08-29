@@ -117,6 +117,16 @@ impl Worldborder {
     }
 
     #[must_use]
+    pub fn distance_to_border(&self, x: f64, z: f64) -> f64 {
+        let half = self.new_diameter / 2.0;
+        let min_x = self.center_x - half;
+        let max_x = self.center_x + half;
+        let min_z = self.center_z - half;
+        let max_z = self.center_z + half;
+        (x - min_x).min(max_x - x).min(z - min_z).min(max_z - z)
+    }
+
+    #[must_use]
     pub fn clamp_block(&self, x: i32, z: i32) -> (i32, i32) {
         let half = self.new_diameter / 2.0;
         let min_x = (self.center_x - half).floor() as i32;

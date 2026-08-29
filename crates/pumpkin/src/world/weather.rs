@@ -25,8 +25,6 @@ pub struct Weather {
     pub old_rain_level: f32,
     pub thunder_level: f32,
     pub old_thunder_level: f32,
-
-    pub weather_cycle_enabled: bool,
 }
 
 impl Default for Weather {
@@ -48,7 +46,6 @@ impl Weather {
             old_rain_level: 0.0,
             thunder_level: 0.0,
             old_thunder_level: 0.0,
-            weather_cycle_enabled: true,
         }
     }
 
@@ -77,10 +74,8 @@ impl Weather {
         }
     }
 
-    pub fn tick_weather(&mut self, world: &World) {
-        if self.weather_cycle_enabled {
-            self.advance_weather_cycle();
-        }
+    pub fn tick_weather(&mut self, world: &World, advance_weather: bool) {
+        self.advance_weather_if_enabled(advance_weather);
 
         // Update visual transitions
         self.old_rain_level = self.rain_level;
@@ -111,6 +106,12 @@ impl Weather {
                 GameEvent::ThunderLevelChange,
                 self.thunder_level,
             ));
+        }
+    }
+
+    fn advance_weather_if_enabled(&mut self, advance_weather: bool) {
+        if advance_weather {
+            self.advance_weather_cycle();
         }
     }
 
@@ -167,7 +168,6 @@ impl Clone for Weather {
             old_rain_level: self.old_rain_level,
             thunder_level: self.thunder_level,
             old_thunder_level: self.old_thunder_level,
-            weather_cycle_enabled: self.weather_cycle_enabled,
         }
     }
 }
@@ -198,5 +198,29 @@ mod tests {
         assert_eq!(weather.thunder_time, 1);
         assert!(weather.raining);
         assert!(weather.thundering);
+    }
+
+    #[test]
+    fn weather_cycle_gamerule_freezes_timers_and_weather_state() {
+        let mut weather = Weather::new();
+        weather.raining = true;
+        weather.thundering = true;
+        weather.clear_weather_time = 7;
+        weather.rain_time = 11;
+        weather.thunder_time = 13;
+
+        weather.advance_weather_if_enabled(false);
+        assert_eq!(weather.clear_weather_time, 7);
+        assert_eq!(weather.rain_time, 11);
+        assert_eq!(weather.thunder_time, 13);
+        assert!(weather.raining);
+        assert!(weather.thundering);
+
+        weather.advance_weather_if_enabled(true);
+        assert_eq!(weather.clear_weather_time, 6);
+        assert_eq!(weather.rain_time, 0);
+        assert_eq!(weather.thunder_time, 0);
+        assert!(!weather.raining);
+        assert!(!weather.thundering);
     }
 }

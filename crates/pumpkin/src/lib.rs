@@ -759,7 +759,12 @@ fn setup_console(mut rl: Editor<PumpkinCommandCompleter, FileHistory>, server: A
                 }
                 Err(ReadlineError::Interrupted) => {
                     info!("CTRL-C");
-                    stop_or_exit_server();
+                    // The platform signal listener receives this same physical
+                    // Ctrl-C. Keep readline's copy idempotent so it cannot race
+                    // graceful shutdown and turn the first interrupt into a
+                    // forced process exit. A genuinely separate later signal is
+                    // still handled by `setup_sighandler` and may force exit.
+                    stop_server();
                     break;
                 }
                 Err(ReadlineError::Eof) => {

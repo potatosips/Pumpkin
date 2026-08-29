@@ -60,6 +60,7 @@ impl OwnedArg {
             Arg::Pos3D(v) => Self::Pos3D(*v),
             Arg::Pos2D(v) => Self::Pos2D(*v),
             Arg::Rotation(a, b, c, d) => Self::Rotation(*a, *b, *c, *d),
+            Arg::Angle(angle) => Self::Rotation(*angle, false, 0.0, false),
             Arg::GameMode(g) => Self::GameMode(*g),
             Arg::Difficulty(d) => Self::Difficulty(*d),
             Arg::CommandTree(t) => Self::CommandTree(t.clone()),

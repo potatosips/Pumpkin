@@ -1,4 +1,4 @@
-use std::{borrow::Cow, vec};
+use std::{borrow::Cow, collections::BTreeMap, vec};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +17,9 @@ pub enum HoverEvent {
         /// Number of the items in the stack.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         count: Option<i32>,
-        // #[serde(default, skip_serializing_if = "Option::is_none")]
-        // components: Option<Cow<'static, str>>,
+        /// String-valued item data components, encoded under `contents.components`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        components: Option<BTreeMap<Cow<'static, str>, Cow<'static, str>>>,
     },
     /// Shows an entity.
     ShowEntity {

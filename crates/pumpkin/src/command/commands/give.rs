@@ -1,5 +1,4 @@
 use pumpkin_util::text::TextComponent;
-use pumpkin_util::text::hover::HoverEvent;
 
 use crate::command::args::bounded_num::BoundedNumArgumentConsumer;
 use crate::command::args::players::PlayersArgumentConsumer;
@@ -66,13 +65,7 @@ impl CommandExecutor for Executor {
                     pumpkin_data::translation::bedrock::COMMANDS_GIVE_SUCCESS,
                     [
                         TextComponent::text(item_count.to_string()),
-                        TextComponent::text("[")
-                            .add_child(item.translated_name())
-                            .add_child(TextComponent::text("]"))
-                            .hover_event(HoverEvent::ShowItem {
-                                id: item_name.to_string().into(),
-                                count: Some(item_count.min(99)),
-                            }),
+                        parsed_stack.to_hoverable_text(item_count.min(99)),
                         targets[0].get_display_name().await,
                     ],
                 )
@@ -82,13 +75,7 @@ impl CommandExecutor for Executor {
                     pumpkin_data::translation::bedrock::COMMANDS_GIVE_SUCCESS,
                     [
                         TextComponent::text(item_count.to_string()),
-                        TextComponent::text("[")
-                            .add_child(item.translated_name())
-                            .add_child(TextComponent::text("]"))
-                            .hover_event(HoverEvent::ShowItem {
-                                id: item_name.to_string().into(),
-                                count: Some(item_count.min(99)),
-                            }),
+                        parsed_stack.to_hoverable_text(item_count.min(99)),
                         TextComponent::text(targets.len().to_string()),
                     ],
                 )
