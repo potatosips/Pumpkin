@@ -66,6 +66,7 @@ pub struct PendingConnection {
     pub gameprofile: Option<GameProfile>,
     pub config: Option<PlayerConfig>,
     pub brand: Option<String>,
+    pub verify_token: Option<[u8; 4]>,
     pub packet_limiter: PacketRateLimiter,
 }
 
@@ -90,6 +91,7 @@ impl PendingConnection {
             gameprofile: None,
             config: None,
             brand: None,
+            verify_token: None,
             packet_limiter,
         }
     }

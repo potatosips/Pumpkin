@@ -1555,9 +1555,9 @@ impl Player {
         );
 
         if victim.get_living_entity().is_some() {
-            let mut knockback_strength = 1.0 + f64::from(knockback_level);
+            let knockback_strength = extra_attack_knockback(knockback_level, attack_type);
             match attack_type {
-                AttackType::Knockback => knockback_strength += 1.0,
+                AttackType::Knockback => {}
                 AttackType::Sweeping => {
                     combat::spawn_sweep_particle(attacker_entity, &world, &pos);
 
@@ -1596,7 +1596,7 @@ impl Player {
                 }
                 _ => {}
             }
-            if config.knockback {
+            if config.knockback && knockback_strength > 0.0 {
                 combat::handle_knockback(attacker_entity, victim.as_ref(), knockback_strength);
             }
         }
@@ -7046,6 +7046,15 @@ fn player_is_pushable(gamemode: GameMode, health: f32, dead: bool, on_climbable:
     gamemode != GameMode::Spectator && health > 0.0 && !dead && !on_climbable
 }
 
+fn extra_attack_knockback(knockback_level: u32, attack_type: AttackType) -> f64 {
+    f64::from(knockback_level)
+        + if attack_type == AttackType::Knockback {
+            1.0
+        } else {
+            0.0
+        }
+}
+
 fn health_sync_required(
     health: f32,
     food: u8,
@@ -7062,9 +7071,10 @@ fn health_sync_required(
 #[cfg(test)]
 mod tests {
     use super::{
-        bedrock_inventory_slot, health_sync_required, player_is_pushable, read_root_vehicle,
-        write_root_vehicle,
+        bedrock_inventory_slot, extra_attack_knockback, health_sync_required, player_is_pushable,
+        read_root_vehicle, write_root_vehicle,
     };
+    use crate::entity::combat::AttackType;
     use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
     use pumpkin_util::GameMode;
     use uuid::Uuid;
@@ -7078,6 +7088,15 @@ mod tests {
         assert!(!player_is_pushable(GameMode::Survival, 0.0, false, false));
         assert!(!player_is_pushable(GameMode::Survival, 20.0, true, false));
         assert!(!player_is_pushable(GameMode::Survival, 20.0, false, true));
+    }
+
+    #[test]
+    fn plain_attacks_do_not_add_a_second_knockback_impulse() {
+        assert_eq!(extra_attack_knockback(0, AttackType::Strong), 0.0);
+        assert_eq!(extra_attack_knockback(0, AttackType::Weak), 0.0);
+        assert_eq!(extra_attack_knockback(0, AttackType::Knockback), 1.0);
+        assert_eq!(extra_attack_knockback(2, AttackType::Strong), 2.0);
+        assert_eq!(extra_attack_knockback(2, AttackType::Knockback), 3.0);
     }
 
     #[test]
