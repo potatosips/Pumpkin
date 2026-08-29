@@ -117,7 +117,7 @@ use crate::command::errors::{
     command_syntax_error::{CommandSyntaxError, ContextProvider},
     error_types::sealed::Sealed,
 };
-use pumpkin_util::text::TextComponent;
+use pumpkin_util::text::{TextComponent, TranslationArgument};
 
 /// Represents text which can be used as a template that is generated at
 /// compile time and cannot change at runtime.
@@ -192,6 +192,44 @@ impl<const N: usize> CommandErrorType<N> {
                 self.java_translation_key,
                 self.bedrock_translation_key,
                 args.to_vec(),
+            ),
+            context_provider,
+        )
+    }
+
+    /// Creates an error whose Java translation arguments retain primitive NBT
+    /// types instead of being forced through nested text components.
+    #[must_use]
+    pub fn create_without_context_translation_args(
+        &'static self,
+        args: [TranslationArgument; N],
+    ) -> CommandSyntaxError {
+        CommandSyntaxError::create_without_context(
+            self,
+            TextComponent::translate_cross_args(
+                self.java_translation_key,
+                self.bedrock_translation_key,
+                args,
+            ),
+        )
+    }
+
+    /// Context-preserving counterpart to
+    /// [`Self::create_without_context_translation_args`].
+    pub fn create_translation_args<C>(
+        &'static self,
+        context_provider: &C,
+        args: [TranslationArgument; N],
+    ) -> CommandSyntaxError
+    where
+        C: ContextProvider,
+    {
+        CommandSyntaxError::create(
+            self,
+            TextComponent::translate_cross_args(
+                self.java_translation_key,
+                self.bedrock_translation_key,
+                args,
             ),
             context_provider,
         )

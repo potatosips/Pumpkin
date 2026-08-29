@@ -122,6 +122,7 @@ phf = { workspace = true, features = ["macros"] }
 pumpkin-util.workspace = true
 pumpkin-nbt.workspace = true
 serde = {workspace = true, features = ["rc"]}
+serde_json.workspace = true
 crc-fast.workspace = true
 rand.workspace = true
 

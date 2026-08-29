@@ -170,21 +170,25 @@ impl FireballEntity {
 impl NBTStorage for FireballEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
+            self.thrown.entity.write_nbt(nbt).await;
             nbt.put_double("acceleration_power", self.get_acceleration_power());
-            nbt.put_float("ExplosionPower", self.get_explosion_power());
+            // Java's LargeFireball stores its integer explosion power as a
+            // byte, even though Pumpkin uses f32 internally for explosions.
+            nbt.put_byte("ExplosionPower", self.get_explosion_power() as i8);
         })
     }
 
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async move {
+            self.thrown.entity.read_nbt_non_mut(nbt).await;
             if let Some(accel) = nbt
                 .get_double("acceleration_power")
                 .or_else(|| nbt.get_double("power"))
             {
                 self.set_acceleration_power(accel);
             }
-            if let Some(exp) = nbt.get_float("ExplosionPower") {
-                self.set_explosion_power(exp);
+            if let Some(exp) = numeric_explosion_power(nbt) {
+                self.set_explosion_power(f32::from(exp));
             }
         })
     }
@@ -273,10 +277,23 @@ impl EntityBase for FireballEntity {
 
             let hit_pos = hit.hit_pos();
             world
-                .explode_with_fire(hit_pos, self.get_explosion_power())
+                .explode_mob_with_fire(
+                    hit_pos,
+                    self.get_explosion_power(),
+                    self.get_entity().entity_id,
+                )
                 .await;
         })
     }
+}
+
+fn numeric_explosion_power(nbt: &NbtCompound) -> Option<i8> {
+    nbt.get_byte("ExplosionPower")
+        .or_else(|| nbt.get_short("ExplosionPower").map(|value| value as i8))
+        .or_else(|| nbt.get_int("ExplosionPower").map(|value| value as i8))
+        .or_else(|| nbt.get_long("ExplosionPower").map(|value| value as i8))
+        .or_else(|| nbt.get_float("ExplosionPower").map(|value| value as i8))
+        .or_else(|| nbt.get_double("ExplosionPower").map(|value| value as i8))
 }
 
 #[cfg(test)]
@@ -290,5 +307,20 @@ mod tests {
         assert_eq!(DEFAULT_EXPLOSION_POWER, 1.0);
         assert_eq!(AIR_INERTIA, 0.95);
         assert_eq!(WATER_INERTIA, 0.8);
+    }
+
+    #[test]
+    fn vanilla_explosion_power_accepts_numeric_nbt_and_narrows_to_byte() {
+        let mut byte = NbtCompound::new();
+        byte.put_byte("ExplosionPower", 4);
+        assert_eq!(numeric_explosion_power(&byte), Some(4));
+
+        let mut legacy_float = NbtCompound::new();
+        legacy_float.put_float("ExplosionPower", 3.75);
+        assert_eq!(numeric_explosion_power(&legacy_float), Some(3));
+
+        let mut integer = NbtCompound::new();
+        integer.put_int("ExplosionPower", 260);
+        assert_eq!(numeric_explosion_power(&integer), Some(4));
     }
 }

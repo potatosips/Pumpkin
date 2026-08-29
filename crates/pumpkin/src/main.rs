@@ -308,11 +308,10 @@ fn try_set_crash_report(crash_report: CrashReport) -> Option<&'static CrashRepor
 // Non-UNIX Ctrl-C handling
 #[cfg(not(unix))]
 async fn setup_sighandler() -> io::Result<()> {
-    if ctrl_c().await.is_ok() {
+    loop {
+        ctrl_c().await?;
         handle_interrupt();
     }
-
-    Ok(())
 }
 
 // Unix signal handling

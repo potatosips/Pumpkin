@@ -4,7 +4,6 @@ use pumpkin_inventory::screen_handler::InventoryPlayer;
 use pumpkin_protocol::codec::item_stack_seralizer::ItemStackSerializer;
 use pumpkin_protocol::java::client::play::CSetContainerSlot;
 use pumpkin_util::text::TextComponent;
-use pumpkin_util::text::hover::HoverEvent;
 use pumpkin_world::inventory::Inventory;
 
 use crate::command::args::bounded_num::BoundedNumArgumentConsumer;
@@ -25,6 +24,10 @@ const ARG_POS: &str = "pos";
 const ARG_SLOT: &str = "slot";
 const ARG_ITEM: &str = "item";
 const ARG_TARGETS: &str = "targets";
+
+const fn is_item_entity_slot(slot: usize) -> bool {
+    slot == 0
+}
 
 const fn count_consumer() -> BoundedNumArgumentConsumer<i32> {
     BoundedNumArgumentConsumer::new()
@@ -107,13 +110,7 @@ impl CommandExecutor for BlockReplaceExecutor {
                     TextComponent::text(pos.0.x.to_string()),
                     TextComponent::text(pos.0.y.to_string()),
                     TextComponent::text(pos.0.z.to_string()),
-                    TextComponent::text("[")
-                        .add_child(item.translated_name())
-                        .add_child(TextComponent::text("]"))
-                        .hover_event(HoverEvent::ShowItem {
-                            id: item_name.to_string().into(),
-                            count: Some(count),
-                        }),
+                    item_stack.to_hoverable_text(count),
                 ],
             );
             sender.send_message(msg).await;
@@ -213,6 +210,11 @@ impl CommandExecutor for EntityReplaceExecutor {
                             modified_count += 1;
                         }
                     }
+                } else if is_item_entity_slot(mojang_slot)
+                    && let Some(item_entity) = target.clone().get_item_entity()
+                {
+                    item_entity.set_item_stack(item_stack.clone()).await;
+                    modified_count += 1;
                 } else if let Some(living) = target.get_living_entity() {
                     let mapped_eq = if mojang_slot == 98 {
                         Some(EquipmentSlot::MAIN_HAND)
@@ -260,13 +262,7 @@ impl CommandExecutor for EntityReplaceExecutor {
                     translation::java::COMMANDS_ITEM_ENTITY_SET_SUCCESS_SINGLE,
                     [
                         targets[0].get_display_name().await,
-                        TextComponent::text("[")
-                            .add_child(item.translated_name())
-                            .add_child(TextComponent::text("]"))
-                            .hover_event(HoverEvent::ShowItem {
-                                id: item_name.to_string().into(),
-                                count: Some(count),
-                            }),
+                        item_stack.to_hoverable_text(count),
                     ],
                 )
             } else {
@@ -275,13 +271,7 @@ impl CommandExecutor for EntityReplaceExecutor {
                     translation::java::COMMANDS_ITEM_ENTITY_SET_SUCCESS_MULTIPLE,
                     [
                         TextComponent::text(modified_count.to_string()),
-                        TextComponent::text("[")
-                            .add_child(item.translated_name())
-                            .add_child(TextComponent::text("]"))
-                            .hover_event(HoverEvent::ShowItem {
-                                id: item_name.to_string().into(),
-                                count: Some(count),
-                            }),
+                        item_stack.to_hoverable_text(count),
                     ],
                 )
             };
@@ -346,4 +336,17 @@ pub fn init_command_tree() -> CommandTree {
                 ),
             ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_item_entity_slot;
+
+    #[test]
+    fn item_entities_expose_only_vanilla_slot_zero() {
+        assert!(is_item_entity_slot(0));
+        for slot in [1, 35, 98, 99, 100, 103, 105, 106, 200] {
+            assert!(!is_item_entity_slot(slot));
+        }
+    }
 }

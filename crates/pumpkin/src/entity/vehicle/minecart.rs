@@ -37,7 +37,7 @@ use container::MinecartInventory;
 use furnace::FurnaceMinecart;
 use hopper::HopperMinecart;
 use rideable::RideableMinecart;
-use tnt::TntMinecart;
+use tnt::{TntMinecart, retained_horizontal_speed_squared, should_explode_on_horizontal_collision};
 
 const fn get_exits(
     shape: pumpkin_data::block_properties::RailShape,
@@ -425,21 +425,32 @@ impl EntityBase for MinecartEntity {
             }
 
             if velocity.length() > 0.001 {
+                let position_before_move = self.vehicle.entity.pos.load();
                 self.move_entity(caller, velocity).await;
 
+                let actual_move = self.vehicle.entity.pos.load() - position_before_move;
+                let post_collision_velocity = self.vehicle.entity.velocity.load();
+                let horizontal_collision = self
+                    .vehicle
+                    .entity
+                    .horizontal_collision
+                    .load(Ordering::Relaxed);
+                let post_collision_speed_squared = retained_horizontal_speed_squared(
+                    velocity.x,
+                    velocity.z,
+                    actual_move.x,
+                    actual_move.z,
+                    post_collision_velocity.x,
+                    post_collision_velocity.z,
+                );
                 if let MinecartKind::Tnt(minecart) = &self.kind
-                    && self
-                        .vehicle
-                        .entity
-                        .horizontal_collision
-                        .load(Ordering::Relaxed)
-                    && velocity.x.mul_add(velocity.x, velocity.z * velocity.z) >= 0.01
+                    && should_explode_on_horizontal_collision(
+                        horizontal_collision,
+                        post_collision_speed_squared,
+                    )
                 {
                     minecart
-                        .explode(
-                            &self.vehicle.entity,
-                            velocity.x.mul_add(velocity.x, velocity.z * velocity.z),
-                        )
+                        .explode(&self.vehicle.entity, post_collision_speed_squared)
                         .await;
                     return;
                 }
@@ -484,14 +495,19 @@ impl EntityBase for MinecartEntity {
                     }
                 }
 
-                let mut next_vel =
-                    if is_on_rails && let MinecartKind::Furnace(minecart) = &self.kind {
-                        minecart.velocity(&self.vehicle.entity, velocity)
-                    } else if is_on_rails && let Some(inventory) = self.container() {
-                        container::velocity(&self.vehicle.entity, inventory, velocity).await
-                    } else {
-                        velocity.multiply(friction, friction, friction)
-                    };
+                // Entity::move_entity has already removed velocity components clipped by
+                // collision. Vanilla applies minecart slowdown to that current delta
+                // movement, not to the stale pre-move request.
+                let mut next_vel = if is_on_rails
+                    && let MinecartKind::Furnace(minecart) = &self.kind
+                {
+                    minecart.velocity(&self.vehicle.entity, post_collision_velocity)
+                } else if is_on_rails && let Some(inventory) = self.container() {
+                    container::velocity(&self.vehicle.entity, inventory, post_collision_velocity)
+                        .await
+                } else {
+                    post_collision_velocity.multiply(friction, friction, friction)
+                };
                 if next_vel.length() < 0.005 {
                     next_vel = Vector3::new(0.0, 0.0, 0.0);
                 }

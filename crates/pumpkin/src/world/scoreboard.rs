@@ -206,6 +206,17 @@ impl Scoreboard {
             .find(|team| team.players.iter().any(|p| p == entity_name))
     }
 
+    #[must_use]
+    pub fn can_harm_player(&self, attacker_name: &str, victim_name: &str) -> bool {
+        let Some(attacker_team) = self.get_entity_team(attacker_name) else {
+            return true;
+        };
+        let Some(victim_team) = self.get_entity_team(victim_name) else {
+            return true;
+        };
+        attacker_team.name != victim_team.name || (attacker_team.options & 0x01) != 0
+    }
+
     pub async fn add_objective(
         &mut self,
         target: &impl ScoreboardTarget,
@@ -605,14 +616,32 @@ impl Scoreboard {
         team_name: &str,
         player: String,
     ) {
-        let Some(team) = self.teams.get_mut(team_name) else {
+        if !self.teams.contains_key(team_name) {
             warn!(
                 "Tried to add player to Team which does not exist, {}",
                 team_name
             );
             return;
-        };
+        }
 
+        // Vanilla score holders belong to at most one team. Moving a holder
+        // therefore removes it from every previous team before adding it to
+        // the destination and emits the corresponding client removals.
+        let previous_teams = self
+            .teams
+            .iter()
+            .filter(|(name, team)| *name != team_name && team.players.contains(&player))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for previous_team in previous_teams {
+            self.remove_player_from_team(target, &previous_team, &player)
+                .await;
+        }
+
+        let team = self
+            .teams
+            .get_mut(team_name)
+            .expect("destination team existence was checked above");
         if team.players.contains(&player) {
             return;
         }
@@ -836,6 +865,36 @@ pub enum NameTagVisibility {
     HideForOwnTeam,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeathMessageVisibility {
+    Always,
+    Never,
+    HideForOtherTeams,
+    HideForOwnTeam,
+}
+
+impl DeathMessageVisibility {
+    #[must_use]
+    pub const fn to_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Never => "never",
+            Self::HideForOtherTeams => "hideForOtherTeams",
+            Self::HideForOwnTeam => "hideForOwnTeam",
+        }
+    }
+
+    #[must_use]
+    pub const fn allows_recipient(self, same_team: bool) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Never => false,
+            Self::HideForOtherTeams => same_team,
+            Self::HideForOwnTeam => !same_team,
+        }
+    }
+}
+
 impl NameTagVisibility {
     #[must_use]
     pub const fn to_str(&self) -> &'static str {
@@ -874,6 +933,7 @@ pub struct Team {
     pub display_name: TextComponent,
     pub options: i8,
     pub nametag_visibility: NameTagVisibility,
+    pub death_message_visibility: DeathMessageVisibility,
     pub collision_rule: CollisionRule,
     pub color: NamedColor,
     pub player_prefix: TextComponent,
@@ -1350,6 +1410,83 @@ impl BedrockScoreboardBuilder {
 mod tests {
     use super::*;
 
+    #[test]
+    fn death_message_visibility_matches_vanilla_team_recipient_rules() {
+        use DeathMessageVisibility::{Always, HideForOtherTeams, HideForOwnTeam, Never};
+
+        assert!(Always.allows_recipient(true));
+        assert!(Always.allows_recipient(false));
+        assert!(!Never.allows_recipient(true));
+        assert!(!Never.allows_recipient(false));
+        assert!(HideForOtherTeams.allows_recipient(true));
+        assert!(!HideForOtherTeams.allows_recipient(false));
+        assert!(!HideForOwnTeam.allows_recipient(true));
+        assert!(HideForOwnTeam.allows_recipient(false));
+    }
+
+    #[test]
+    fn friendly_fire_only_blocks_players_on_the_same_protected_team() {
+        let team = |name: &str, friendly_fire: bool, players: &[&str]| Team {
+            name: name.to_string(),
+            display_name: TextComponent::text(name.to_string()),
+            options: i8::from(friendly_fire),
+            nametag_visibility: NameTagVisibility::Always,
+            death_message_visibility: DeathMessageVisibility::Always,
+            collision_rule: CollisionRule::Always,
+            color: NamedColor::White,
+            player_prefix: TextComponent::empty(),
+            player_suffix: TextComponent::empty(),
+            players: players.iter().map(ToString::to_string).collect(),
+        };
+        let mut scoreboard = Scoreboard::new();
+        scoreboard
+            .teams
+            .insert("safe".to_string(), team("safe", false, &["A", "B"]));
+        scoreboard
+            .teams
+            .insert("open".to_string(), team("open", true, &["C", "D"]));
+
+        assert!(!scoreboard.can_harm_player("A", "B"));
+        assert!(scoreboard.can_harm_player("C", "D"));
+        assert!(scoreboard.can_harm_player("A", "C"));
+        assert!(scoreboard.can_harm_player("A", "Unteamed"));
+        assert!(scoreboard.can_harm_player("Unteamed", "B"));
+    }
+
+    #[tokio::test]
+    async fn joining_a_team_removes_the_score_holder_from_the_previous_team() {
+        let make_team = |name: &str| Team {
+            name: name.to_string(),
+            display_name: TextComponent::text(name.to_string()),
+            options: 0,
+            nametag_visibility: NameTagVisibility::Always,
+            death_message_visibility: DeathMessageVisibility::Always,
+            collision_rule: CollisionRule::Always,
+            color: NamedColor::White,
+            player_prefix: TextComponent::empty(),
+            player_suffix: TextComponent::empty(),
+            players: Vec::new(),
+        };
+        let target = NoTarget;
+        let mut scoreboard = Scoreboard::new();
+        scoreboard.create_team(&target, make_team("first")).await;
+        scoreboard.create_team(&target, make_team("second")).await;
+
+        scoreboard
+            .add_player_to_team(&target, "first", "Player1".to_string())
+            .await;
+        scoreboard
+            .add_player_to_team(&target, "second", "Player1".to_string())
+            .await;
+
+        assert!(scoreboard.get_team("first").unwrap().players.is_empty());
+        assert_eq!(scoreboard.get_team("second").unwrap().players, ["Player1"]);
+        assert_eq!(
+            scoreboard.get_entity_team("Player1").unwrap().name,
+            "second"
+        );
+    }
+
     #[tokio::test]
     async fn scoreboard_objective_scores_and_teams_parity() {
         let mut scoreboard = Scoreboard::new();
@@ -1393,6 +1530,7 @@ mod tests {
             display_name: TextComponent::text("Red Team"),
             options: 0,
             nametag_visibility: NameTagVisibility::Always,
+            death_message_visibility: DeathMessageVisibility::Always,
             collision_rule: CollisionRule::Always,
             color: NamedColor::Red,
             player_prefix: TextComponent::empty(),

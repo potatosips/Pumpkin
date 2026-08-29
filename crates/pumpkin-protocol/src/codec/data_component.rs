@@ -26,6 +26,7 @@ use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::sound::Sound;
 use pumpkin_nbt::{serializer::NbtWriteHelperJava, tag::NbtTag};
+use pumpkin_util::text::TextComponent;
 use pumpkin_util::version::JavaMinecraftVersion;
 
 const MAX_STATUS_EFFECTS: usize = 128;
@@ -470,7 +471,7 @@ impl DataComponentCodec<Self> for ItemModelImpl {
 impl DataComponentCodec<Self> for CustomNameImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
         let mut bytes = Vec::new();
-        NbtTag::String(self.name.clone().get_text().into_boxed_str())
+        self.write_data()
             .serialize(&mut NbtWriteHelperJava::new(&mut bytes))
             .map_err(|e| WritingError::Message(e.to_string()))?;
         seq.write_slice(&bytes)?;
@@ -487,10 +488,8 @@ impl DataComponentCodec<Self> for CustomNameImpl {
 
 impl DataComponentCodec<Self> for ItemNameImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        let mut name = pumpkin_nbt::compound::NbtCompound::new();
-        name.put_string("translate", self.name.to_string());
         let mut bytes = Vec::new();
-        NbtTag::Compound(name)
+        self.write_data()
             .serialize(&mut NbtWriteHelperJava::new(&mut bytes))
             .map_err(|error| WritingError::Message(error.to_string()))?;
         seq.write_slice(&bytes)

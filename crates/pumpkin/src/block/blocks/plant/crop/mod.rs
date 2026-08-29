@@ -99,7 +99,9 @@ trait CropBlockBase: PlantBlockBase {
                     new_state_id = event.new_state_id;
                 }
                 world
-                    .set_block_state(pos, new_state_id, BlockFlags::NOTIFY_NEIGHBORS)
+                    // Java CropBlock.randomTick uses update flag 2: notify
+                    // tracking clients without scheduling neighbor updates.
+                    .set_block_state(pos, new_state_id, BlockFlags::NOTIFY_LISTENERS)
                     .await;
             }
         }

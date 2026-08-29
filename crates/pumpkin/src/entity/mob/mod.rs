@@ -653,6 +653,13 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn set_saddled(&self, _saddled: bool) {}
 
+    /// Per-mob lifecycle hook that continues while `NoAI` is set. This is for
+    /// state machines implemented by Java entity `tick` overrides rather than
+    /// goal/navigation AI (for example, an already-ignited creeper's fuse).
+    fn mob_base_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
     /// Per-mob tick hook called each tick before AI runs. Override for mob-specific logic.
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async {})
@@ -1016,6 +1023,8 @@ impl<T: Mob + Send + 'static> EntityBase for T {
                     );
                 }
             }
+
+            self.mob_base_tick(caller).await;
 
             if !mob_entity.is_no_ai() {
                 self.mob_tick(caller).await;

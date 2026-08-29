@@ -109,14 +109,20 @@ pub struct CustomNameImpl {
 }
 impl CustomNameImpl {
     pub fn read_data(data: &NbtTag) -> Option<Self> {
-        data.extract_string().map(|name| Self {
-            name: TextComponent::text(name.to_string()),
+        let name = data.extract_string()?;
+        Some(Self {
+            name: serde_json::from_str(name)
+                .unwrap_or_else(|_| TextComponent::text(name.to_string())),
         })
     }
 }
 impl DataComponentImpl for CustomNameImpl {
     fn write_data(&self) -> NbtTag {
-        NbtTag::String(self.name.clone().get_text().into())
+        NbtTag::String(
+            serde_json::to_string(&self.name)
+                .unwrap_or_else(|_| self.name.clone().get_text())
+                .into(),
+        )
     }
     fn get_hash(&self) -> i32 {
         get_str_hash(self.name.clone().get_text().as_str()) as i32
@@ -145,6 +151,13 @@ impl ItemNameImpl {
 }
 impl DataComponentImpl for ItemNameImpl {
     fn write_data(&self) -> NbtTag {
+        if let Ok(component) = serde_json::from_str::<TextComponent>(&self.name) {
+            return NbtTag::String(
+                serde_json::to_string(&component)
+                    .unwrap_or_else(|_| self.name.to_string())
+                    .into(),
+            );
+        }
         let mut component = NbtCompound::new();
         component.put_string("translate", self.name.to_string());
         NbtTag::Compound(component)

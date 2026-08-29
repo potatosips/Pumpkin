@@ -9,7 +9,6 @@ use pumpkin_data::item::Item;
 use pumpkin_data::item_id_remap::{remap_item_id_for_version, remap_item_id_from_version};
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_nbt::tag::NbtTag;
-use pumpkin_util::text::TextComponent;
 use pumpkin_util::version::JavaMinecraftVersion;
 use std::borrow::Cow;
 use std::io::Cursor;
@@ -285,16 +284,9 @@ fn decode_custom_name(component_data: &[u8]) -> Result<Box<dyn DataComponentImpl
     let mut nbt_reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
     let tag = NbtTag::deserialize(&mut nbt_reader)
         .map_err(|err| ReadingError::Message(format!("Failed to decode CustomName NBT: {err}")))?;
-    let name = match tag {
-        NbtTag::String(name) => TextComponent::text(name.to_string()),
-        NbtTag::Compound(compound) => compound
-            .get_string("text")
-            .map_or_else(TextComponent::empty, |name| {
-                TextComponent::text(name.to_string())
-            }),
-        _ => TextComponent::empty(),
-    };
-    Ok(CustomNameImpl { name }.to_dyn())
+    CustomNameImpl::read_data(&tag)
+        .map(DataComponentImpl::to_dyn)
+        .ok_or_else(|| ReadingError::Message("Invalid CustomName component NBT".into()))
 }
 
 fn decode_item_name(component_data: &[u8]) -> Result<Box<dyn DataComponentImpl>, ReadingError> {

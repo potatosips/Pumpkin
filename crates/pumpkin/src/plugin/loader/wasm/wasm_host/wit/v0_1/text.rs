@@ -286,6 +286,7 @@ impl pumpkin::plugin::text::HostTextComponent for PluginHostState {
         self.get_text_mut(&res)?.provider.0.style.hover_event = Some(HoverEvent::ShowItem {
             id: Cow::Owned(item),
             count: None,
+            components: None,
         });
         Ok(())
     }

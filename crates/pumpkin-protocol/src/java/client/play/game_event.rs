@@ -41,7 +41,7 @@ pub enum GameEvent {
     ThunderLevelChange,
     PlayPufferfishStringSound,
     PlayElderGuardianMobAppearance,
-    EnabledRespawnScreen,
+    ImmediateRespawn,
     LimitedCrafting,
     StartWaitingChunks,
 }

@@ -42,6 +42,10 @@ impl ItemFrameEntity {
     /// Facing used when a frame is created without NBT, matching vanilla.
     const DEFAULT_FACING: BlockDirection = BlockDirection::South;
 
+    const fn should_drop_items(entity_drops: bool, creative_attacker: bool) -> bool {
+        entity_drops && !creative_attacker
+    }
+
     pub fn new(entity: Entity) -> Self {
         let facing = Self::DEFAULT_FACING.to_index();
         // The spawn packet reads the direction from the entity data field, so
@@ -242,7 +246,15 @@ impl ItemFrameEntity {
                 .is_some_and(Player::is_creative)
         });
 
-        if is_creative_player {
+        let entity_drops = self
+            .entity
+            .world
+            .load()
+            .level_info
+            .load()
+            .game_rules
+            .entity_drops;
+        if !Self::should_drop_items(entity_drops, is_creative_player) {
             return;
         }
 
@@ -471,6 +483,8 @@ impl EntityBase for ItemFrameEntity {
 
 #[cfg(test)]
 mod tests {
+    use super::ItemFrameEntity;
+
     #[test]
     fn item_frame_analog_output_matches_vanilla_spec() {
         // Empty frame produces 0
@@ -488,5 +502,13 @@ mod tests {
         // Modulo 8 wrapping
         assert_eq!(calculate_analog_output(false, 8), 1);
         assert_eq!(calculate_analog_output(false, 9), 2);
+    }
+
+    #[test]
+    fn item_frame_drops_require_entity_drops_and_noncreative_attacker() {
+        assert!(ItemFrameEntity::should_drop_items(true, false));
+        assert!(!ItemFrameEntity::should_drop_items(false, false));
+        assert!(!ItemFrameEntity::should_drop_items(true, true));
+        assert!(!ItemFrameEntity::should_drop_items(false, true));
     }
 }

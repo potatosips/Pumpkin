@@ -234,14 +234,14 @@ use pumpkin_protocol::codec::var_ulong::VarULong;
 use pumpkin_protocol::java::client::play::block_particle_data_for_version;
 use pumpkin_protocol::java::client::play::{
     Animation, CActionBar, CAwardStats, CChangeDifficulty, CCloseContainer, CCombatDeath,
-    CCustomPayload, CDisguisedChatMessage, CEntityAnimation, CEntityPositionSync, CGameEvent,
-    CItemCooldown, CMapItemData, COpenScreen, CParticle, CPlayerAbilities, CPlayerInfoUpdate,
-    CPlayerPosition, CPlayerSpawnPosition, CRespawn, CSetCamera, CSetContainerContent,
-    CSetContainerProperty, CSetContainerSlot, CSetCursorItem, CSetExperience, CSetHealth,
-    CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound, CSubtitle, CSystemChatMessage,
-    CTabList, CTitleAnimation, CTitleText, CUnloadChunk, CUpdateMobEffect, CUpdateTime, GameEvent,
-    MapIcon, MapPatch, Metadata, PlayerAction, PlayerInfoFlags, PlayerSpawnData, PreviousMessage,
-    Statistic,
+    CCustomPayload, CDisguisedChatMessage, CEntityAnimation, CEntityPositionSync, CEntityStatus,
+    CGameEvent, CItemCooldown, CMapItemData, COpenScreen, CParticle, CPlayerAbilities,
+    CPlayerInfoUpdate, CPlayerPosition, CPlayerSpawnPosition, CRespawn, CSetCamera,
+    CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem, CSetExperience,
+    CSetHealth, CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound, CSubtitle,
+    CSystemChatMessage, CTabList, CTitleAnimation, CTitleText, CUnloadChunk, CUpdateMobEffect,
+    CUpdateTime, GameEvent, MapIcon, MapPatch, Metadata, PlayerAction, PlayerInfoFlags,
+    PlayerSpawnData, PreviousMessage, Statistic,
 };
 use pumpkin_protocol::java::server::play::{
     SClickSlot, SContainerButtonClick, SRenameItem, SlotActionType,
@@ -746,7 +746,11 @@ pub struct Player {
     pub last_attacked_ticks: AtomicU32,
     /// The player's last known experience level.
     pub last_sent_xp: AtomicI32,
-    pub last_sent_health: AtomicI32,
+    /// IEEE-754 bits of the last health value sent to the client.
+    ///
+    /// Vanilla tracks this as a float. Keeping the full value also ensures that
+    /// fractional damage inside the same integer interval is synchronized.
+    pub last_sent_health: AtomicU32,
     pub last_sent_food: AtomicU8,
     pub last_food_saturation: AtomicBool,
     /// The player's permission level.
@@ -1032,7 +1036,7 @@ impl Player {
                 world.clone(),
             )),
             last_sent_xp: AtomicI32::new(-1),
-            last_sent_health: AtomicI32::new(-1),
+            last_sent_health: AtomicU32::new((-1.0_f32).to_bits()),
             last_sent_food: AtomicU8::new(0),
             last_food_saturation: AtomicBool::new(true),
             subscribed_debug_sample: AtomicBool::new(false),
@@ -3076,6 +3080,48 @@ impl Player {
             .send_entity_status(&self.living_entity.entity, status, None);
     }
 
+    /// Updates the Java client's reduced-debug-info state. Vanilla uses entity
+    /// event 22 when enabled and 23 when disabled.
+    pub async fn send_reduced_debug_info(&self, reduced: bool) {
+        if let Some(client) = self.client.java() {
+            let status = if reduced {
+                EntityStatus::ReducedDebugInfo
+            } else {
+                EntityStatus::FullDebugInfo
+            };
+            client
+                .enqueue_client_packet(&CEntityStatus::new(self.entity_id(), status as i8))
+                .await;
+        }
+    }
+
+    /// Updates the Java client's death-screen behavior. Vanilla uses game
+    /// event 11 with `1.0` for immediate respawn and `0.0` for the death
+    /// screen.
+    pub async fn send_immediate_respawn(&self, immediate: bool) {
+        if let Some(client) = self.client.java() {
+            client
+                .enqueue_client_packet(&CGameEvent::new(
+                    GameEvent::ImmediateRespawn,
+                    if immediate { 1.0 } else { 0.0 },
+                ))
+                .await;
+        }
+    }
+
+    /// Updates the Java client's recipe-book filtering behavior. Vanilla uses
+    /// game event 12 with `1.0` when limited crafting is enabled.
+    pub async fn send_limited_crafting(&self, limited: bool) {
+        if let Some(client) = self.client.java() {
+            client
+                .enqueue_client_packet(&CGameEvent::new(
+                    GameEvent::LimitedCrafting,
+                    if limited { 1.0 } else { 0.0 },
+                ))
+                .await;
+        }
+    }
+
     /// Sets the player's difficulty level.
     pub async fn send_difficulty_update(&self) {
         let world = self.world();
@@ -3793,6 +3839,19 @@ impl Player {
             return;
         }
 
+        let health = self.living_entity.health.load();
+        let food = self.hunger_manager.level.load();
+        let saturation = self.hunger_manager.saturation.load();
+
+        // Every health packet, including immediate damage/heal updates, owns the
+        // synchronization snapshot. Otherwise tick_health observes stale cache
+        // state and sends the same packet again on the following tick.
+        self.last_sent_health
+            .store(health.to_bits(), Ordering::Relaxed);
+        self.last_sent_food.store(food, Ordering::Relaxed);
+        self.last_food_saturation
+            .store(saturation == 0.0, Ordering::Relaxed);
+
         let max_health = self.living_entity.get_max_health();
         let attribute = |name: &str, current_value, max_value, default_value| BedrockAttribute {
             min_value: 0.0,
@@ -3806,32 +3865,13 @@ impl Player {
         };
 
         self.enqueue_packet_editioned(
-            &CSetHealth::new(
-                self.living_entity.health.load(),
-                self.hunger_manager.level.load().into(),
-                self.hunger_manager.saturation.load(),
-            ),
+            &CSetHealth::new(health, food.into(), saturation),
             &CBedrockAttributes {
                 runtime_id: VarULong(self.entity_id() as u64),
                 attributes: vec![
-                    attribute(
-                        "minecraft:health",
-                        self.living_entity.health.load(),
-                        max_health,
-                        max_health,
-                    ),
-                    attribute(
-                        "minecraft:player.hunger",
-                        self.hunger_manager.level.load().into(),
-                        20.0,
-                        20.0,
-                    ),
-                    attribute(
-                        "minecraft:player.saturation",
-                        self.hunger_manager.saturation.load(),
-                        20.0,
-                        5.0,
-                    ),
+                    attribute("minecraft:health", health, max_health, max_health),
+                    attribute("minecraft:player.hunger", food.into(), 20.0, 20.0),
+                    attribute("minecraft:player.saturation", saturation, 20.0, 5.0),
                 ],
                 player_tick: VarULong(self.tick_counter.load(Ordering::Relaxed).max(0) as u64),
             },
@@ -3862,7 +3902,7 @@ impl Player {
             return;
         }
 
-        let health = self.living_entity.health.load() as i32;
+        let health = self.living_entity.health.load();
         let food = self.hunger_manager.level.load();
         let saturation = self.hunger_manager.saturation.load();
 
@@ -3870,11 +3910,14 @@ impl Player {
         let last_food = self.last_sent_food.load(Ordering::Relaxed);
         let last_saturation = self.last_food_saturation.load(Ordering::Relaxed);
 
-        if health != last_health || food != last_food || (saturation == 0.0) != last_saturation {
-            self.last_sent_health.store(health, Ordering::Relaxed);
-            self.last_sent_food.store(food, Ordering::Relaxed);
-            self.last_food_saturation
-                .store(saturation == 0.0, Ordering::Relaxed);
+        if health_sync_required(
+            health,
+            food,
+            saturation,
+            last_health,
+            last_food,
+            last_saturation,
+        ) {
             self.send_health().await;
         }
     }
@@ -4477,7 +4520,7 @@ impl Player {
                 let key = bedrock_translate.as_deref().unwrap_or(translate.as_ref());
                 let parameters = with
                     .iter()
-                    .map(pumpkin_util::text::TextComponentBase::to_bedrock_string)
+                    .map(pumpkin_util::text::TranslationArgument::to_bedrock_string)
                     .collect();
                 SText::translation(key.to_string(), parameters)
             }
@@ -6105,11 +6148,26 @@ impl EntityBase for Player {
             {
                 return false;
             }
+            let attacking_player = cause
+                .and_then(EntityBase::get_player)
+                .or_else(|| source.and_then(EntityBase::get_player));
+            if let Some(attacker) = attacking_player {
+                let world = self.world();
+                let can_harm = world
+                    .scoreboard
+                    .lock()
+                    .await
+                    .can_harm_player(&attacker.gameprofile.name, &self.gameprofile.name);
+                if !can_harm {
+                    return false;
+                }
+            }
             let result = self
                 .living_entity
                 .damage_with_context(caller, amount, damage_type, position, source, cause)
                 .await;
             if result {
+                self.send_health().await;
                 let health = self.living_entity.health.load();
                 if health <= 0.0 {
                     let death_message =
@@ -6202,7 +6260,16 @@ impl EntityBase for Player {
     }
 
     fn is_pushable(&self) -> bool {
-        self.gamemode.load() != GameMode::Spectator && self.gamemode.load() != GameMode::Creative
+        player_is_pushable(
+            self.gamemode.load(),
+            self.living_entity.health.load(),
+            self.living_entity.dead.load(Ordering::Relaxed),
+            self.living_entity.climbing.load(Ordering::Relaxed),
+        )
+    }
+
+    fn get_scoreboard_name(&self) -> String {
+        self.gameprofile.name.clone()
     }
 
     fn get_name(&self) -> TextComponent {
@@ -6975,11 +7042,60 @@ impl InventoryPlayer for Player {
     }
 }
 
+fn player_is_pushable(gamemode: GameMode, health: f32, dead: bool, on_climbable: bool) -> bool {
+    gamemode != GameMode::Spectator && health > 0.0 && !dead && !on_climbable
+}
+
+fn health_sync_required(
+    health: f32,
+    food: u8,
+    saturation: f32,
+    last_health_bits: u32,
+    last_food: u8,
+    last_saturation_zero: bool,
+) -> bool {
+    health.to_bits() != last_health_bits
+        || food != last_food
+        || (saturation == 0.0) != last_saturation_zero
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{bedrock_inventory_slot, read_root_vehicle, write_root_vehicle};
+    use super::{
+        bedrock_inventory_slot, health_sync_required, player_is_pushable, read_root_vehicle,
+        write_root_vehicle,
+    };
     use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
+    use pumpkin_util::GameMode;
     use uuid::Uuid;
+
+    #[test]
+    fn creative_players_remain_pushable_but_spectators_and_dead_players_do_not() {
+        assert!(player_is_pushable(GameMode::Survival, 20.0, false, false));
+        assert!(player_is_pushable(GameMode::Creative, 20.0, false, false));
+        assert!(player_is_pushable(GameMode::Adventure, 20.0, false, false));
+        assert!(!player_is_pushable(GameMode::Spectator, 20.0, false, false));
+        assert!(!player_is_pushable(GameMode::Survival, 0.0, false, false));
+        assert!(!player_is_pushable(GameMode::Survival, 20.0, true, false));
+        assert!(!player_is_pushable(GameMode::Survival, 20.0, false, true));
+    }
+
+    #[test]
+    fn health_sync_uses_the_last_sent_float_snapshot() {
+        let sent_health = 19.75_f32.to_bits();
+
+        assert!(!health_sync_required(
+            19.75,
+            20,
+            5.0,
+            sent_health,
+            20,
+            false
+        ));
+        assert!(health_sync_required(19.5, 20, 5.0, sent_health, 20, false));
+        assert!(health_sync_required(19.75, 19, 5.0, sent_health, 20, false));
+        assert!(health_sync_required(19.75, 20, 0.0, sent_health, 20, false));
+    }
 
     #[test]
     fn player_screen_slots_map_to_bedrock_inventory() {

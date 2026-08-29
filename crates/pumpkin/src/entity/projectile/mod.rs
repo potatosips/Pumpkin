@@ -1,10 +1,15 @@
 use super::{Entity, EntityBase, NBTStorage, living::LivingEntity};
-use crate::server::Server;
-use pumpkin_data::BlockDirection;
+use crate::{server::Server, world::World};
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::{
+    Block, BlockDirection,
+    block_properties::{BlockProperties, DecoratedPotLikeProperties},
+    tag::{self, Taggable},
+};
 use pumpkin_protocol::java::client::play::CEntityVelocity;
 use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+use pumpkin_world::world::BlockFlags;
 use std::{
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
@@ -42,6 +47,68 @@ pub fn is_projectile(entity_type: &EntityType) -> bool {
         || *entity_type == EntityType::FIREBALL
         || *entity_type == EntityType::SMALL_FIREBALL
         || *entity_type == EntityType::FISHING_BOBBER
+}
+
+/// Handles the destructive part of vanilla's block projectile callback.
+///
+/// `projectilesCanBreakBlocks` only gates the three blocks which call
+/// `Projectile::mayBreak`; other projectile reactions (target blocks,
+/// campfires, candles, bells, and dripleaves) must continue independently.
+pub async fn handle_block_breaking_projectile_impact(
+    world: &Arc<World>,
+    projectile_type: &EntityType,
+    owner_id: Option<i32>,
+    velocity: Vector3<f64>,
+    position: &BlockPos,
+) {
+    if !projectile_type.has_tag(&tag::EntityType::MINECRAFT_IMPACT_PROJECTILES)
+        || !world
+            .level_info
+            .load()
+            .game_rules
+            .projectiles_can_break_blocks
+    {
+        return;
+    }
+
+    // Projectile::mayInteract allows ownerless/player-owned projectiles, while
+    // non-player-owned projectiles require mobGriefing. Pumpkin does not yet
+    // expose vanilla's spawn-protection check for a player owner here.
+    if let Some(owner) = owner_id.and_then(|id| world.get_entity_by_id(id))
+        && owner.get_player().is_none()
+        && !world.level_info.load().game_rules.mob_griefing
+    {
+        return;
+    }
+
+    let (block, state_id) = world.get_block_and_state_id(position);
+    if !breaks_block_on_impact(block, projectile_type, velocity.length()) {
+        return;
+    }
+
+    // Vanilla marks projectile-smashed pots cracked before destruction so the
+    // cracked branch of the decorated-pot loot table is selected.
+    if block == &Block::DECORATED_POT {
+        let mut properties = DecoratedPotLikeProperties::from_state_id(state_id, block);
+        properties.cracked = true;
+        world
+            .set_block_state(
+                position,
+                properties.to_state_id(block),
+                BlockFlags::NOTIFY_ALL,
+            )
+            .await;
+    }
+
+    world.break_block(position, None, BlockFlags::empty()).await;
+}
+
+fn breaks_block_on_impact(block: &Block, projectile_type: &EntityType, speed: f64) -> bool {
+    block == &Block::CHORUS_FLOWER
+        || block == &Block::DECORATED_POT
+        || (block == &Block::POINTED_DRIPSTONE
+            && projectile_type.has_tag(&tag::EntityType::MINECRAFT_ARROWS)
+            && speed > 0.6)
 }
 
 pub struct ThrownItemEntity {
@@ -225,6 +292,17 @@ impl ThrownItemEntity {
                 return;
             }
 
+            if let ProjectileHit::Block { pos, .. } = &h {
+                handle_block_breaking_projectile_impact(
+                    &world,
+                    entity.entity_type,
+                    self.owner_id,
+                    entity.velocity.load(),
+                    pos,
+                )
+                .await;
+            }
+
             // Just trigger hit effects and remove
             caller.on_hit(h).await;
             entity.remove().await;
@@ -362,6 +440,75 @@ impl ProjectileHit {
             Self::Block { face, .. } => Some(*face),
             Self::Entity { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod block_breaking_tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_impact_projectile_tag_membership() {
+        for entity_type in [
+            &EntityType::ARROW,
+            &EntityType::SPECTRAL_ARROW,
+            &EntityType::FIREWORK_ROCKET,
+            &EntityType::SNOWBALL,
+            &EntityType::FIREBALL,
+            &EntityType::SMALL_FIREBALL,
+            &EntityType::EGG,
+            &EntityType::TRIDENT,
+            &EntityType::DRAGON_FIREBALL,
+            &EntityType::WITHER_SKULL,
+            &EntityType::WIND_CHARGE,
+            &EntityType::BREEZE_WIND_CHARGE,
+        ] {
+            assert!(entity_type.has_tag(&tag::EntityType::MINECRAFT_IMPACT_PROJECTILES));
+        }
+        assert!(!EntityType::ENDER_PEARL.has_tag(&tag::EntityType::MINECRAFT_IMPACT_PROJECTILES));
+    }
+
+    #[test]
+    fn only_vanilla_may_break_blocks_are_destructive() {
+        assert!(breaks_block_on_impact(
+            &Block::CHORUS_FLOWER,
+            &EntityType::SNOWBALL,
+            0.1
+        ));
+        assert!(breaks_block_on_impact(
+            &Block::DECORATED_POT,
+            &EntityType::EGG,
+            0.1
+        ));
+        assert!(!breaks_block_on_impact(
+            &Block::TARGET,
+            &EntityType::ARROW,
+            3.0
+        ));
+    }
+
+    #[test]
+    fn pointed_dripstone_requires_a_fast_arrow() {
+        assert!(!breaks_block_on_impact(
+            &Block::POINTED_DRIPSTONE,
+            &EntityType::ARROW,
+            0.6
+        ));
+        assert!(breaks_block_on_impact(
+            &Block::POINTED_DRIPSTONE,
+            &EntityType::ARROW,
+            0.600_001
+        ));
+        assert!(breaks_block_on_impact(
+            &Block::POINTED_DRIPSTONE,
+            &EntityType::SPECTRAL_ARROW,
+            1.0
+        ));
+        assert!(!breaks_block_on_impact(
+            &Block::POINTED_DRIPSTONE,
+            &EntityType::TRIDENT,
+            2.0
+        ));
     }
 }
 

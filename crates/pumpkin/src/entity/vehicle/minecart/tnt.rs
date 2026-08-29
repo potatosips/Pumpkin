@@ -99,7 +99,7 @@ impl TntMinecart {
         if primed {
             world.explode_tnt_minecart(pos, power).await;
         } else {
-            world.explode(pos, power).await;
+            world.explode_tnt(pos, power).await;
         }
     }
 
@@ -121,14 +121,14 @@ impl TntMinecart {
 
     pub(super) fn read_nbt(&self, nbt: &NbtCompound) {
         self.fuse
-            .store(nbt.get_int("fuse").unwrap_or(-1), Ordering::Relaxed);
+            .store(numeric_i32(nbt, "fuse").unwrap_or(-1), Ordering::Relaxed);
         self.explosion_power.store(
-            nbt.get_float("explosion_power")
+            numeric_f32(nbt, "explosion_power")
                 .unwrap_or(4.0)
                 .clamp(0.0, 128.0),
         );
         self.explosion_speed_factor.store(
-            nbt.get_float("explosion_speed_factor")
+            numeric_f32(nbt, "explosion_speed_factor")
                 .unwrap_or(1.0)
                 .clamp(0.0, 128.0),
         );
@@ -145,13 +145,94 @@ impl TntMinecart {
     }
 }
 
+pub(super) fn should_explode_on_horizontal_collision(
+    horizontal_collision: bool,
+    post_collision_speed_squared: f64,
+) -> bool {
+    horizontal_collision && post_collision_speed_squared >= 0.01
+}
+
+pub(super) fn retained_horizontal_speed_squared(
+    requested_x: f64,
+    requested_z: f64,
+    actual_x: f64,
+    actual_z: f64,
+    retained_x: f64,
+    retained_z: f64,
+) -> f64 {
+    const EPSILON: f64 = 1.0e-7;
+    let x = if (requested_x - actual_x).abs() > EPSILON {
+        0.0
+    } else {
+        retained_x
+    };
+    let z = if (requested_z - actual_z).abs() > EPSILON {
+        0.0
+    } else {
+        retained_z
+    };
+    x.mul_add(x, z * z)
+}
+
+fn numeric_i32(nbt: &NbtCompound, key: &str) -> Option<i32> {
+    nbt.get_byte(key)
+        .map(i32::from)
+        .or_else(|| nbt.get_short(key).map(i32::from))
+        .or_else(|| nbt.get_int(key))
+        .or_else(|| nbt.get_long(key).map(|value| value as i32))
+        .or_else(|| nbt.get_float(key).map(|value| value as i32))
+        .or_else(|| nbt.get_double(key).map(|value| value as i32))
+}
+
+fn numeric_f32(nbt: &NbtCompound, key: &str) -> Option<f32> {
+    nbt.get_byte(key)
+        .map(f32::from)
+        .or_else(|| nbt.get_short(key).map(f32::from))
+        .or_else(|| nbt.get_int(key).map(|value| value as f32))
+        .or_else(|| nbt.get_long(key).map(|value| value as f32))
+        .or_else(|| nbt.get_float(key))
+        .or_else(|| nbt.get_double(key).map(|value| value as f32))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::TntMinecart;
+    use super::{
+        TntMinecart, numeric_f32, numeric_i32, retained_horizontal_speed_squared,
+        should_explode_on_horizontal_collision,
+    };
+    use pumpkin_nbt::compound::NbtCompound;
 
     #[test]
     fn tnt_minecart_explosion_bonus_is_speed_capped() {
         assert_eq!(TntMinecart::explosion_strength(4.0, 1.0, 100.0, 1.0), 11.5);
         assert_eq!(TntMinecart::explosion_strength(4.0, 1.0, 100.0, 0.0), 4.0);
+    }
+
+    #[test]
+    fn tnt_minecart_accepts_vanilla_numeric_nbt_types() {
+        let mut nbt = NbtCompound::new();
+        nbt.put_short("fuse", 7);
+        nbt.put_double("explosion_power", 6.5);
+        nbt.put_byte("explosion_speed_factor", 2);
+
+        assert_eq!(numeric_i32(&nbt, "fuse"), Some(7));
+        assert_eq!(numeric_f32(&nbt, "explosion_power"), Some(6.5));
+        assert_eq!(numeric_f32(&nbt, "explosion_speed_factor"), Some(2.0));
+    }
+
+    #[test]
+    fn collision_explosion_uses_post_collision_horizontal_speed() {
+        assert!(!should_explode_on_horizontal_collision(false, 1.0));
+        assert!(!should_explode_on_horizontal_collision(true, 0.009_999));
+        assert!(should_explode_on_horizontal_collision(true, 0.01));
+
+        assert_eq!(
+            retained_horizontal_speed_squared(1.0, 0.0, 0.31, 0.0, 0.2945, 0.0),
+            0.0
+        );
+        assert_eq!(
+            retained_horizontal_speed_squared(1.0, 0.4, 0.31, 0.4, 0.2945, 0.38),
+            0.38_f64.powi(2)
+        );
     }
 }

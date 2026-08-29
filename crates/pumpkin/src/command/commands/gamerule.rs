@@ -253,6 +253,27 @@ impl CommandExecutor for SetExecutor {
 
             server.level_info.store(std::sync::Arc::new(new_info));
 
+            if matches!(self.0.rule, GameRule::ReducedDebugInfo) {
+                let reduced = result_i32 != 0;
+                for player in server.get_all_players() {
+                    player.send_reduced_debug_info(reduced).await;
+                }
+            }
+
+            if matches!(self.0.rule, GameRule::ImmediateRespawn) {
+                let immediate = result_i32 != 0;
+                for player in server.get_all_players() {
+                    player.send_immediate_respawn(immediate).await;
+                }
+            }
+
+            if matches!(self.0.rule, GameRule::LimitedCrafting) {
+                let limited = result_i32 != 0;
+                for player in server.get_all_players() {
+                    player.send_limited_crafting(limited).await;
+                }
+            }
+
             let value_component = TextComponent::text(output_value);
             sender
                 .send_message(TextComponent::translate_cross(

@@ -103,7 +103,7 @@ impl EntityBase for TNTEntity {
                 self.entity
                     .world
                     .load()
-                    .explode(self.entity.pos.load(), self.power)
+                    .explode_tnt(self.entity.pos.load(), self.power)
                     .await;
             } else {
                 // Safe decrement

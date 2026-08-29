@@ -28,6 +28,7 @@ use crate::{entity::player::Player, server::Server};
 pub use entity_anchor::EntityAnchor;
 use pumpkin_data::advancement::Advancement;
 
+pub mod angle;
 pub mod block;
 pub mod bool;
 pub mod bossbar_color;
@@ -123,6 +124,7 @@ pub enum Arg<'a> {
     Pos2D(Vector2<f64>),
     /// (yaw, `is_yaw_relative`, pitch, `is_pitch_relative`)
     Rotation(f32, bool, f32, bool),
+    Angle(f32),
     GameMode(GameMode),
     Difficulty(Difficulty),
     CommandTree(CommandTree),

@@ -30,6 +30,7 @@ pub struct Explosion {
     knockback_multiplier: f64,
     source_entity_id: Option<i32>,
     create_fire: bool,
+    drop_decay: bool,
 }
 
 impl Explosion {
@@ -45,6 +46,7 @@ impl Explosion {
             knockback_multiplier: 1.0,
             source_entity_id: None,
             create_fire: false,
+            drop_decay: true,
         }
     }
 
@@ -60,6 +62,7 @@ impl Explosion {
             knockback_multiplier,
             source_entity_id: None,
             create_fire: false,
+            drop_decay: false,
         }
     }
 
@@ -84,6 +87,12 @@ impl Explosion {
     #[must_use]
     pub const fn with_fire(mut self, create_fire: bool) -> Self {
         self.create_fire = create_fire;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_drop_decay(mut self, drop_decay: bool) -> Self {
+        self.drop_decay = drop_decay;
         self
     }
 
@@ -404,7 +413,7 @@ impl Explosion {
                 let is_thundering = world.is_thundering().await;
                 let params = LootContextParameters {
                     block_state: Some(state),
-                    explosion_radius: Some(self.power),
+                    explosion_radius: self.drop_decay.then_some(self.power),
                     position: Some(pumpkin_util::math::vector3::Vector3::new(
                         pos.0.x as f64,
                         pos.0.y as f64,
@@ -518,5 +527,15 @@ mod tests {
         assert!(!normal.create_fire);
         let incendiary = normal.with_fire(true);
         assert!(incendiary.create_fire);
+    }
+
+    #[test]
+    fn explosion_drop_decay_is_explicitly_selectable() {
+        let decaying = Explosion::new(
+            4.0,
+            pumpkin_util::math::vector3::Vector3::new(0.0, 0.0, 0.0),
+        );
+        assert!(decaying.drop_decay);
+        assert!(!decaying.with_drop_decay(false).drop_decay);
     }
 }

@@ -468,6 +468,10 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
         false
     }
 
+    fn get_scoreboard_name(&self) -> String {
+        self.get_entity().entity_uuid.to_string()
+    }
+
     fn push<'a>(&'a self, entity: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             let self_entity = self.get_entity();
@@ -544,10 +548,6 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
             let self_entity = self.get_entity();
             let entity_bb = self_entity.bounding_box.load();
 
-            if !self.is_pushable() {
-                return false;
-            }
-
             let world = self_entity.world.load();
 
             let is_rideable_minecart = self_entity.entity_type.id == EntityType::MINECART.id;
@@ -585,7 +585,7 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
                             if !is_iron_golem
                                 && !is_other_minecart
                                 && !other.is_passenger().await
-                                && other.is_pushable()
+                                && pushable_by(dyn_self, &other).await
                                 && other.get_entity().riding_cooldown.load(Relaxed) == 0
                             {
                                 dyn_self
@@ -613,13 +613,13 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
                                 || is_other_minecart
                                 || is_vehicle
                                 || !other.get_entity().has_vehicle().await)
-                                && other.is_pushable()
+                                && pushable_by(dyn_self, &other).await
                             {
                                 dyn_self.push(&other).await;
                                 pushed = true;
                             }
                         } else if !self.has_passenger(&other).await
-                            && other.is_pushable()
+                            && pushable_by(dyn_self, &other).await
                             && is_other_minecart
                         {
                             dyn_self.push(&other).await;
@@ -634,8 +634,10 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
                         && is_rideable_minecart
                     {
                         let player_base: Arc<dyn EntityBase> = player.clone();
-                        dyn_self.push(&player_base).await;
-                        pushed = true;
+                        if pushable_by(dyn_self, &player_base).await {
+                            dyn_self.push(&player_base).await;
+                            pushed = true;
+                        }
                         // Non-rideable minecarts (hoppers, chests) do not push players in vanilla.
                     }
                 }
@@ -643,7 +645,8 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
                 let push_bb = entity_bb.expand(0.05, 0.0, 0.05);
                 let other_entities = world.get_entities_at_box(&push_bb);
                 for other in other_entities {
-                    if other.get_entity().entity_id != self_entity.entity_id && other.is_pushable()
+                    if other.get_entity().entity_id != self_entity.entity_id
+                        && pushable_by(dyn_self, &other).await
                     {
                         dyn_self.push(&other).await;
                         pushed = true;
@@ -652,12 +655,12 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
 
                 let players = world.get_players_at_box(&push_bb);
                 for player in players {
-                    if player.get_entity().entity_id != self_entity.entity_id
-                        && player.is_pushable()
-                    {
+                    if player.get_entity().entity_id != self_entity.entity_id {
                         let player_base: Arc<dyn EntityBase> = player.clone();
-                        dyn_self.push(&player_base).await;
-                        pushed = true;
+                        if pushable_by(dyn_self, &player_base).await {
+                            dyn_self.push(&player_base).await;
+                            pushed = true;
+                        }
                     }
                 }
             }
@@ -733,7 +736,7 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
             let name_clone = name.clone();
             name = name.hover_event(HoverEvent::show_entity(
                 entity.entity_uuid.to_string(),
-                entity.entity_type.resource_name.into(),
+                format!("minecraft:{}", entity.entity_type.resource_name),
                 Some(name_clone),
             ));
             name = name.insertion(entity.entity_uuid.to_string());
@@ -765,6 +768,53 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
     fn get_base_experience_reward(&self) -> u32 {
         0
     }
+}
+
+fn collision_rules_allow(
+    source: Option<(&str, crate::world::scoreboard::CollisionRule)>,
+    candidate: Option<(&str, crate::world::scoreboard::CollisionRule)>,
+) -> bool {
+    use crate::world::scoreboard::CollisionRule;
+
+    let source_rule = source.map_or(CollisionRule::Always, |(_, rule)| rule);
+    let candidate_rule = candidate.map_or(CollisionRule::Always, |(_, rule)| rule);
+    if source_rule == CollisionRule::Never || candidate_rule == CollisionRule::Never {
+        return false;
+    }
+
+    let same_team =
+        matches!((source, candidate), (Some((left, _)), Some((right, _))) if left == right);
+    if same_team
+        && (source_rule == CollisionRule::PushOwnTeam
+            || candidate_rule == CollisionRule::PushOwnTeam)
+    {
+        return false;
+    }
+    if !same_team
+        && (source_rule == CollisionRule::PushOtherTeams
+            || candidate_rule == CollisionRule::PushOtherTeams)
+    {
+        return false;
+    }
+    true
+}
+
+pub async fn pushable_by(source: &Arc<dyn EntityBase>, candidate: &Arc<dyn EntityBase>) -> bool {
+    if !candidate.is_pushable() {
+        return false;
+    }
+
+    let world = source.get_entity().world.load();
+    let scoreboard = world.scoreboard.lock().await;
+    let source_name = source.get_scoreboard_name();
+    let candidate_name = candidate.get_scoreboard_name();
+    let source_team = scoreboard
+        .get_entity_team(&source_name)
+        .map(|team| (team.name.as_str(), team.collision_rule));
+    let candidate_team = scoreboard
+        .get_entity_team(&candidate_name)
+        .map(|team| (team.name.as_str(), team.collision_rule));
+    collision_rules_allow(source_team, candidate_team)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -2286,7 +2336,11 @@ impl Entity {
 
         let velocity_multiplier = f64::from(self.get_velocity_multiplier());
 
-        self.velocity.store(final_move * velocity_multiplier);
+        self.velocity.store(velocity_after_collision(
+            motion,
+            final_move,
+            velocity_multiplier,
+        ));
 
         if let Some(living) = caller.get_living_entity() {
             living
@@ -4030,6 +4084,24 @@ impl EntityBase for Entity {
     }
 }
 
+fn velocity_after_collision(
+    requested: Vector3<f64>,
+    actual: Vector3<f64>,
+    multiplier: f64,
+) -> Vector3<f64> {
+    let mut velocity = requested * multiplier;
+    if requested.x != actual.x {
+        velocity.x = 0.0;
+    }
+    if requested.y != actual.y {
+        velocity.y = 0.0;
+    }
+    if requested.z != actual.z {
+        velocity.z = 0.0;
+    }
+    velocity
+}
+
 pub type NbtFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub trait NBTStorage: Send + Sync {
@@ -4145,5 +4217,58 @@ mod tests {
         let (component, retained) = decode_custom_name_json("{not json}");
         assert!(component.is_none());
         assert!(retained.is_none());
+    }
+
+    #[test]
+    fn collision_zeroes_only_clipped_velocity_axes() {
+        let velocity = velocity_after_collision(
+            Vector3::new(1.0, -0.5, 0.25),
+            Vector3::new(0.3, -0.5, 0.25),
+            0.8,
+        );
+        assert_eq!(velocity, Vector3::new(0.0, -0.4, 0.2));
+
+        let floor = velocity_after_collision(
+            Vector3::new(0.2, -0.5, 0.0),
+            Vector3::new(0.2, -0.1, 0.0),
+            1.0,
+        );
+        assert_eq!(floor, Vector3::new(0.2, 0.0, 0.0));
+    }
+
+    #[test]
+    fn vanilla_team_collision_rules_match_pushable_by_truth_table() {
+        use crate::world::scoreboard::CollisionRule::{Always, Never, PushOtherTeams, PushOwnTeam};
+
+        assert!(collision_rules_allow(None, None));
+        assert!(!collision_rules_allow(Some(("a", Never)), None));
+        assert!(!collision_rules_allow(None, Some(("b", Never))));
+
+        assert!(!collision_rules_allow(
+            Some(("same", PushOwnTeam)),
+            Some(("same", Always)),
+        ));
+        assert!(collision_rules_allow(
+            Some(("same", PushOtherTeams)),
+            Some(("same", Always)),
+        ));
+
+        assert!(!collision_rules_allow(
+            Some(("a", PushOtherTeams)),
+            Some(("b", Always)),
+        ));
+        assert!(collision_rules_allow(
+            Some(("a", PushOwnTeam)),
+            Some(("b", Always)),
+        ));
+
+        assert!(!collision_rules_allow(
+            Some(("a", Always)),
+            Some(("a", PushOwnTeam)),
+        ));
+        assert!(!collision_rules_allow(
+            Some(("a", Always)),
+            Some(("b", PushOtherTeams)),
+        ));
     }
 }

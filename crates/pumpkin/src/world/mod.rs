@@ -828,7 +828,7 @@ impl World {
                 let key = bedrock_translate.as_deref().unwrap_or(translate.as_ref());
                 let parameters = with
                     .iter()
-                    .map(pumpkin_util::text::TextComponentBase::to_bedrock_string)
+                    .map(pumpkin_util::text::TranslationArgument::to_bedrock_string)
                     .collect();
                 SText::translation(key.to_string(), parameters)
             }
@@ -1606,8 +1606,9 @@ impl World {
             )
         };
 
+        let advance_weather = self.level_info.load().game_rules.advance_weather;
         let mut weather = self.weather.lock().await;
-        weather.tick_weather(self);
+        weather.tick_weather(self, advance_weather);
 
         if self.should_skip_night() && is_night {
             let mut level_time = self.level_time.lock().await;
@@ -1620,7 +1621,7 @@ impl World {
                 player.wake_up().await;
             }
 
-            if weather.weather_cycle_enabled && (weather.raining || weather.thundering) {
+            if advance_weather && (weather.raining || weather.thundering) {
                 weather.reset_weather_cycle(self);
             }
         } else if world_age % 20 == 0 {
@@ -1634,7 +1635,12 @@ impl World {
         const BATCH_SIZE: usize = 32;
 
         let active_chunks = self.active_chunks.load();
-        let tick_data = self.level.get_tick_data(&active_chunks);
+        // Java performs no random-tick iterations for zero or negative values.
+        // The command surface accepts signed values, while the sampler only
+        // needs the resulting non-negative iteration count.
+        let random_tick_speed =
+            effective_random_tick_speed(self.level_info.load().game_rules.random_tick_speed);
+        let tick_data = self.level.get_tick_data(&active_chunks, random_tick_speed);
 
         // ONE JoinSet for all chunk operations
         let mut chunk_tasks = tokio::task::JoinSet::new();
@@ -3099,9 +3105,9 @@ impl World {
                     .simulation_distance
                     .get()
                     .into(), // TODO: sim view dinstance
-                false,
-                true,
-                false,
+                self.level_info.load().game_rules.reduced_debug_info,
+                !self.level_info.load().game_rules.immediate_respawn,
+                self.level_info.load().game_rules.limited_crafting,
                 PlayerSpawnData::new(
                     self.dimension.clone(),
                     biome::hash_seed(self.level.seed.0), // seed
@@ -3829,12 +3835,40 @@ impl World {
     }
 
     pub async fn explode(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
-        let explosion = Explosion::new(power, position);
+        let decay = self.level_info.load().game_rules.block_explosion_drop_decay;
+        let explosion = Explosion::new(power, position).with_drop_decay(decay);
         self.run_explosion(explosion, position, power).await;
     }
 
     pub async fn explode_with_fire(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
-        let explosion = Explosion::new(power, position).with_fire(true);
+        let decay = self.level_info.load().game_rules.block_explosion_drop_decay;
+        let explosion = Explosion::new(power, position)
+            .with_fire(true)
+            .with_drop_decay(decay);
+        self.run_explosion(explosion, position, power).await;
+    }
+
+    pub async fn explode_mob_with_fire(
+        self: &Arc<Self>,
+        position: Vector3<f64>,
+        power: f32,
+        source_entity_id: i32,
+    ) {
+        let destroy_blocks = self.level_info.load().game_rules.mob_griefing;
+        let decay = self.level_info.load().game_rules.mob_explosion_drop_decay;
+        let explosion = Explosion::new(power, position)
+            // Vanilla LargeFireball passes mobGriefing as both its fire flag
+            // and MOB block-interaction gate.
+            .with_fire(destroy_blocks)
+            .with_block_destruction(destroy_blocks)
+            .with_drop_decay(decay)
+            .with_source_entity(source_entity_id);
+        self.run_explosion(explosion, position, power).await;
+    }
+
+    pub async fn explode_tnt(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
+        let decay = self.level_info.load().game_rules.tnt_explosion_drop_decay;
+        let explosion = Explosion::new(power, position).with_drop_decay(decay);
         self.run_explosion(explosion, position, power).await;
     }
 
@@ -3845,8 +3879,10 @@ impl World {
         source_entity_id: i32,
     ) {
         let destroy_blocks = self.level_info.load().game_rules.mob_griefing;
+        let decay = self.level_info.load().game_rules.mob_explosion_drop_decay;
         let explosion = Explosion::new(power, position)
             .with_block_destruction(destroy_blocks)
+            .with_drop_decay(decay)
             .with_source_entity(source_entity_id);
         self.run_explosion(explosion, position, power).await;
     }
@@ -3891,7 +3927,10 @@ impl World {
     }
 
     pub async fn explode_tnt_minecart(self: &Arc<Self>, position: Vector3<f64>, power: f32) {
-        let explosion = Explosion::new(power, position).preserving_rails();
+        let decay = self.level_info.load().game_rules.tnt_explosion_drop_decay;
+        let explosion = Explosion::new(power, position)
+            .preserving_rails()
+            .with_drop_decay(decay);
         self.run_explosion(explosion, position, power).await;
     }
 
@@ -3952,7 +3991,7 @@ impl World {
         let data_kept = u8::from(alive);
 
         // Copy spawn info from level_info to avoid holding lock across await
-        let (spawn_x, spawn_z, spawn_yaw, spawn_pitch, keep_inventory) = {
+        let (spawn_x, spawn_z, spawn_yaw, spawn_pitch, keep_inventory, spawn_radius) = {
             let info = self.level_info.load();
             (
                 info.spawn_x,
@@ -3960,6 +3999,7 @@ impl World {
                 info.spawn_yaw,
                 info.spawn_pitch,
                 info.game_rules.keep_inventory,
+                info.game_rules.respawn_radius.clamp(0, i64::from(i32::MAX)) as i32,
             )
         };
 
@@ -3978,27 +4018,27 @@ impl World {
                     .send_client_packet(&CGameEvent::new(GameEvent::NoRespawnBlockAvailable, 0.0))
                     .await;
 
-                // Vanilla spawn radius jitter & safe spawn search
-                let spawn_radius: i32 = 10;
+                let border_distance = self
+                    .worldborder
+                    .lock()
+                    .await
+                    .distance_to_border(f64::from(spawn_x), f64::from(spawn_z))
+                    .floor() as i32;
+                let (spawn_radius, candidate_count, stride) =
+                    spawn_search_parameters(spawn_radius, border_distance);
                 let mut chosen_x = spawn_x;
                 let mut chosen_z = spawn_z;
 
-                if spawn_radius > 0 {
-                    let offsets: Vec<(i32, i32)> = {
-                        let mut rng = rand::rng();
-                        (0..10)
-                            .map(|_| {
-                                (
-                                    rng.random_range(-spawn_radius..=spawn_radius),
-                                    rng.random_range(-spawn_radius..=spawn_radius),
-                                )
-                            })
-                            .collect()
-                    };
+                let side = spawn_radius.saturating_mul(2).saturating_add(1);
+                let start = rand::rng().random_range(0..candidate_count);
 
-                    for (dx, dz) in offsets {
-                        let test_x = spawn_x + dx;
-                        let test_z = spawn_z + dz;
+                for progress in 0..candidate_count {
+                    let candidate = (start + stride.saturating_mul(progress)) % candidate_count;
+                    let dx = candidate % side - spawn_radius;
+                    let dz = candidate / side - spawn_radius;
+                    let test_x = spawn_x + dx;
+                    let test_z = spawn_z + dz;
+                    if self.worldborder.lock().await.contains_block(test_x, test_z) {
                         let chunk_pos = Vector2::new(test_x >> 4, test_z >> 4);
                         self.level.get_or_fetch_chunk(chunk_pos, |_| ()).await;
                         let top = self.get_top_block(Vector2::new(test_x, test_z));
@@ -4277,16 +4317,21 @@ impl World {
     pub fn should_skip_night(&self) -> bool {
         let players = self.players.load();
 
-        let player_count = players.len();
-        let sleeping_player_count = players
+        let (player_count, sleeping_player_count) = players
             .iter()
-            .filter(|player| {
-                player
-                    .sleeping_since
-                    .load()
-                    .is_some_and(|since| since >= 100)
-            })
-            .count();
+            .filter(|player| player.gamemode.load() != GameMode::Spectator)
+            .fold((0usize, 0usize), |(eligible, sleeping), player| {
+                (
+                    eligible + 1,
+                    sleeping
+                        + usize::from(
+                            player
+                                .sleeping_since
+                                .load()
+                                .is_some_and(|since| since >= 100),
+                        ),
+                )
+            });
         drop(players);
 
         if player_count == 0 {
@@ -4299,9 +4344,7 @@ impl World {
             .game_rules
             .players_sleeping_percentage
             .clamp(0, 100);
-        let required_sleeping =
-            ((player_count as f64 * sleep_percentage as f64) / 100.0).ceil() as usize;
-        let required_sleeping = required_sleeping.max(1);
+        let required_sleeping = required_sleeping_players(player_count, sleep_percentage);
 
         sleeping_player_count >= required_sleeping
     }
@@ -4457,6 +4500,29 @@ impl World {
             }
         }
         None
+    }
+
+    /// Discards live ender pearls owned by the supplied entity. Java 1.21.4
+    /// invokes this for a dead player when `enderPearlsVanishOnDeath` is true.
+    pub async fn remove_owned_ender_pearls(&self, owner_id: i32) -> usize {
+        let pearls: Vec<_> = self
+            .entities
+            .load()
+            .iter()
+            .filter(|entity| {
+                entity
+                    .cast_any()
+                    .downcast_ref::<crate::entity::projectile::ender_pearl::EnderPearlEntity>()
+                    .is_some_and(|pearl| pearl.thrown.owner_id == Some(owner_id))
+            })
+            .cloned()
+            .collect();
+
+        let count = pearls.len();
+        for pearl in pearls {
+            self.remove_entity(pearl.as_ref()).await;
+        }
+        count
     }
 
     /// Gets a `Player` by a username
@@ -6910,6 +6976,34 @@ impl WorldPortalExt for WorldPortal {
     }
 }
 
+fn effective_random_tick_speed(value: i64) -> u32 {
+    value.clamp(0, i64::from(u32::MAX)) as u32
+}
+
+fn required_sleeping_players(eligible_players: usize, percentage: i64) -> usize {
+    let percentage = percentage.clamp(0, 100) as usize;
+    eligible_players
+        .saturating_mul(percentage)
+        .div_ceil(100)
+        .max(1)
+}
+
+fn spawn_search_parameters(configured_radius: i32, border_distance: i32) -> (i32, i32, i32) {
+    let radius = if border_distance <= 1 {
+        1
+    } else {
+        configured_radius.max(0).min(border_distance)
+    };
+    let side = i64::from(radius) * 2 + 1;
+    let candidate_count = (side * side).min(i64::from(i32::MAX)) as i32;
+    let stride = if candidate_count <= 16 {
+        candidate_count - 1
+    } else {
+        17
+    };
+    (radius, candidate_count, stride)
+}
+
 #[cfg(test)]
 mod tests {
     use pumpkin_data::{
@@ -6922,8 +7016,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        World, bedrock_block_breaking_rate, bedrock_chest_block_actor, remove_saved_entity_nbt,
-        replace_saved_entity_nbt,
+        World, bedrock_block_breaking_rate, bedrock_chest_block_actor, effective_random_tick_speed,
+        remove_saved_entity_nbt, replace_saved_entity_nbt, required_sleeping_players,
+        spawn_search_parameters,
     };
 
     fn saved_entity(uuid: Uuid, marker: i32) -> NbtCompound {
@@ -7048,5 +7143,35 @@ mod tests {
             GameRuleValue::Int(v) => assert_eq!(*v, 20),
             GameRuleValue::Bool(_) => panic!("expected int"),
         }
+    }
+
+    #[test]
+    fn random_tick_speed_uses_java_non_negative_iteration_count() {
+        assert_eq!(effective_random_tick_speed(-42), 0);
+        assert_eq!(effective_random_tick_speed(0), 0);
+        assert_eq!(effective_random_tick_speed(3), 3);
+        assert_eq!(
+            effective_random_tick_speed(i64::from(i32::MAX)),
+            i32::MAX as u32
+        );
+    }
+
+    #[test]
+    fn sleeping_percentage_uses_vanilla_ceiling_and_minimum_one() {
+        assert_eq!(required_sleeping_players(1, 100), 1);
+        assert_eq!(required_sleeping_players(2, 50), 1);
+        assert_eq!(required_sleeping_players(3, 50), 2);
+        assert_eq!(required_sleeping_players(3, 34), 2);
+        assert_eq!(required_sleeping_players(20, 0), 1);
+        assert_eq!(required_sleeping_players(0, 100), 1);
+    }
+
+    #[test]
+    fn spawn_radius_search_matches_vanilla_dimensions_and_stride() {
+        assert_eq!(spawn_search_parameters(0, 1000), (0, 1, 0));
+        assert_eq!(spawn_search_parameters(1, 1000), (1, 9, 8));
+        assert_eq!(spawn_search_parameters(10, 1000), (10, 441, 17));
+        assert_eq!(spawn_search_parameters(10, 4), (4, 81, 17));
+        assert_eq!(spawn_search_parameters(0, 1), (1, 9, 8));
     }
 }

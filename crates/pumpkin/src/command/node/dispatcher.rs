@@ -564,7 +564,11 @@ impl CommandDispatcher {
         command: &str,
     ) {
         source
-            .send_message(error.message.color(Color::Named(NamedColor::Red)))
+            .send_message(
+                TextComponent::empty()
+                    .add_child(error.message)
+                    .color(Color::Named(NamedColor::Red)),
+            )
             .await;
 
         if let Some(context) = error.context {

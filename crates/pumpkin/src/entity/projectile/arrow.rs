@@ -559,6 +559,15 @@ impl EntityBase for ArrowEntity {
                     hit_pos,
                     ..
                 } => {
+                    super::handle_block_breaking_projectile_impact(
+                        &world,
+                        entity.entity_type,
+                        self.owner_id,
+                        entity.velocity.load(),
+                        &pos,
+                    )
+                    .await;
+
                     // Arrow hit a block - stick into it
                     self.in_ground.store(true, Ordering::Relaxed);
                     self.shake_time.store(7, Ordering::Relaxed);
@@ -654,14 +663,15 @@ impl EntityBase for ArrowEntity {
                         target.set_on_fire_for_ticks(100);
                     }
 
+                    let owner = self.owner_id.and_then(|id| world.get_entity_by_id(id));
                     let damage_succeeded = target
                         .damage_with_context(
                             &*target,
                             damage as f32,
                             DamageType::ARROW,
                             Some(hit_pos),
-                            None,
                             Some(self),
+                            owner.as_deref(),
                         )
                         .await;
 
