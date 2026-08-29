@@ -1,4 +1,4 @@
-﻿# 🎃 Pumpkin Minecraft Server
+# 🎃 Pumpkin Minecraft Server
 
 High-performance, multithreaded Minecraft server written in Rust, featuring comprehensive vanilla parity across Java 1.21.4.
 
@@ -12,6 +12,14 @@ High-performance, multithreaded Minecraft server written in Rust, featuring comp
 >
 > Add the address in **Multiplayer → Add Server**. For the most thoroughly tested
 > experience and best compatibility, connect with an unmodified 1.21.4 client.
+
+> ## 💖 Support Server Hosting & Development
+>
+> The public test server (`pumpkinmc.dnslab.win`) is currently self-funded on a modest ARM64 VPS (2 vCPU, 11 GiB RAM).
+>
+> If you'd like to support the project or help upgrade the hosting infrastructure, you can buy us a coffee:
+>
+> [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-orange?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/potatosips)
 
 > ## 🐛 Found a Problem on the Server?
 >
