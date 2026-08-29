@@ -1,115 +1,235 @@
-<div align="center">
+﻿# 🎃 Pumpkin Minecraft Server
 
-# Pumpkin
+High-performance, multithreaded Minecraft server written in Rust, featuring comprehensive vanilla parity across Java 1.21.4.
 
-![CI](https://github.com/Pumpkin-MC/Pumpkin/actions/workflows/rust.yml/badge.svg)
-[![Discord](https://img.shields.io/discord/1268592337445978193.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/wT8XjrjKkf)
-[![License: GPL](https://img.shields.io/badge/License-GPLv3-yellow.svg)](https://opensource.org/licenses/gpl-3-0)
+---
 
-</div>
+## ⚡ Quick Navigation
+- [🪟 Windows Executable Guide (Build & Run `pumpkin.exe`)](#-windows-executable-guide-build--run)
+  - [Prerequisites](#1-prerequisites)
+  - [Building `pumpkin.exe`](#2-building-the-executable)
+  - [Running & Initial Setup](#3-running--initial-setup)
+  - [Configuration (`pumpkin.toml`)](#4-configuration-pumpkintoml)
+  - [Packaging a Standalone Release](#5-packaging-a-standalone-release)
+- [🐳 Docker & Container Deployment Guide](#-docker--container-deployment-guide)
+  - [Method 1: Pull from GitHub Container Registry (Recommended)](#method-1-pull-from-github-container-registry-recommended)
+  - [Method 2: Docker Compose Deployment](#method-2-docker-compose-deployment)
+  - [Method 3: Build Image from Source](#method-3-build-image-from-source)
+  - [Persistent Data & Volume Structure](#persistent-data--volume-structure)
+  - [Remote Linux VPS / Cloud VM Deployment](#remote-linux-vps--cloud-vm-deployment)
 
-[Pumpkin](https://pumpkinmc.org/) is a Minecraft server built entirely in Rust, offering a fast, efficient,
-and customizable experience. It prioritizes performance and player enjoyment while adhering to the core mechanics of the game.
-<div align="center">
+---
 
-![Pumpkin Chunk Loading](./assets/pumpkin-chunk-loading.webp)
+# 🪟 Windows Executable Guide (Build & Run)
 
-</div>
+Follow these steps to compile, run, and configure the standalone 64-bit Windows binary (`pumpkin.exe`).
 
-## Goals
+### 1. Prerequisites
+- **Rust Toolchain**: Install from [rustup.rs](https://rustup.rs/) (default: `stable-x86_64-pc-windows-msvc`).
+- **C++ Build Tools**: Visual Studio C++ Build Tools (Desktop development with C++ workload).
+- **Git**: Ensure `git` is available in PATH.
 
-- **Performance**: Leveraging multi-threading for maximum speed and efficiency.
-- **Compatibility**: Supports the latest Java & Bedrock Minecraft server version while adhering to Vanilla game mechanics.
-- **Security**: Prioritizes security by preventing known security exploits.
-- **Flexibility**: Highly configurable, with the ability to disable unnecessary features.
-- **Extensibility**: Provides a foundation for plugin development.
+### 2. Building the Executable
 
-> [!IMPORTANT]
-> Pumpkin is currently under heavy development.
->
-> [See what needs to be done before the 1.0.0 Release](https://github.com/Pumpkin-MC/Pumpkin/issues/449)
+Open PowerShell or Command Prompt in the repository folder:
 
-## Features
+#### ⚡ Debug Build (Fast Compilation for Testing)
+```powershell
+cargo build -p pumpkin
+```
+*Output location*: `target\debug\pumpkin.exe`
 
-- [x] Configuration (toml)
-- [Tracking: Protocol](https://github.com/Pumpkin-MC/Pumpkin/issues/1401)
-  - [x] Server Status/Ping
-  - [x] Encryption
-  - [x] Packet Compression
-  - [x] Java Edition
-  - [x] Bedrock Edition (W.I.P)
-  - ...
-- [Tracking: World](https://github.com/Pumpkin-MC/Pumpkin/issues/1403)
-  - [x] Player Tab-list
-  - [x] Scoreboard
-  - [x] World Loading
-  - [x] World Time
-  - [x] World Borders
-  - [x] World Saving
-  - [x] Lighting
-  - [x] Entity Spawning
-  - [x] Bossbar
-  - [x] Chunk Loading (Vanilla, Linear, Pump)
-  - [Chunk Generation](https://github.com/Pumpkin-MC/Pumpkin/issues/36)
-  - [x] Chunk Saving (Vanilla, Linear, Pump)
-  - [Redstone](https://github.com/Pumpkin-MC/Pumpkin/issues/1402)
-  - [x] Liquid Physics
-  - ...
-- [Tracking: Player](https://github.com/Pumpkin-MC/Pumpkin/issues/1405)
-  - [x] Skins
-  - [x] Teleport
-  - [x] Movement
-  - [x] Animation
-  - [x] Inventory
-  - [Combat](https://github.com/Pumpkin-MC/Pumpkin/issues/1404)
-  - [x] Experience
-  - [x] Hunger
-  - [X] Off Hand
-  - [X] Advancements (W.I.P)
-  - [x] Eating
-  - ...
-- Entities
-  - [x] Non-Living (Minecart, Eggs...) (W.I.P)
-  - [x] Entity Effects
-  - [x] Players
-  - [x] Mobs (W.I.P)
-  - [x] Animals (W.I.P)
-  - [Entity AI](https://github.com/Pumpkin-MC/Pumpkin/issues/1406)
-  - [x] Boss (W.I.P)
-  - [x] Villagers (W.I.P)
-  - [X] Entity Saving
-- Server
-  - [Plugins](https://github.com/Pumpkin-MC/Pumpkin/issues/1407)
-  - [x] Query
-  - [x] RCON
-  - [x] Inventories
-  - [x] Particles
-  - [x] Chat
-  - [Commands](https://github.com/Pumpkin-MC/Pumpkin/issues/15)
-  - [x] Permissions
-  - [x] Translations
-- Proxy
-  - [x] Bungeecord
-  - [x] Velocity
+#### 🚀 Release Build (High-Performance Production Binary)
+```powershell
+cargo build --release -p pumpkin
+```
+*Output location*: `target\release\pumpkin.exe`
 
-<!-- Check out our [Github Project](https://github.com/orgs/Pumpkin-MC/projects/3) to see current progress. -->
+---
 
-## How to run
+### 3. Running & Initial Setup
 
-See our [Quick Start](https://docs.pumpkinmc.org/#quick-start) guide to get Pumpkin running.
+#### Launching the Server
+```powershell
+.\target\release\pumpkin.exe
+```
 
-## Contributions
+On first launch, Pumpkin will automatically:
+1. Initialize world dimensions (`minecraft:overworld`, `minecraft:the_nether`, `minecraft:the_end`).
+2. Generate default configuration templates (`pumpkin.toml`, `ops.json`).
+3. Bind to network address `0.0.0.0:25565`.
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md)
+---
 
-## Docs
+### 4. Configuration (`pumpkin.toml`)
 
-Pumpkin's documentation can be found at <https://pumpkinmc.org/>
+Key configuration parameters in `pumpkin.toml`:
 
-## Communication
+```toml
+[server]
+address = "0.0.0.0:25565"    # Server listening address & port
+max_players = 100            # Maximum simultaneous players
+view_distance = 10           # Chunk simulation & render distance
+simulation_distance = 10     # Entity & redstone tick distance
 
-Consider joining [our Discord server](https://discord.gg/wT8XjrjKkf) to stay up-to-date on events, updates, and connect with other members.
+[proxy]
+enabled = false              # Set to true for BungeeCord / Velocity
+online_mode = true           # Microsoft/Mojang online authentication
+```
 
-## Funding
+---
 
-If you want to fund me and help the project, check out the [Donation Page](https://pumpkinmc.org/donate/).
+### 5. Packaging a Standalone Release
+
+To bundle `pumpkin.exe` into a clean zip archive for distribution:
+
+```powershell
+# Create staging folder and copy files
+New-Item -ItemType Directory -Path ".\dist" -Force | Out-Null
+Copy-Item ".\target\release\pumpkin.exe" ".\dist\pumpkin.exe"
+Copy-Item ".\pumpkin.toml" ".\dist\pumpkin.sample.toml"
+Copy-Item ".\README.md" ".\dist\README.md"
+
+# Package zip
+Compress-Archive -Path ".\dist\*" -DestinationPath ".\pumpkin-windows-x86_64.zip" -CompressionLevel Optimal
+Remove-Item -Recurse -Force ".\dist"
+```
+
+---
+
+# 🐳 Docker & Container Deployment Guide
+
+Deploy Pumpkin in isolated, containerized environments using Docker and Docker Compose.
+
+---
+
+### Method 1: Pull from GitHub Container Registry (Recommended)
+
+Run the pre-built multi-arch image directly:
+
+#### Interactive Run
+```bash
+docker run -it --rm \
+  -p 25565:25565 \
+  -v $(pwd)/pumpkin_data:/pumpkin \
+  ghcr.io/potatosips/pumpkin:latest
+```
+
+#### Production Background Daemon
+```bash
+docker run -d \
+  --name pumpkin-server \
+  --restart unless-stopped \
+  -p 25565:25565 \
+  -v $(pwd)/pumpkin_data:/pumpkin \
+  ghcr.io/potatosips/pumpkin:latest
+```
+
+---
+
+### Method 2: Docker Compose Deployment
+
+#### 1. Create `docker-compose.yml`
+```yaml
+services:
+  pumpkin:
+    image: ghcr.io/potatosips/pumpkin:latest
+    container_name: pumpkin-server
+    restart: unless-stopped
+    ports:
+      # Minecraft Java Edition Port
+      - "25565:25565/tcp"
+      # Minecraft Bedrock Edition (if enabled)
+      - "19132:19132/udp"
+    volumes:
+      # Persistent world data and configuration
+      - ./data:/pumpkin
+    environment:
+      - RUST_BACKTRACE=1
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+```
+
+#### 2. Manage with Compose Commands
+```bash
+# Start server in background
+docker compose up -d
+
+# View live console logs
+docker compose logs -f
+
+# Stop server gracefully
+docker compose down
+
+# Update to latest version
+docker compose pull && docker compose up -d
+```
+
+---
+
+### Method 3: Build Image from Source
+
+To build a custom container image locally:
+
+```bash
+# Build local image
+docker build -t pumpkin-local:latest .
+
+# Run local container
+docker run -d \
+  --name pumpkin-server \
+  -p 25565:25565 \
+  -v $(pwd)/data:/pumpkin \
+  pumpkin-local:latest
+```
+
+---
+
+### Persistent Data & Volume Structure
+
+When mounting a volume (`-v ./data:/pumpkin`), the directory structure on the host machine contains:
+
+```
+./data/
+├── pumpkin.toml         # Main server settings (ports, limits, motd)
+├── ops.json             # Operator and admin permissions
+├── world/               # World save data (chunks, player states)
+└── logs/                # Server execution logs
+```
+
+---
+
+### Remote Linux VPS / Cloud VM Deployment
+
+To deploy on a remote cloud server (e.g., Ubuntu/Debian Oracle VM):
+
+```bash
+# 1. SSH into server
+ssh root@<YOUR_SERVER_IP>
+
+# 2. Setup server directory
+mkdir -p /opt/pumpkin/data && cd /opt/pumpkin
+
+# 3. Create docker-compose.yml
+cat << 'EOF' > docker-compose.yml
+services:
+  pumpkin:
+    image: ghcr.io/potatosips/pumpkin:latest
+    container_name: pumpkin-server
+    restart: always
+    ports:
+      - "25565:25565/tcp"
+    volumes:
+      - ./data:/pumpkin
+    environment:
+      - RUST_BACKTRACE=1
+EOF
+
+# 4. Start the container
+docker compose up -d
+
+# 5. Open firewall port 25565
+iptables -I INPUT -p tcp --dport 25565 -j ACCEPT
+```
