@@ -273,7 +273,6 @@ impl NetherPortal {
                 .offset_dir(self.negative_direction.to_offset(), self.width as i32 - 1),
         );
 
-        let mut poi_storage = world.portal_poi.lock().await;
         for pos in blocks {
             world
                 .set_block_state(
@@ -282,7 +281,7 @@ impl NetherPortal {
                     BlockFlags::NOTIFY_LISTENERS | BlockFlags::FORCE_STATE,
                 )
                 .await;
-            poi_storage.add_portal(pos);
+            world.portal_poi.lock().await.add_portal(pos);
         }
     }
 
@@ -505,7 +504,7 @@ impl NetherPortal {
                 continue;
             }
 
-            if world.get_block(&pos) != &Block::NETHER_PORTAL {
+            if world.get_block_state_id_async(&pos).await.to_block() != &Block::NETHER_PORTAL {
                 continue;
             }
 
@@ -786,7 +785,6 @@ impl NetherPortal {
         props.axis = axis;
         let portal_state = props.to_state_id(&Block::NETHER_PORTAL);
 
-        let mut poi_storage = world.portal_poi.lock().await;
         for x in 0..2 {
             for y in 0..3 {
                 let pos = lower_corner
@@ -799,7 +797,7 @@ impl NetherPortal {
                         BlockFlags::NOTIFY_LISTENERS | BlockFlags::FORCE_STATE,
                     )
                     .await;
-                poi_storage.add_portal(pos);
+                world.portal_poi.lock().await.add_portal(pos);
             }
         }
     }

@@ -1,5 +1,5 @@
 use pumpkin_data::tag::Taggable;
-use pumpkin_data::{BlockId, BlockStateId, tag};
+use pumpkin_data::{BlockId, BlockState, BlockStateId, tag};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::world::BlockAccessor;
 
@@ -10,6 +10,30 @@ use crate::block::{
 
 pub struct MushroomPlantBlock;
 
+impl MushroomPlantBlock {
+    #[must_use]
+    const fn may_place_on(state: &BlockState) -> bool {
+        state.is_solid() && (state.is_full_cube() || state.is_solid_block())
+    }
+
+    fn can_survive(
+        block_accessor: &dyn BlockAccessor,
+        world: Option<&crate::world::World>,
+        pos: &BlockPos,
+    ) -> bool {
+        let below_pos = pos.down();
+        if block_accessor
+            .get_block(&below_pos)
+            .has_tag(&tag::Block::MINECRAFT_OVERRIDES_MUSHROOM_LIGHT_REQUIREMENT)
+        {
+            return true;
+        }
+
+        world.is_none_or(|world| world.get_max_local_raw_brightness(pos) < 13)
+            && Self::may_place_on(block_accessor.get_block_state(&below_pos))
+    }
+}
+
 impl BlockMetadata for MushroomPlantBlock {
     fn ids() -> Box<[BlockId]> {
         [BlockId::BROWN_MUSHROOM, BlockId::RED_MUSHROOM].into()
@@ -18,7 +42,7 @@ impl BlockMetadata for MushroomPlantBlock {
 
 impl BlockBehaviour for MushroomPlantBlock {
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
-        <Self as PlantBlockBase>::can_place_at(self, args.block_accessor, args.position)
+        Self::can_survive(args.block_accessor, args.world, args.position)
     }
 
     fn get_state_for_neighbor_update<'a>(
@@ -26,23 +50,22 @@ impl BlockBehaviour for MushroomPlantBlock {
         args: GetStateForNeighborUpdateArgs<'a>,
     ) -> BlockFuture<'a, BlockStateId> {
         Box::pin(async move {
-            <Self as PlantBlockBase>::get_state_for_neighbor_update(
-                self,
-                args.world,
-                args.position,
-                args.state_id,
-            )
-            .await
+            if Self::can_survive(args.world, Some(args.world), args.position) {
+                args.state_id
+            } else {
+                pumpkin_data::Block::AIR.default_state.id
+            }
         })
     }
 }
 
 impl PlantBlockBase for MushroomPlantBlock {
     fn can_plant_on_top(&self, block_accessor: &dyn BlockAccessor, pos: &BlockPos) -> bool {
-        let block = block_accessor.get_block(pos);
-        block.has_tag(&tag::Block::MINECRAFT_OVERRIDES_MUSHROOM_LIGHT_REQUIREMENT)
-            || block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_VEGETATION)
-            || block.is_solid()
+        Self::may_place_on(block_accessor.get_block_state(pos))
+    }
+
+    fn can_place_at(&self, block_accessor: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
+        Self::can_survive(block_accessor, None, block_pos)
     }
 }
 
@@ -87,5 +110,14 @@ mod tests {
             Block::WARPED_NYLIUM
                 .has_tag(&tag::Block::MINECRAFT_OVERRIDES_MUSHROOM_LIGHT_REQUIREMENT)
         );
+    }
+
+    #[test]
+    fn ordinary_mushroom_support_requires_a_solid_rendering_surface() {
+        assert!(MushroomPlantBlock::may_place_on(Block::STONE.default_state));
+        assert!(!MushroomPlantBlock::may_place_on(Block::AIR.default_state));
+        assert!(!MushroomPlantBlock::may_place_on(
+            Block::WATER.default_state
+        ));
     }
 }
