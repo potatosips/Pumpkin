@@ -683,14 +683,30 @@ impl pumpkin::plugin::world::HostWorld for PluginHostState {
         pos: pumpkin::plugin::common::Position,
         power: f32,
         create_fire: bool,
-        _interaction: pumpkin::plugin::world::ExplosionInteraction,
+        interaction: pumpkin::plugin::world::ExplosionInteraction,
     ) -> wasmtime::Result<()> {
         let world_ref = self.get_world_res(&world)?;
-        let explosion = Explosion::new(
+        let mut explosion = Explosion::new(
             power,
             pumpkin_util::math::vector3::Vector3::new(pos.0, pos.1, pos.2),
         )
         .with_fire(create_fire);
+        let rules = &world_ref.provider.level_info.load().game_rules;
+        explosion = match interaction {
+            pumpkin::plugin::world::ExplosionInteraction::None
+            | pumpkin::plugin::world::ExplosionInteraction::Trigger => {
+                explosion.with_block_destruction(false)
+            }
+            pumpkin::plugin::world::ExplosionInteraction::Block => {
+                explosion.with_drop_decay(rules.block_explosion_drop_decay)
+            }
+            pumpkin::plugin::world::ExplosionInteraction::Mob => explosion
+                .with_block_destruction(rules.mob_griefing)
+                .with_drop_decay(rules.mob_explosion_drop_decay),
+            pumpkin::plugin::world::ExplosionInteraction::Tnt => {
+                explosion.with_drop_decay(rules.tnt_explosion_drop_decay)
+            }
+        };
         explosion.explode(&world_ref.provider).await;
         Ok(())
     }
