@@ -82,6 +82,7 @@ use crate::block::blocks::plant::fungus::FungusBlock;
 use crate::block::blocks::plant::kelp::KelpBlock;
 use crate::block::blocks::plant::leaf_litter::LeafLitterBlock;
 use crate::block::blocks::plant::lily_pad::LilyPadBlock;
+use crate::block::blocks::plant::mangrove_propagule::MangrovePropaguleBlock;
 use crate::block::blocks::plant::mushroom_plant::MushroomPlantBlock;
 use crate::block::blocks::plant::nether_sprouts::NetherSproutsBlock;
 use crate::block::blocks::plant::roots::RootsBlock;
@@ -216,6 +217,7 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(BeaconBlock);
     manager.register(BedBlock);
     manager.register(SaplingBlock);
+    manager.register(MangrovePropaguleBlock);
     manager.register(CactusBlock);
     manager.register(ChorusFlowerBlock);
     manager.register(ChorusPlantBlock);
