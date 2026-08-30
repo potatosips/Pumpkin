@@ -3990,9 +3990,16 @@ impl World {
 
         let data_kept = u8::from(alive);
 
-        // Copy spawn info from level_info to avoid holding lock across await
+        let server = self.server.upgrade();
+        let default_world = server.as_ref().map_or_else(
+            || self.clone(),
+            |server| server.get_world_from_dimension(&Dimension::OVERWORLD),
+        );
+
+        // Vanilla's no-respawn-point fallback is the Overworld's default
+        // spawn, regardless of the dimension in which the player died.
         let (spawn_x, spawn_z, spawn_yaw, spawn_pitch, keep_inventory, spawn_radius) = {
-            let info = self.level_info.load();
+            let info = default_world.level_info.load();
             (
                 info.spawn_x,
                 info.spawn_z,
@@ -4003,70 +4010,94 @@ impl World {
             )
         };
 
+        let had_respawn_point = player.respawn_point.lock().await.is_some();
+
         // Get respawn position and dimension
-        let (position, yaw, pitch, respawn_dimension) =
-            if let Some(respawn) = player.calculate_respawn_point().await {
-                (
-                    respawn.position,
-                    respawn.yaw,
-                    respawn.pitch,
-                    respawn.dimension,
-                )
-            } else {
-                // No valid respawn point - send notification and use world spawn
+        let (position, yaw, pitch, respawn_dimension) = if let Some(respawn) =
+            player.calculate_respawn_point().await
+        {
+            (
+                respawn.position,
+                respawn.yaw,
+                respawn.pitch,
+                respawn.dimension,
+            )
+        } else {
+            // Vanilla only reports a missing respawn block when a stored
+            // bed/anchor was invalid, not when no personal spawn was set.
+            if had_respawn_point {
                 player
                     .send_client_packet(&CGameEvent::new(GameEvent::NoRespawnBlockAvailable, 0.0))
                     .await;
 
-                let border_distance = self
+                // Invalid beds and anchors are forgotten after the failed
+                // death respawn. Forced command spawn points remain stored.
+                let mut respawn_point = player.respawn_point.lock().await;
+                if respawn_point.as_ref().is_some_and(|point| !point.force) {
+                    *respawn_point = None;
+                }
+            }
+
+            let border_distance = default_world
+                .worldborder
+                .lock()
+                .await
+                .distance_to_border(f64::from(spawn_x), f64::from(spawn_z))
+                .floor() as i32;
+            let (spawn_radius, candidate_count, stride) =
+                spawn_search_parameters(spawn_radius, border_distance);
+            let mut chosen_x = spawn_x;
+            let mut chosen_z = spawn_z;
+
+            let side = spawn_radius.saturating_mul(2).saturating_add(1);
+            let start = rand::rng().random_range(0..candidate_count);
+
+            for progress in 0..candidate_count {
+                let candidate = (start + stride.saturating_mul(progress)) % candidate_count;
+                let dx = candidate % side - spawn_radius;
+                let dz = candidate / side - spawn_radius;
+                let test_x = spawn_x + dx;
+                let test_z = spawn_z + dz;
+                if default_world
                     .worldborder
                     .lock()
                     .await
-                    .distance_to_border(f64::from(spawn_x), f64::from(spawn_z))
-                    .floor() as i32;
-                let (spawn_radius, candidate_count, stride) =
-                    spawn_search_parameters(spawn_radius, border_distance);
-                let mut chosen_x = spawn_x;
-                let mut chosen_z = spawn_z;
-
-                let side = spawn_radius.saturating_mul(2).saturating_add(1);
-                let start = rand::rng().random_range(0..candidate_count);
-
-                for progress in 0..candidate_count {
-                    let candidate = (start + stride.saturating_mul(progress)) % candidate_count;
-                    let dx = candidate % side - spawn_radius;
-                    let dz = candidate / side - spawn_radius;
-                    let test_x = spawn_x + dx;
-                    let test_z = spawn_z + dz;
-                    if self.worldborder.lock().await.contains_block(test_x, test_z) {
-                        let chunk_pos = Vector2::new(test_x >> 4, test_z >> 4);
-                        self.level.get_or_fetch_chunk(chunk_pos, |_| ()).await;
-                        let top = self.get_top_block(Vector2::new(test_x, test_z));
-                        let support_block =
-                            self.get_block(&BlockPos(Vector3::new(test_x, top, test_z)));
-                        if !support_block.default_state.is_liquid() && !support_block.is_air() {
-                            chosen_x = test_x;
-                            chosen_z = test_z;
-                            break;
-                        }
+                    .contains_block(test_x, test_z)
+                {
+                    let chunk_pos = Vector2::new(test_x >> 4, test_z >> 4);
+                    default_world
+                        .level
+                        .get_or_fetch_chunk(chunk_pos, |_| ())
+                        .await;
+                    let top = default_world.get_top_block(Vector2::new(test_x, test_z));
+                    let support_block =
+                        default_world.get_block(&BlockPos(Vector3::new(test_x, top, test_z)));
+                    if !support_block.default_state.is_liquid() && !support_block.is_air() {
+                        chosen_x = test_x;
+                        chosen_z = test_z;
+                        break;
                     }
                 }
+            }
 
-                let chunk_pos = Vector2::new(chosen_x >> 4, chosen_z >> 4);
-                self.level.get_or_fetch_chunk(chunk_pos, |_| ()).await;
-                let top = self.get_top_block(Vector2::new(chosen_x, chosen_z));
+            let chunk_pos = Vector2::new(chosen_x >> 4, chosen_z >> 4);
+            default_world
+                .level
+                .get_or_fetch_chunk(chunk_pos, |_| ())
+                .await;
+            let top = default_world.get_top_block(Vector2::new(chosen_x, chosen_z));
 
-                (
-                    Vector3::new(
-                        f64::from(chosen_x) + 0.5,
-                        (top + 1).into(),
-                        f64::from(chosen_z) + 0.5,
-                    ),
-                    spawn_yaw,
-                    spawn_pitch,
-                    self.dimension.clone(),
-                )
-            };
+            (
+                Vector3::new(
+                    f64::from(chosen_x) + 0.5,
+                    (top + 1).into(),
+                    f64::from(chosen_z) + 0.5,
+                ),
+                spawn_yaw,
+                spawn_pitch,
+                default_world.dimension.clone(),
+            )
+        };
 
         let mut spawn_loc_event = crate::plugin::api::events::player::player_spawn_location::PlayerSpawnLocationEvent::new(
             player.clone(),
@@ -4084,7 +4115,7 @@ impl World {
         let candidate_world = if respawn_dimension == self.dimension {
             None
         } else {
-            self.server.upgrade().map_or_else(
+            server.as_ref().map_or_else(
                 || {
                     warn!("Could not get server for cross-dimension respawn");
                     None
@@ -4102,7 +4133,7 @@ impl World {
         // Fire PlayerChangeWorldEvent (cancellable) before the transfer; it runs before
         // the non-cancellable PlayerRespawnEvent, which observes the resolved world.
         let (resolved_world, position, yaw, pitch) = if let Some(new_world) = candidate_world {
-            if let Some(server) = self.server.upgrade() {
+            if let Some(server) = server.as_ref() {
                 let mut event = PlayerChangeWorldEvent {
                     player: player.clone(),
                     previous_world: self.clone(),
@@ -4112,7 +4143,7 @@ impl World {
                     pitch,
                     cancelled: false,
                 };
-                server.plugin_manager.fire(&server, &mut event).await;
+                server.plugin_manager.fire(server, &mut event).await;
 
                 if event.cancelled {
                     (None, position, yaw, pitch)
