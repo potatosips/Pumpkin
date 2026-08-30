@@ -12,6 +12,13 @@ pub fn build() -> TokenStream {
         serde_json::from_str(&fs::read_to_string("../../assets/particles.json").unwrap())
             .expect("Failed to parse particles.json");
     let variants = array_to_tokenstream(&particle);
+    let last_variant = format_ident!(
+        "{}",
+        particle
+            .last()
+            .expect("particle registry must not be empty")
+            .to_pascal_case()
+    );
     let type_from_name = &particle
         .iter()
         .map(|particle| {
@@ -36,11 +43,23 @@ pub fn build() -> TokenStream {
         .collect::<TokenStream>();
     quote! {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u16)]
         pub enum Particle {
             #variants
         }
 
         impl Particle {
+            #[must_use]
+            pub const fn from_id(id: u16) -> Option<Self> {
+                if id <= Self::#last_variant as u16 {
+                    // SAFETY: repr(u16) plus contiguous generated variants means every
+                    // discriminant in this checked range is a valid Particle.
+                    Some(unsafe { std::mem::transmute::<u16, Self>(id) })
+                } else {
+                    None
+                }
+            }
+
             #[doc = r" Try to parse a `Particle` from a resource location string."]
             #[must_use]
             #[allow(clippy::too_many_lines)]
