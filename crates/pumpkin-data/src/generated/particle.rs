@@ -1,5 +1,6 @@
 /* This file is generated. Do not edit manually. */
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
 pub enum Particle {
     AngryVillager,
     Block,
@@ -128,6 +129,17 @@ pub enum Particle {
     SulfurCubeGoo,
 }
 impl Particle {
+    #[must_use]
+    pub const fn from_id(id: u16) -> Option<Self> {
+        if id <= Self::SulfurCubeGoo as u16 {
+            // SAFETY: repr(u16) plus contiguous generated variants means every
+            // discriminant in this checked range is a valid Particle.
+            Some(unsafe { std::mem::transmute::<u16, Self>(id) })
+        } else {
+            None
+        }
+    }
+
     #[doc = r" Try to parse a `Particle` from a resource location string."]
     #[must_use]
     #[allow(clippy::too_many_lines)]
