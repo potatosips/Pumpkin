@@ -1862,6 +1862,14 @@ impl Player {
                 .cloned()?
         };
         let pos = &respawn_point.position;
+
+        // A stored bed or anchor can be in a dimension whose chunks are not
+        // currently active for this player. Load the target chunk before the
+        // synchronous block/state validation below.
+        world
+            .level
+            .get_or_fetch_chunk(Vector2::new(pos.0.x >> 4, pos.0.z >> 4), |_| ())
+            .await;
         let (block, state_id) = world.get_block_and_state_id(pos);
 
         // If force is set (from /spawnpoint command), validate position is safe
