@@ -103,7 +103,7 @@ impl SaplingBlock {
         }
     }
 
-    async fn grow_tree(
+    pub(crate) async fn grow_tree(
         &self,
         world: &Arc<World>,
         pos: BlockPos,
