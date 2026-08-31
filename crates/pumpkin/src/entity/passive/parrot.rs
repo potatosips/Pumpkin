@@ -1,16 +1,25 @@
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
+use crossbeam::atomic::AtomicCell;
 use pumpkin_data::damage::DamageType;
 use pumpkin_data::effect::StatusEffect;
-use pumpkin_data::entity::EntityType;
+use pumpkin_data::entity::{EntityStatus, EntityType};
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::tag::{self, Taggable};
+use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
+use pumpkin_protocol::java::client::play::Metadata;
+use rand::RngExt;
+use uuid::Uuid;
 
 use crate::entity::{
-    Entity, EntityBase, EntityBaseFuture, NBTStorage,
+    Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ai::goal::{
-        look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
-        wander_around::WanderAroundGoal,
+        follow_owner::FollowOwnerGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, swim::SwimGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -25,12 +34,20 @@ const COOKIE_POISON_DURATION: i32 = 900;
 /// Wiki: <https://minecraft.wiki/w/Parrot>
 pub struct ParrotEntity {
     pub mob_entity: MobEntity,
+    is_tame: AtomicBool,
+    is_sitting: AtomicBool,
+    owner: AtomicCell<Option<Uuid>>,
 }
 
 impl ParrotEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
-        let parrot = Self { mob_entity };
+        let parrot = Self {
+            mob_entity,
+            is_tame: AtomicBool::new(false),
+            is_sitting: AtomicBool::new(false),
+            owner: AtomicCell::new(None),
+        };
         let mob_arc = Arc::new(parrot);
         let mob_weak: Weak<dyn Mob> = {
             let mob_arc: Arc<dyn Mob> = mob_arc.clone();
@@ -46,6 +63,7 @@ impl ParrotEntity {
 
             goal_selector.add_goal(0, Box::new(SwimGoal::default()));
             goal_selector.add_goal(1, Box::new(WanderAroundGoal::new(1.0)));
+            goal_selector.add_goal(3, FollowOwnerGoal::new(1.0, 5.0, 1.0));
             goal_selector.add_goal(
                 2,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
@@ -54,6 +72,25 @@ impl ParrotEntity {
         };
 
         mob_arc
+    }
+
+    fn tame_flags(&self) -> u8 {
+        u8::from(self.is_sitting.load(Ordering::Relaxed))
+            | if self.is_tame.load(Ordering::Relaxed) {
+                0x04
+            } else {
+                0
+            }
+    }
+
+    fn sync_tame_flags(&self) {
+        self.get_entity().send_meta_data(
+            &[Metadata::new(
+                pumpkin_data::tracked_data::parrot::TAMEABLE_FLAGS,
+                self.tame_flags(),
+            )],
+            None,
+        );
     }
 
     /// Feeds the parrot a cookie: it is poisoned and then killed, as in vanilla
@@ -89,11 +126,70 @@ impl ParrotEntity {
     }
 }
 
-impl NBTStorage for ParrotEntity {}
+impl NBTStorage for ParrotEntity {
+    fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
+        Box::pin(async {
+            self.mob_entity.write_nbt(nbt).await;
+            nbt.put_bool("IsTame", self.is_tame.load(Ordering::Relaxed));
+            nbt.put_bool("Sitting", self.is_sitting.load(Ordering::Relaxed));
+            if let Some(owner) = self.owner.load() {
+                nbt.put_uuid("Owner", owner);
+            }
+        })
+    }
+
+    fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
+        Box::pin(async {
+            self.mob_entity.read_nbt_non_mut(nbt).await;
+            if let Some(owner) = nbt.get_uuid("Owner") {
+                self.owner.store(Some(owner));
+                self.is_tame.store(true, Ordering::Relaxed);
+            } else if let Some(tame) = nbt.get_bool("IsTame") {
+                self.is_tame.store(tame, Ordering::Relaxed);
+            }
+            if let Some(sitting) = nbt.get_bool("Sitting") {
+                self.is_sitting.store(sitting, Ordering::Relaxed);
+            }
+        })
+    }
+}
 
 impl Mob for ParrotEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn get_owner_uuid(&self) -> Option<Uuid> {
+        self.owner.load()
+    }
+
+    fn is_sitting(&self) -> bool {
+        self.is_sitting.load(Ordering::Relaxed)
+    }
+
+    fn is_tame(&self) -> bool {
+        self.is_tame.load(Ordering::Relaxed)
+    }
+
+    fn mob_init_data_tracker(&self) -> EntityBaseFuture<'_, ()> {
+        Box::pin(async move {
+            let entity = self.get_entity();
+            let tame_flags = self.tame_flags();
+            entity.send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::parrot::TAMEABLE_FLAGS,
+                    tame_flags,
+                )],
+                None,
+            );
+            entity.send_meta_data(
+                &[Metadata::new(
+                    pumpkin_data::tracked_data::parrot::OWNER_UUID,
+                    self.owner.load(),
+                )],
+                None,
+            );
+        })
     }
 
     fn mob_interact<'a>(
@@ -102,9 +198,62 @@ impl Mob for ParrotEntity {
         item_stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
         Box::pin(async move {
-            // Vanilla checks the poisonous food tag last, after taming, which isn't
-            // implemented yet. Nothing in `parrot_food` is also in
-            // `parrot_poisonous_food`, so the two branches can't be confused.
+            if !self.is_tame.load(Ordering::Relaxed)
+                && item_stack
+                    .get_item()
+                    .has_tag(&tag::Item::MINECRAFT_PARROT_FOOD)
+            {
+                item_stack.decrement_unless_creative(player.gamemode.load(), 1);
+                if rand::rng().random_range(0..10) == 0 {
+                    let entity = self.get_entity();
+                    let mut event =
+                        crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(
+                            entity.entity_id,
+                            player.clone(),
+                        );
+                    if let Some(server) = entity.world.load().server.upgrade() {
+                        server.plugin_manager.fire(&server, &mut event).await;
+                    }
+                    if event.cancelled {
+                        return true;
+                    }
+                    self.is_tame.store(true, Ordering::Relaxed);
+                    self.owner.store(Some(player.gameprofile.id));
+                    self.sync_tame_flags();
+                    entity.send_meta_data(
+                        &[Metadata::new(
+                            pumpkin_data::tracked_data::parrot::OWNER_UUID,
+                            Some(player.gameprofile.id),
+                        )],
+                        None,
+                    );
+                    entity.world.load().send_entity_status(
+                        entity,
+                        EntityStatus::TamingSucceeded,
+                        Some(ActorEventType::TamingSucceeded),
+                    );
+                } else {
+                    let entity = self.get_entity();
+                    entity.world.load().send_entity_status(
+                        entity,
+                        EntityStatus::TamingFailed,
+                        Some(ActorEventType::TamingFailed),
+                    );
+                }
+                return true;
+            }
+
+            if self.is_tame.load(Ordering::Relaxed)
+                && self.owner.load() == Some(player.gameprofile.id)
+                && !item_stack
+                    .get_item()
+                    .has_tag(&tag::Item::MINECRAFT_PARROT_POISONOUS_FOOD)
+            {
+                self.is_sitting.fetch_xor(true, Ordering::Relaxed);
+                self.sync_tame_flags();
+                return true;
+            }
+
             if !item_stack
                 .get_item()
                 .has_tag(&tag::Item::MINECRAFT_PARROT_POISONOUS_FOOD)

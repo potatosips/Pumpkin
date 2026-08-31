@@ -13,6 +13,7 @@ use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::tag::Taggable;
+use pumpkin_data::world::WorldEvent;
 use pumpkin_world::world::BlockFlags;
 
 pub struct CauldronBlock;
@@ -138,7 +139,7 @@ impl BlockMetadata for CauldronBlock {
     }
 }
 
-async fn fire_cauldron_change(
+pub(crate) async fn fire_cauldron_change(
     world: &std::sync::Arc<crate::world::World>,
     pos: pumpkin_util::math::position::BlockPos,
     old_level: i32,
@@ -159,6 +160,108 @@ async fn fire_cauldron_change(
         server.plugin_manager.fire(&server, &mut event).await;
     }
     !event.cancelled
+}
+
+pub(crate) async fn fill_from_dripstone(
+    world: &std::sync::Arc<crate::world::World>,
+    pos: pumpkin_util::math::position::BlockPos,
+    fluid: &'static Fluid,
+) {
+    let state = world.get_block_state(&pos);
+    let block = Block::from_state_id(state.id);
+    let (old_level, new_level, new_state, event) =
+        if Fluid::same_fluid_type(fluid.id, Fluid::WATER.id) {
+            if block == &Block::CAULDRON {
+                let mut props = WaterCauldronLikeProperties::default(&Block::WATER_CAULDRON);
+                props.level = 1;
+                (
+                    0,
+                    1,
+                    props.to_state_id(&Block::WATER_CAULDRON),
+                    WorldEvent::SoundDripWaterIntoCauldron,
+                )
+            } else if block == &Block::WATER_CAULDRON {
+                let mut props = WaterCauldronLikeProperties::from_state_id(state.id, block);
+                if props.level >= 3 {
+                    return;
+                }
+                let old = props.level;
+                props.level += 1;
+                (
+                    old,
+                    props.level,
+                    props.to_state_id(block),
+                    WorldEvent::SoundDripWaterIntoCauldron,
+                )
+            } else {
+                return;
+            }
+        } else if Fluid::same_fluid_type(fluid.id, Fluid::LAVA.id) && block == &Block::CAULDRON {
+            (
+                0,
+                3,
+                Block::LAVA_CAULDRON.default_state.id,
+                WorldEvent::SoundDripLavaIntoCauldron,
+            )
+        } else {
+            return;
+        };
+
+    if fire_cauldron_change(
+        world,
+        pos,
+        old_level.into(),
+        new_level.into(),
+        crate::plugin::block::cauldron_level_change::CauldronChangeReason::NaturalFill,
+        None,
+    )
+    .await
+    {
+        world
+            .set_block_state(&pos, new_state, BlockFlags::NOTIFY_ALL)
+            .await;
+        world.sync_world_event(event, pos, 0);
+    }
+}
+
+pub(crate) async fn fill_from_precipitation(
+    world: &std::sync::Arc<crate::world::World>,
+    pos: pumpkin_util::math::position::BlockPos,
+    snow: bool,
+) {
+    let state = world.get_block_state(&pos);
+    let block = Block::from_state_id(state.id);
+    let target = if snow {
+        &Block::POWDER_SNOW_CAULDRON
+    } else {
+        &Block::WATER_CAULDRON
+    };
+    let (old_level, mut props) = if block == &Block::CAULDRON {
+        (0, WaterCauldronLikeProperties::default(target))
+    } else if block == target {
+        let props = WaterCauldronLikeProperties::from_state_id(state.id, block);
+        if props.level >= 3 {
+            return;
+        }
+        (props.level, props)
+    } else {
+        return;
+    };
+    props.level = old_level + 1;
+    if fire_cauldron_change(
+        world,
+        pos,
+        old_level.into(),
+        props.level.into(),
+        crate::plugin::block::cauldron_level_change::CauldronChangeReason::NaturalFill,
+        None,
+    )
+    .await
+    {
+        world
+            .set_block_state(&pos, props.to_state_id(target), BlockFlags::NOTIFY_ALL)
+            .await;
+    }
 }
 
 impl BlockBehaviour for CauldronBlock {

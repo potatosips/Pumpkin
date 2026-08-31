@@ -6,6 +6,7 @@ use pumpkin_data::sound::{Sound, SoundCategory};
 
 use crate::entity::{EntityBaseFuture, mob::Mob, player::Player};
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
+use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::math::vector3::Vector3;
 
 pub trait Animal: Mob {
@@ -79,13 +80,20 @@ pub trait Animal: Mob {
                 if age < 0 {
                     item_stack.decrement_unless_creative(player.gamemode.load(), 1);
                     let speedup = (-age / 10).max(1);
-                    mob_entity
-                        .living_entity
-                        .entity
-                        .age
-                        .fetch_add(speedup, std::sync::atomic::Ordering::Relaxed);
-
                     let entity = &mob_entity.living_entity.entity;
+                    let new_age = (age + speedup).min(0);
+                    entity
+                        .age
+                        .store(new_age, std::sync::atomic::Ordering::Relaxed);
+                    if new_age == 0 {
+                        entity.send_meta_data(
+                            &[Metadata::new(
+                                pumpkin_data::tracked_data::ageable_mob::DATA_BABY_ID,
+                                false,
+                            )],
+                            None,
+                        );
+                    }
                     let world = entity.world.load();
                     let pos = entity.pos.load();
 

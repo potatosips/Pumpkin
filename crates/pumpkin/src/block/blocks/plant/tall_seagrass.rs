@@ -1,6 +1,7 @@
-use pumpkin_data::{Block, BlockStateId};
+use pumpkin_data::{Block, BlockStateId, fluid::Fluid};
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_world::tick::TickPriority;
 use pumpkin_world::world::BlockAccessor;
 
 use crate::block::{
@@ -19,13 +20,22 @@ impl BlockBehaviour for TallSeaGrassBlock {
         args: GetStateForNeighborUpdateArgs<'a>,
     ) -> BlockFuture<'a, BlockStateId> {
         Box::pin(async move {
-            <Self as PlantBlockBase>::get_state_for_neighbor_update(
+            let state = <Self as PlantBlockBase>::get_state_for_neighbor_update(
                 self,
                 args.world,
                 args.position,
                 args.state_id,
             )
-            .await
+            .await;
+            if state != Block::WATER.default_state.id {
+                args.world.schedule_fluid_tick(
+                    &Fluid::WATER,
+                    *args.position,
+                    Fluid::WATER.flow_speed as u8,
+                    TickPriority::Normal,
+                );
+            }
+            state
         })
     }
 }

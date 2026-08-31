@@ -65,6 +65,7 @@ impl SaplingBlock {
             "mangrove_propagule" if rng.random_bool(0.85) => FeatureKey::TallMangrove,
             "mangrove_propagule" => FeatureKey::Mangrove,
             "cherry_sapling" => FeatureKey::Cherry,
+            "azalea" | "flowering_azalea" => FeatureKey::AzaleaTree,
             _ => return None,
         };
         let flowers_nearby = (-2..=2).any(|x| {
@@ -99,6 +100,7 @@ impl SaplingBlock {
             "dark_oak_sapling" | "pale_oak_sapling" => TreeType::DarkOak,
             "mangrove_propagule" => TreeType::Mangrove,
             "cherry_sapling" => TreeType::Cherry,
+            "azalea" | "flowering_azalea" => TreeType::Azalea,
             _ => TreeType::Oak,
         }
     }
@@ -107,7 +109,7 @@ impl SaplingBlock {
         &self,
         world: &Arc<World>,
         pos: BlockPos,
-        block: &'static Block,
+        block: &Block,
         bone_meal: bool,
     ) {
         use crate::plugin::api::events::world::structure_grow::StructureGrowEvent;

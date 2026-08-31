@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use pumpkin_data::item_stack::ItemStack;
-use pumpkin_data::sound::Sound;
+use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::{entity::EntityType, item::Item};
 use rand::RngExt;
 
@@ -108,8 +108,9 @@ impl NBTStorage for ChickenEntity {
             self.mob_entity.read_nbt_non_mut(nbt).await;
             self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
-            self.egg_lay_time
-                .store(nbt.get_int("EggLayTime").unwrap_or(6000), Ordering::Relaxed);
+            if let Some(egg_lay_time) = nbt.get_int("EggLayTime") {
+                self.egg_lay_time.store(egg_lay_time, Ordering::Relaxed);
+            }
             if let Some(variant_str) = nbt.get_string("variant") {
                 let variant = match variant_str
                     .strip_prefix("minecraft:")
@@ -167,6 +168,7 @@ impl Mob for ChickenEntity {
 
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async {
+            self.ageable_ai_step();
             if self.mob_entity.living_entity.dead.load(Relaxed) {
                 return;
             }
@@ -178,7 +180,7 @@ impl Mob for ChickenEntity {
             if (!on_ground) && current_velocity.y < 0.0 {
                 entity.set_velocity(current_velocity.multiply(1.0, 0.6, 1.0));
             }
-            if self.egg_lay_time.fetch_sub(1, Ordering::Relaxed) <= 1 {
+            if !self.is_baby() && self.egg_lay_time.fetch_sub(1, Ordering::Relaxed) <= 1 {
                 let next_time = rand::rng().random_range(6000..12000);
                 let world = entity.world.load_full();
                 let pos = entity.block_pos.load();
@@ -192,6 +194,11 @@ impl Mob for ChickenEntity {
                     server.plugin_manager.fire(&server, &mut drop_event).await;
                 }
                 if !drop_event.cancelled {
+                    world.play_sound(
+                        Sound::EntityChickenEgg,
+                        SoundCategory::Neutral,
+                        &entity.pos.load(),
+                    );
                     world.drop_stack(&pos, ItemStack::new(1, &Item::EGG)).await;
                 }
                 self.egg_lay_time.store(next_time, Ordering::Relaxed);

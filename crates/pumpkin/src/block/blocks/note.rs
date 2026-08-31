@@ -1,3 +1,4 @@
+use crate::block::entities::skull::SkullBlockEntity;
 use crate::block::registry::BlockActionResult;
 use crate::block::{
     BlockFuture, GetStateForNeighborUpdateArgs, NormalUseArgs, OnNeighborUpdateArgs, OnPlaceArgs,
@@ -5,6 +6,8 @@ use crate::block::{
 };
 use pumpkin_data::BlockStateId;
 use pumpkin_data::block_properties::{Axis, NoteblockInstrument};
+use pumpkin_data::data_component_impl::{IdOr, SoundEvent};
+use pumpkin_data::particle::Particle;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::{
     Block,
@@ -12,6 +15,7 @@ use pumpkin_data::{
 };
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::math::vector3::Vector3;
 use pumpkin_world::world::BlockFlags;
 
 use crate::{
@@ -142,13 +146,42 @@ impl BlockBehaviour for NoteBlock {
             } else {
                 1.0 // default pitch
             };
-            // check hasCustomSound
-            args.world.play_sound_raw(
-                convert_instrument_to_sound(instrument) as u16,
-                SoundCategory::Records,
-                &args.position.to_f64(),
-                3.0,
-                pitch,
+            if instrument == NoteblockInstrument::CustomHead {
+                let Some(block_entity) = args.world.get_block_entity(&args.position.up()) else {
+                    return false;
+                };
+                let Some(skull) = block_entity.as_any().downcast_ref::<SkullBlockEntity>() else {
+                    return false;
+                };
+                let Some(sound_name) = skull.note_block_sound.lock().await.clone() else {
+                    return false;
+                };
+                args.world.play_sound_event_fine(
+                    &IdOr::Value(SoundEvent::new(sound_name, None)),
+                    SoundCategory::Records,
+                    &args.position.to_f64(),
+                    3.0,
+                    1.0,
+                );
+            } else {
+                args.world.play_sound_raw(
+                    convert_instrument_to_sound(instrument) as u16,
+                    SoundCategory::Records,
+                    &args.position.to_f64(),
+                    3.0,
+                    pitch,
+                );
+            }
+            args.world.spawn_particle(
+                Vector3::new(
+                    f64::from(args.position.0.x) + 0.5,
+                    f64::from(args.position.0.y) + 1.2,
+                    f64::from(args.position.0.z) + 0.5,
+                ),
+                Vector3::new(f32::from(note_props.note) / 24.0, 0.0, 0.0),
+                1.0,
+                0,
+                Particle::Note,
             );
             true
         })
@@ -233,6 +266,7 @@ const fn is_base_block(instrument: NoteblockInstrument) -> bool {
             | NoteblockInstrument::Didgeridoo
             | NoteblockInstrument::Bit
             | NoteblockInstrument::Banjo
+            | NoteblockInstrument::Pling
     )
 }
 
@@ -292,5 +326,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn pling_is_a_pitched_base_instrument() {
+        assert!(is_base_block(NoteblockInstrument::Pling));
+        assert_eq!(NoteBlock::get_note_pitch(12), 1.0);
+        assert_eq!(NoteBlock::get_note_pitch(24), 2.0);
     }
 }

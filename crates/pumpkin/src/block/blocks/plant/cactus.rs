@@ -105,7 +105,6 @@ impl BlockBehaviour for CactusBlock {
             if !can_place_at(args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
-                return Block::AIR.default_state.id;
             }
 
             args.state_id

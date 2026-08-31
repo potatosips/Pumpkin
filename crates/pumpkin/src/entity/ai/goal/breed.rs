@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use uuid::Uuid;
-
-use crate::entity::{EntityBase, ai::pathfinder::NavigatorGoal, mob::Mob, r#type::from_type};
+use crate::entity::{
+    EntityBase, ai::pathfinder::NavigatorGoal, experience_orb::ExperienceOrbEntity, mob::Mob,
+};
+use pumpkin_data::entity::EntityStatus;
+use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
 
 use super::{Controls, Goal, GoalFuture};
 
@@ -24,7 +26,7 @@ impl BreedGoal {
 
     fn find_mate(mob: &dyn Mob) -> Option<Arc<dyn EntityBase>> {
         let mob_entity = mob.get_mob_entity();
-        if !mob_entity.is_in_love() {
+        if !mob_entity.is_in_love() || mob.is_sitting() || !mob.can_breed_now() {
             return None;
         }
 
@@ -45,7 +47,12 @@ impl BreedGoal {
             if c_entity.entity_type != my_type {
                 continue;
             }
-            if !candidate.is_in_love() || !candidate.is_breeding_ready() || candidate.is_panicking()
+            if !candidate.is_in_love()
+                || !candidate.is_breeding_ready()
+                || candidate.is_panicking()
+                || candidate
+                    .get_mob()
+                    .is_some_and(|mob| mob.is_sitting() || !mob.can_breed_now())
             {
                 continue;
             }
@@ -87,18 +94,26 @@ impl BreedGoal {
                 .await;
         }
 
+        let parent_pos = entity.pos.load();
+        mob.spawn_breeding_offspring(mate).await;
+
         mob_entity.reset_love_ticks();
+        entity.set_age(6000);
         mob_entity
             .breeding_cooldown
             .store(6000, std::sync::atomic::Ordering::Relaxed);
-
         mate.reset_love();
+        mate.get_entity().set_age(6000);
         mate.set_breeding_cooldown(6000);
 
-        let parent_pos = entity.pos.load();
-        let baby = from_type(entity.entity_type, parent_pos, &world, Uuid::new_v4());
-        baby.get_entity().set_age(-24000);
-        world.spawn_entity(baby).await;
+        world.send_entity_status(
+            entity,
+            EntityStatus::InLoveHearts,
+            Some(ActorEventType::InLoveHearts),
+        );
+        if world.level_info.load().game_rules.mob_drops {
+            ExperienceOrbEntity::spawn(&world, parent_pos, rand::random_range(1..=7)).await;
+        }
     }
 }
 
@@ -106,7 +121,11 @@ impl Goal for BreedGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
             let mob_entity = mob.get_mob_entity();
-            if !mob_entity.is_breeding_ready() || !mob_entity.is_in_love() {
+            if !mob_entity.is_breeding_ready()
+                || !mob_entity.is_in_love()
+                || mob.is_sitting()
+                || !mob.can_breed_now()
+            {
                 return false;
             }
 
@@ -115,13 +134,20 @@ impl Goal for BreedGoal {
         })
     }
 
-    fn should_continue<'a>(&'a self, _mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
+    fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
             let Some(mate) = &self.mate else {
                 return false;
             };
 
-            if !mate.get_entity().is_alive() || mate.is_panicking() {
+            if mob.is_sitting()
+                || !mob.can_breed_now()
+                || !mate.get_entity().is_alive()
+                || mate.is_panicking()
+                || mate
+                    .get_mob()
+                    .is_some_and(|mob| mob.is_sitting() || !mob.can_breed_now())
+            {
                 return false;
             }
 

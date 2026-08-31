@@ -1,4 +1,3 @@
-use pumpkin_data::BlockStateId;
 use pumpkin_data::{
     Block, BlockState,
     block_properties::{
@@ -6,6 +5,7 @@ use pumpkin_data::{
     },
     tag::{self, Taggable},
 };
+use pumpkin_data::{BlockStateId, fluid::Fluid};
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::random::{RandomGenerator, RandomImpl, xoroshiro128::Xoroshiro};
@@ -17,12 +17,58 @@ use pumpkin_world::tick::TickPriority;
 use pumpkin_world::world::BlockFlags;
 use rand::RngExt;
 
-use crate::block::{BlockBehaviour, BlockFuture, GetStateForNeighborUpdateArgs};
+use crate::block::{BlockBehaviour, BlockFuture, GetStateForNeighborUpdateArgs, RandomTickArgs};
 
 #[pumpkin_block("minecraft:grass_block")]
 pub struct GrassBlock;
 
 impl BlockBehaviour for GrassBlock {
+    fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move {
+            if !can_be_grass(args.world, *args.position) {
+                args.world
+                    .set_block_state(
+                        args.position,
+                        Block::DIRT.default_state.id,
+                        BlockFlags::NOTIFY_ALL,
+                    )
+                    .await;
+                return;
+            }
+            if args.world.get_max_local_raw_brightness(&args.position.up()) < 9 {
+                return;
+            }
+            for _ in 0..4 {
+                let target = args.position.add(
+                    rand::rng().random_range(-1..=1),
+                    rand::rng().random_range(-3..=1),
+                    rand::rng().random_range(-1..=1),
+                );
+                if !args.world.is_loaded(&target)
+                    || args.world.get_block(&target) != &Block::DIRT
+                    || !can_propagate(args.world, target)
+                {
+                    continue;
+                }
+                let mut properties = GrassBlockLikeProperties::from_state_id(
+                    Block::GRASS_BLOCK.default_state.id,
+                    &Block::GRASS_BLOCK,
+                );
+                properties.snowy = args
+                    .world
+                    .get_block(&target.up())
+                    .has_tag(&tag::Block::MINECRAFT_SNOW);
+                args.world
+                    .set_block_state(
+                        &target,
+                        properties.to_state_id(&Block::GRASS_BLOCK),
+                        BlockFlags::NOTIFY_ALL,
+                    )
+                    .await;
+            }
+        })
+    }
+
     fn is_valid_bonemeal_target(&self, args: crate::block::BonemealArgs<'_>) -> bool {
         let above = args.position.up();
         args.world.is_in_height_limit(above.0.y)
@@ -141,6 +187,34 @@ impl BlockBehaviour for GrassBlock {
     }
 }
 
+pub(crate) fn can_be_grass(world: &crate::world::World, position: BlockPos) -> bool {
+    let above = position.up();
+    if !world.is_loaded(&above) {
+        return false;
+    }
+    let state_id = world.get_block_state_id(&above);
+    let above_state = BlockState::from_id(state_id);
+    above_state.opacity < 15 && !has_full_water(world, above, state_id)
+}
+
+pub(crate) fn can_propagate(world: &crate::world::World, position: BlockPos) -> bool {
+    can_be_grass(world, position)
+        && !world
+            .get_fluid(&position.up())
+            .has_tag(&tag::Fluid::MINECRAFT_WATER)
+}
+
+fn has_full_water(world: &crate::world::World, above: BlockPos, state_id: BlockStateId) -> bool {
+    if let Some(fluid) = Fluid::from_state_id(state_id) {
+        return fluid.has_tag(&tag::Fluid::MINECRAFT_WATER) && fluid.is_source(state_id);
+    }
+    // Waterlogged blocks expose a water fluid without owning a fluid block state;
+    // that contained fluid is always a source/full fluid state.
+    world
+        .get_fluid(&above)
+        .has_tag(&tag::Fluid::MINECRAFT_WATER)
+}
+
 async fn place_tall_grass(world: &std::sync::Arc<crate::world::World>, position: BlockPos) {
     let state = Block::TALL_GRASS.default_state.id;
     world
@@ -193,4 +267,25 @@ fn biome_bonemeal_state(
         .to_place
         .get_for_bonemeal(&mut random, position)
         .map(|state| (state, feature.schedule_tick.unwrap_or(false)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grass_random_tick_and_snowy_spread_states_exist() {
+        assert!(Block::GRASS_BLOCK.default_state.has_random_ticks());
+        let mut properties = GrassBlockLikeProperties::from_state_id(
+            Block::GRASS_BLOCK.default_state.id,
+            &Block::GRASS_BLOCK,
+        );
+        properties.snowy = false;
+        let clear = properties.to_state_id(&Block::GRASS_BLOCK);
+        properties.snowy = true;
+        let snowy = properties.to_state_id(&Block::GRASS_BLOCK);
+        assert_ne!(clear, snowy);
+        assert_eq!(Block::from_state_id(clear), &Block::GRASS_BLOCK);
+        assert_eq!(Block::from_state_id(snowy), &Block::GRASS_BLOCK);
+    }
 }

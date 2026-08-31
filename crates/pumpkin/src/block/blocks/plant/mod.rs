@@ -2,6 +2,7 @@ use pumpkin_data::{Block, BlockStateId, tag, tag::Taggable};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::world::BlockAccessor;
 
+pub mod azalea;
 pub mod bamboo;
 pub mod bamboo_sapling;
 pub mod big_dripleaf;
@@ -9,6 +10,7 @@ pub mod big_dripleaf_stem;
 pub mod bush;
 pub mod cactus;
 pub mod cactus_flower;
+pub mod cave_vines;
 pub mod chorus_flower;
 pub mod chorus_plant;
 pub mod crop;

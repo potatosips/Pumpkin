@@ -65,6 +65,12 @@ pub(crate) fn bounce_entity_after_fall(entity: &dyn EntityBase, bounce_multiplie
 }
 
 pub trait BlockBehaviour: Send + Sync {
+    /// Called when a player begins attacking the block. Returning true consumes
+    /// the attack and prevents normal mining (for example, a dragon egg teleport).
+    fn on_attack<'a>(&'a self, _args: AttackArgs<'a>) -> BlockFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+
     fn is_valid_bonemeal_target(&self, _args: BonemealArgs<'_>) -> bool {
         false
     }
@@ -250,6 +256,15 @@ pub struct BonemealArgs<'a> {
     pub state_id: BlockStateId,
 }
 
+#[derive(Clone, Copy)]
+pub struct AttackArgs<'a> {
+    pub world: &'a Arc<World>,
+    pub block: &'a Block,
+    pub state: &'a BlockState,
+    pub position: &'a BlockPos,
+    pub player: &'a Arc<Player>,
+}
+
 pub struct NormalUseArgs<'a> {
     pub server: &'a Server,
     pub world: &'a Arc<World>,
@@ -366,6 +381,7 @@ pub struct PlayerPlacedArgs<'a> {
 
 pub struct OnLandedUponArgs<'a> {
     pub world: &'a Arc<World>,
+    pub position: &'a BlockPos,
     pub fall_distance: f32,
     pub entity: &'a dyn EntityBase,
 }

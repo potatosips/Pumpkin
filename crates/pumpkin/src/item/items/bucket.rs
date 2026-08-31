@@ -15,6 +15,7 @@ use pumpkin_data::{
     item_stack::ItemStack,
     sound::{Sound, SoundCategory},
 };
+use pumpkin_nbt::tag::NbtTag;
 use pumpkin_util::{
     GameMode,
     math::{position::BlockPos, vector3::Vector3},
@@ -243,6 +244,14 @@ pub(crate) async fn spawn_bucket_entity(world: &Arc<World>, stack: &ItemStack, p
     };
     let entity = from_type(entity_type, pos.to_centered_f64(), world, Uuid::new_v4());
     apply_entity_variant(stack, entity.as_ref());
+    if entity_type == &EntityType::TADPOLE
+        && let Some(NbtTag::Int(age)) = stack.get_custom_data("pumpkin", "TadpoleAge")
+    {
+        entity
+            .get_entity()
+            .age
+            .store(age.clamp(0, 24000), std::sync::atomic::Ordering::Relaxed);
+    }
     world.spawn_entity(entity).await;
 }
 

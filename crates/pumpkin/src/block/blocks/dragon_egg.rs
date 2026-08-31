@@ -1,13 +1,14 @@
 use crate::block::blocks::falling::FallingBlock;
 use crate::block::registry::BlockActionResult;
 use crate::block::{
-    BlockBehaviour, BlockFuture, GetStateForNeighborUpdateArgs, NormalUseArgs,
+    AttackArgs, BlockBehaviour, BlockFuture, GetStateForNeighborUpdateArgs, NormalUseArgs,
     OnNeighborUpdateArgs, OnScheduledTickArgs, PlacedArgs,
 };
 use crate::world::World;
-use pumpkin_data::BlockStateId;
+use pumpkin_data::{BlockStateId, particle::Particle};
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::math::vector3::Vector3;
 use pumpkin_world::tick::TickPriority;
 use rand::{RngExt, rng};
 use std::sync::Arc;
@@ -16,22 +17,29 @@ use std::sync::Arc;
 pub struct DragonEggBlock;
 
 impl DragonEggBlock {
+    fn is_valid_destination(state: &pumpkin_data::BlockState) -> bool {
+        state.is_air()
+    }
+
     pub async fn teleport(&self, world: &Arc<World>, pos: &BlockPos) -> bool {
         let max_y = world.min_y + world.dimension.height as i32;
         for _ in 0..1000 {
-            let x = pos.0.x + rng().random_range(-16..=16);
-            let y = pos.0.y + rng().random_range(-7..=7);
-            let z = pos.0.z + rng().random_range(-16..=16);
+            // Vanilla uses differences of two random values, giving triangular offsets.
+            let x = pos.0.x + rng().random_range(0..16) - rng().random_range(0..16);
+            let y = pos.0.y + rng().random_range(0..8) - rng().random_range(0..8);
+            let z = pos.0.z + rng().random_range(0..16) - rng().random_range(0..16);
 
             if y < world.min_y || y >= max_y {
                 continue;
             }
 
             let test_pos = BlockPos::new(x, y, z);
-            let state = world.get_block_state(&test_pos);
-            let below_state = world.get_block_state(&test_pos.down());
+            if !world.worldborder.lock().await.contains_block(x, z) {
+                continue;
+            }
 
-            if state.is_air() && !below_state.is_air() {
+            // Unsupported air is valid; the falling-block tick handles it afterward.
+            if Self::is_valid_destination(world.get_block_state(&test_pos)) {
                 let current_state = world.get_block_state(pos);
                 world
                     .set_block_state(
@@ -47,6 +55,31 @@ impl DragonEggBlock {
                         pumpkin_world::world::BlockFlags::NOTIFY_ALL,
                     )
                     .await;
+
+                // Vanilla emits 128 individually positioned portal particles along
+                // the line between the old and new positions, each with its own velocity.
+                for _ in 0..128 {
+                    let interpolation = rand::random::<f64>();
+                    let particle_position = Vector3::new(
+                        f64::from(x)
+                            .mul_add(1.0 - interpolation, f64::from(pos.0.x) * interpolation)
+                            + rand::random::<f64>(),
+                        f64::from(y)
+                            .mul_add(1.0 - interpolation, f64::from(pos.0.y) * interpolation)
+                            + rand::random::<f64>()
+                            - 0.5,
+                        f64::from(z)
+                            .mul_add(1.0 - interpolation, f64::from(pos.0.z) * interpolation)
+                            + rand::random::<f64>(),
+                    );
+                    let velocity = Vector3::new(
+                        (rand::random::<f32>() - 0.5) * 0.2,
+                        (rand::random::<f32>() - 0.5) * 0.2,
+                        (rand::random::<f32>() - 0.5) * 0.2,
+                    );
+                    // A zero packet count makes the offsets an exact velocity vector.
+                    world.spawn_particle(particle_position, velocity, 1.0, 0, Particle::Portal);
+                }
                 return true;
             }
         }
@@ -55,6 +88,10 @@ impl DragonEggBlock {
 }
 
 impl BlockBehaviour for DragonEggBlock {
+    fn on_attack<'a>(&'a self, args: AttackArgs<'a>) -> BlockFuture<'a, bool> {
+        Box::pin(async move { self.teleport(args.world, args.position).await })
+    }
+
     fn placed<'a>(&'a self, args: PlacedArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             args.world
@@ -96,10 +133,21 @@ impl BlockBehaviour for DragonEggBlock {
 
 #[cfg(test)]
 mod tests {
+    use super::DragonEggBlock;
     use pumpkin_data::Block;
 
     #[test]
     fn dragon_egg_block_id_parity() {
         assert_eq!(Block::DRAGON_EGG.name, "dragon_egg");
+    }
+
+    #[test]
+    fn destination_requires_only_air_not_support_below() {
+        assert!(DragonEggBlock::is_valid_destination(
+            Block::AIR.default_state
+        ));
+        assert!(!DragonEggBlock::is_valid_destination(
+            Block::STONE.default_state
+        ));
     }
 }

@@ -5,6 +5,7 @@ use crate::entity::ai::control::look_control::LookControl;
 use crate::entity::ai::control::move_control::MoveControl;
 use crate::entity::ai::goal::goal_selector::GoalSelector;
 use crate::entity::player::Player;
+use crate::entity::r#type::from_type;
 use crate::server::Server;
 use crate::world::World;
 use crossbeam::atomic::AtomicCell;
@@ -255,7 +256,7 @@ impl MobEntity {
     }
 
     pub fn is_breeding_ready(&self) -> bool {
-        self.living_entity.entity.age.load(Relaxed) >= 0
+        self.living_entity.entity.age.load(Relaxed) == 0
             && self.breeding_cooldown.load(Relaxed) <= 0
     }
 
@@ -697,6 +698,43 @@ pub trait Mob: EntityBase + Send + Sync {
         Box::pin(async {})
     }
 
+    /// Applies species-specific inheritance to a newly-created breeding child
+    /// before it is spawned into the world.
+    fn configure_bred_child<'a>(
+        &'a self,
+        _mate: &'a dyn EntityBase,
+        _child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
+    /// Produces this species' breeding result. Most animals spawn a baby of
+    /// their own type; species with a non-mob result (such as sniffers) can
+    /// override this without duplicating the common breeding bookkeeping.
+    fn spawn_breeding_offspring<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let entity = self.get_entity();
+            let world = entity.world.load();
+            let child = from_type(
+                entity.entity_type,
+                entity.pos.load(),
+                &world,
+                Uuid::new_v4(),
+            );
+            child.get_entity().set_age(-24000);
+            self.configure_bred_child(mate, &child).await;
+            world.spawn_entity(child).await;
+        })
+    }
+
+    /// Species-specific eligibility beyond age and the shared cooldown.
+    fn can_breed_now(&self) -> bool {
+        true
+    }
+
     /// Called when a melee hit is attempted, before damage acceptance is known.
     fn on_attack_attempt<'a>(&'a self, _target: &'a dyn EntityBase) -> EntityBaseFuture<'a, ()> {
         Box::pin(async {})
@@ -895,6 +933,18 @@ pub trait Mob: EntityBase + Send + Sync {
         false
     }
 
+    fn is_tame(&self) -> bool {
+        false
+    }
+
+    fn is_trusting(&self) -> bool {
+        false
+    }
+
+    fn trusts_player(&self, _player: Uuid) -> bool {
+        false
+    }
+
     fn get_base_experience_reward(&self) -> u32 {
         self.get_entity().entity_type.experience_reward
     }
@@ -927,6 +977,22 @@ pub trait Mob: EntityBase + Send + Sync {
     }
 
     fn get_mooshroom(&self) -> Option<&crate::entity::passive::mooshroom::MooshroomEntity> {
+        None
+    }
+
+    fn get_wolf(&self) -> Option<&crate::entity::passive::wolf::WolfEntity> {
+        None
+    }
+
+    fn get_cat(&self) -> Option<&crate::entity::passive::cat::CatEntity> {
+        None
+    }
+
+    fn get_fox(&self) -> Option<&crate::entity::passive::fox::FoxEntity> {
+        None
+    }
+
+    fn get_rabbit(&self) -> Option<&crate::entity::passive::rabbit::RabbitEntity> {
         None
     }
 

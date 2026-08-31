@@ -7,6 +7,8 @@ use crate::block::OnScheduledTickArgs;
 use pumpkin_data::Block;
 use pumpkin_data::BlockDirection;
 use pumpkin_data::BlockStateId;
+use pumpkin_data::tag;
+use pumpkin_data::tag::Taggable;
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::tick::TickPriority;
@@ -59,6 +61,19 @@ impl BlockBehaviour for DirtPathBlock {
 }
 
 fn can_place_at(world: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
-    let state = world.get_block_state(&block_pos.up());
-    !state.is_solid() // TODO: add fence gate block
+    let above = block_pos.up();
+    let (block, state) = world.get_block_and_state(&above);
+    !state.is_solid() || block.has_tag(&tag::Block::MINECRAFT_FENCE_GATES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fence_gates_are_the_solid_survival_exception() {
+        assert!(Block::OAK_FENCE_GATE.has_tag(&tag::Block::MINECRAFT_FENCE_GATES));
+        assert!(!Block::STONE.has_tag(&tag::Block::MINECRAFT_FENCE_GATES));
+        assert!(Block::OAK_FENCE_GATE.default_state.is_solid());
+    }
 }

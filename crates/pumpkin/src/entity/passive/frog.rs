@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
 use pumpkin_data::entity::EntityType;
@@ -16,8 +16,9 @@ use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
-        look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
-        tempt::TemptGoal, wander_around::WanderAroundGoal,
+        breed::BreedGoal, lay_frog_spawn::LayFrogSpawnGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, swim::SwimGoal, tempt::TemptGoal,
+        wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     passive::animal::Animal,
@@ -36,6 +37,16 @@ pub enum FrogVariant {
 }
 
 impl FrogVariant {
+    pub const fn for_temperature(temperature: f32) -> Self {
+        if temperature < 0.5 {
+            Self::Cold
+        } else if temperature > 1.0 {
+            Self::Warm
+        } else {
+            Self::Temperate
+        }
+    }
+
     #[must_use]
     pub const fn from_id(id: i32) -> Self {
         match id {
@@ -77,6 +88,7 @@ pub struct FrogEntity {
     pub ageable_data: AgeableData,
     pub variant: AtomicI32,
     pub tongue_target_id: AtomicI32,
+    pregnant: AtomicBool,
 }
 
 impl FrogEntity {
@@ -87,6 +99,7 @@ impl FrogEntity {
             ageable_data: AgeableData::default(),
             variant: AtomicI32::new(FrogVariant::Temperate.id()),
             tongue_target_id: AtomicI32::new(-1),
+            pregnant: AtomicBool::new(false),
         };
         let mob_arc = Arc::new(frog);
         let mob_weak: Weak<dyn Mob> = {
@@ -102,8 +115,10 @@ impl FrogEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(SwimGoal::default()));
+            goal_selector.add_goal(1, Box::new(LayFrogSpawnGoal::new(mob_arc.clone())));
+            goal_selector.add_goal(2, BreedGoal::new(1.0));
             goal_selector.add_goal(1, Box::new(TemptGoal::new(1.0, FROG_FOOD)));
-            goal_selector.add_goal(2, Box::new(WanderAroundGoal::new(1.0)));
+            goal_selector.add_goal(3, Box::new(WanderAroundGoal::new(1.0)));
             goal_selector.add_goal(
                 3,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
@@ -129,6 +144,14 @@ impl FrogEntity {
             )],
             None,
         );
+    }
+
+    pub fn is_pregnant(&self) -> bool {
+        self.pregnant.load(Ordering::Relaxed)
+    }
+
+    pub fn set_pregnant(&self, pregnant: bool) {
+        self.pregnant.store(pregnant, Ordering::Relaxed);
     }
 }
 
@@ -170,6 +193,17 @@ impl NBTStorage for FrogEntity {
 impl Mob for FrogEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn can_breed_now(&self) -> bool {
+        !self.is_pregnant()
+    }
+
+    fn spawn_breeding_offspring<'a>(
+        &'a self,
+        _mate: &'a dyn EntityBase,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { self.set_pregnant(true) })
     }
 
     fn mob_set_variant_name(&self, name: &str) {
@@ -234,5 +268,9 @@ mod tests {
         assert_eq!(FrogVariant::from_name("cold"), FrogVariant::Cold);
         assert_eq!(FrogVariant::from_name("warm"), FrogVariant::Warm);
         assert_eq!(FrogVariant::from_name("unknown"), FrogVariant::Temperate);
+        assert_eq!(FrogVariant::for_temperature(0.49), FrogVariant::Cold);
+        assert_eq!(FrogVariant::for_temperature(0.5), FrogVariant::Temperate);
+        assert_eq!(FrogVariant::for_temperature(1.0), FrogVariant::Temperate);
+        assert_eq!(FrogVariant::for_temperature(1.01), FrogVariant::Warm);
     }
 }

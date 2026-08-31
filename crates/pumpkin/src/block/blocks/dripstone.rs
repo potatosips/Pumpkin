@@ -1,11 +1,12 @@
 use crate::{
     block::{
         BlockBehaviour, BlockFuture, BrokenArgs, CanPlaceAtArgs, GetStateForNeighborUpdateArgs,
-        OnNeighborUpdateArgs, OnPlaceArgs, OnScheduledTickArgs, PlacedArgs,
+        OnNeighborUpdateArgs, OnPlaceArgs, OnScheduledTickArgs, PlacedArgs, RandomTickArgs,
     },
     entity::falling::FallingEntity,
     entity::player::Player,
 };
+use pumpkin_data::fluid::Fluid;
 use pumpkin_data::{
     Block, BlockDirection, BlockId, BlockStateId,
     block_properties::{
@@ -18,11 +19,30 @@ use pumpkin_world::{
     tick::TickPriority,
     world::{BlockAccessor, BlockFlags},
 };
+use rand::RngExt;
 
 #[pumpkin_block("minecraft:pointed_dripstone")]
 pub struct DripstoneBlock;
 
 impl DripstoneBlock {
+    async fn grow_tip(
+        world: &std::sync::Arc<crate::world::World>,
+        position: BlockPos,
+        direction: VerticalDirection,
+    ) {
+        let mut properties = PointedDripstoneLikeProperties::default(&Block::POINTED_DRIPSTONE);
+        properties.vertical_direction = direction;
+        properties.thickness = SpeleothemThickness::Tip;
+        properties.waterlogged = false;
+        world
+            .set_block_state(
+                &position,
+                properties.to_state_id(&Block::POINTED_DRIPSTONE),
+                BlockFlags::NOTIFY_ALL,
+            )
+            .await;
+    }
+
     #[must_use]
     pub fn is_pointed_dripstone_with_dir(
         world: &dyn BlockAccessor,
@@ -128,6 +148,124 @@ impl DripstoneBlock {
 }
 
 impl BlockBehaviour for DripstoneBlock {
+    fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move {
+            let properties = PointedDripstoneLikeProperties::from_state_id(
+                args.world.get_block_state_id(args.position),
+                &Block::POINTED_DRIPSTONE,
+            );
+            if !is_downward_tip(&properties)
+                || DripstoneBlock::is_pointed_dripstone_with_dir(
+                    args.world.as_ref(),
+                    &args.position.down(),
+                    VerticalDirection::Down,
+                )
+            {
+                return;
+            }
+            let mut root = *args.position;
+            for _ in 0..11 {
+                let above = root.up();
+                if !DripstoneBlock::is_pointed_dripstone_with_dir(
+                    args.world.as_ref(),
+                    &above,
+                    VerticalDirection::Down,
+                ) {
+                    break;
+                }
+                root = above;
+            }
+            let dripstone_block = root.up();
+            if args.world.get_block(&dripstone_block) != &Block::DRIPSTONE_BLOCK {
+                return;
+            }
+            let source = dripstone_block.up();
+            let source_block = args.world.get_block(&source);
+            let fluid = args.world.get_fluid(&source);
+            let drip_chance = if source_block == &Block::MUD || fluid == &Fluid::WATER {
+                0.175_781_25
+            } else if fluid == &Fluid::LAVA {
+                0.058_593_75
+            } else {
+                0.0
+            };
+            if drip_chance > 0.0 && rand::rng().random::<f32>() < drip_chance {
+                if source_block == &Block::MUD {
+                    args.world
+                        .set_block_state(
+                            &source,
+                            Block::CLAY.default_state.id,
+                            BlockFlags::NOTIFY_ALL,
+                        )
+                        .await;
+                    return;
+                }
+
+                for distance in 1..=11 {
+                    let candidate = args.position.down_height(distance);
+                    let block = args.world.get_block(&candidate);
+                    if matches!(
+                        block.id,
+                        BlockId::CAULDRON
+                            | BlockId::WATER_CAULDRON
+                            | BlockId::LAVA_CAULDRON
+                            | BlockId::POWDER_SNOW_CAULDRON
+                    ) {
+                        super::cauldron::fill_from_dripstone(args.world, candidate, fluid).await;
+                        break;
+                    }
+                    if block != &Block::AIR {
+                        break;
+                    }
+                }
+            }
+
+            // Natural growth uses a separate Vanilla random roll from dripping.
+            if fluid != &Fluid::WATER || !rand::rng().random_bool(0.011_377_778) {
+                return;
+            }
+            let stalactite_length = root.0.y - args.position.0.y + 1;
+            if rand::rng().random_bool(0.5) {
+                let below = args.position.down();
+                if stalactite_length < 7 && args.world.get_block_state(&below).is_air() {
+                    DripstoneBlock::grow_tip(args.world, below, VerticalDirection::Down).await;
+                }
+                return;
+            }
+
+            for distance in 1..=10 {
+                let candidate = args.position.down_height(distance);
+                if args.world.get_fluid(&candidate) != &Fluid::EMPTY {
+                    return;
+                }
+                let block = args.world.get_block(&candidate);
+                if DripstoneBlock::is_pointed_dripstone_with_dir(
+                    args.world.as_ref(),
+                    &candidate,
+                    VerticalDirection::Up,
+                ) {
+                    let above = candidate.up();
+                    if args.world.get_block_state(&above).is_air() {
+                        DripstoneBlock::grow_tip(args.world, above, VerticalDirection::Up).await;
+                    }
+                    return;
+                }
+                if block != &Block::AIR {
+                    let above = candidate.up();
+                    if DripstoneBlock::can_survive(
+                        args.world.as_ref(),
+                        &above,
+                        VerticalDirection::Up,
+                    ) && args.world.get_block_state(&above).is_air()
+                    {
+                        DripstoneBlock::grow_tip(args.world, above, VerticalDirection::Up).await;
+                    }
+                    return;
+                }
+            }
+        })
+    }
+
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
         can_place_at_pos(
             args.block_accessor,
@@ -299,6 +437,14 @@ impl BlockBehaviour for DripstoneBlock {
     }
 }
 
+const fn is_downward_tip(properties: &PointedDripstoneLikeProperties) -> bool {
+    matches!(properties.vertical_direction, VerticalDirection::Down)
+        && matches!(
+            properties.thickness,
+            SpeleothemThickness::Tip | SpeleothemThickness::TipMerge
+        )
+}
+
 fn can_place_at_pos(
     block_accessor: &dyn BlockAccessor,
     position: &BlockPos,
@@ -339,6 +485,22 @@ mod tests {
     #[test]
     fn dripstone_block_id_parity() {
         assert_eq!(Block::POINTED_DRIPSTONE.name, "pointed_dripstone");
+        assert!(Block::POINTED_DRIPSTONE.default_state.has_random_ticks());
+    }
+
+    #[test]
+    fn only_downward_tips_drive_dripping_and_mud_drying() {
+        let mut properties = PointedDripstoneLikeProperties::default(&Block::POINTED_DRIPSTONE);
+        properties.vertical_direction = VerticalDirection::Down;
+        properties.thickness = SpeleothemThickness::Tip;
+        assert!(is_downward_tip(&properties));
+        properties.thickness = SpeleothemThickness::TipMerge;
+        assert!(is_downward_tip(&properties));
+        properties.thickness = SpeleothemThickness::Frustum;
+        assert!(!is_downward_tip(&properties));
+        properties.vertical_direction = VerticalDirection::Up;
+        properties.thickness = SpeleothemThickness::Tip;
+        assert!(!is_downward_tip(&properties));
     }
 
     #[test]

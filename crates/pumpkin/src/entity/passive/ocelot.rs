@@ -14,6 +14,7 @@ use rand::RngExt;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
+    ageable::{AgeableData, AgeableMob},
     ai::goal::{
         active_target::ActiveTargetGoal, avoid_entity::AvoidEntityGoal, breed::BreedGoal,
         escape_danger::EscapeDangerGoal, follow_parent::FollowParentGoal,
@@ -33,6 +34,7 @@ const TEMPT_ITEMS: &[&Item] = &[&Item::COD, &Item::SALMON];
 pub struct OcelotEntity {
     pub mob_entity: MobEntity,
     pub is_trusting: AtomicBool,
+    pub ageable_data: AgeableData,
 }
 
 impl OcelotEntity {
@@ -41,6 +43,7 @@ impl OcelotEntity {
         let ocelot = Self {
             mob_entity,
             is_trusting: AtomicBool::new(false),
+            ageable_data: AgeableData::default(),
         };
         let mob_arc = Arc::new(ocelot);
         let mob_weak: Weak<dyn Mob> = {
@@ -64,7 +67,12 @@ impl OcelotEntity {
             // Goal 4: OcelotAvoidEntityGoal (when not trusting)
             goal_selector.add_goal(
                 4,
-                Box::new(AvoidEntityGoal::new(&EntityType::PLAYER, 16.0, 0.8, 1.33)),
+                Box::new(AvoidEntityGoal::new_not_trusting(
+                    &EntityType::PLAYER,
+                    16.0,
+                    0.8,
+                    1.33,
+                )),
             );
             // Goal 9: BreedGoal
             goal_selector.add_goal(9, BreedGoal::new(0.8));
@@ -123,6 +131,7 @@ impl NBTStorage for OcelotEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.mob_entity.write_nbt(nbt).await;
+            self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             nbt.put_bool("Trusting", self.is_trusting.load(Ordering::Relaxed));
         })
@@ -131,11 +140,18 @@ impl NBTStorage for OcelotEntity {
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.mob_entity.read_nbt_non_mut(nbt).await;
+            self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(trusting) = nbt.get_bool("Trusting") {
                 self.is_trusting.store(trusting, Ordering::Relaxed);
             }
         })
+    }
+}
+
+impl AgeableMob for OcelotEntity {
+    fn get_ageable_data(&self) -> &AgeableData {
+        &self.ageable_data
     }
 }
 
@@ -151,6 +167,16 @@ impl Animal for OcelotEntity {
 impl Mob for OcelotEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn is_trusting(&self) -> bool {
+        self.is_trusting()
+    }
+
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            self.ageable_ai_step();
+        })
     }
 
     fn mob_init_data_tracker(&self) -> EntityBaseFuture<'_, ()> {

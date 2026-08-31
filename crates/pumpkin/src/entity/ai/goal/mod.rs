@@ -18,6 +18,8 @@ pub mod follow_owner;
 pub mod follow_parent;
 pub mod goal_selector;
 pub mod iron_golem_hostile_target;
+pub mod lay_frog_spawn;
+pub mod lay_turtle_egg;
 pub mod look_around;
 pub mod look_at_entity;
 pub mod melee_attack;

@@ -8,10 +8,17 @@ use crate::entity::projectile::{
     lingering_potion::LingeringPotionEntity, splash_potion::SplashPotionEntity,
 };
 use crate::item::{ItemBehaviour, ItemMetadata};
+use crate::server::Server;
+use pumpkin_data::Block;
+use pumpkin_data::BlockDirection;
+use pumpkin_data::data_component_impl::PotionContentsImpl;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
-use pumpkin_data::sound::Sound;
+use pumpkin_data::sound::{Sound, SoundCategory};
+use pumpkin_util::GameMode;
+use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+use pumpkin_world::world::BlockFlags;
 
 pub struct PotionItem;
 pub struct SplashPotionItem;
@@ -38,6 +45,48 @@ impl ItemMetadata for LingeringPotionItem {
 const POWER: f32 = 0.5;
 
 impl ItemBehaviour for PotionItem {
+    fn use_on_block<'a>(
+        &'a self,
+        item: &'a mut ItemStack,
+        player: &'a Player,
+        location: BlockPos,
+        _face: BlockDirection,
+        _cursor_pos: Vector3<f32>,
+        block: &'a Block,
+        _server: &'a Server,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            if !is_water_potion(item) || !converts_to_mud(block) {
+                return;
+            }
+            let world = player.world();
+            world.play_sound_fine(
+                Sound::ItemBottleEmpty,
+                SoundCategory::Blocks,
+                &location.to_f64(),
+                1.0,
+                1.0,
+            );
+            world
+                .set_block_state(
+                    &location,
+                    Block::MUD.default_state.id,
+                    BlockFlags::NOTIFY_ALL,
+                )
+                .await;
+            if player.gamemode.load() == GameMode::Creative {
+                return;
+            }
+            item.decrement(1);
+            let bottle = ItemStack::new(1, &Item::GLASS_BOTTLE);
+            if item.is_empty() {
+                *item = bottle;
+            } else {
+                player.inventory.offer_or_drop_stack(bottle, player).await;
+            }
+        })
+    }
+
     fn normal_use<'a>(
         &'a self,
         _item: &'a Item,
@@ -50,6 +99,19 @@ impl ItemBehaviour for PotionItem {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+fn is_water_potion(stack: &ItemStack) -> bool {
+    stack.item.id == Item::POTION.id
+        && stack
+            .get_data_component::<PotionContentsImpl>()
+            .is_some_and(|contents| contents.potion_id == Some(0))
+}
+
+fn converts_to_mud(block: &Block) -> bool {
+    block.id == Block::DIRT.id
+        || block.id == Block::COARSE_DIRT.id
+        || block.id == Block::ROOTED_DIRT.id
 }
 
 impl ItemBehaviour for SplashPotionItem {
@@ -173,5 +235,31 @@ impl ItemBehaviour for LingeringPotionItem {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_potion_mud_conversion_targets() {
+        assert!(converts_to_mud(&Block::DIRT));
+        assert!(converts_to_mud(&Block::COARSE_DIRT));
+        assert!(converts_to_mud(&Block::ROOTED_DIRT));
+        assert!(!converts_to_mud(&Block::GRASS_BLOCK));
+
+        let mut water = ItemStack::new(1, &Item::POTION);
+        water
+            .get_data_component_mut::<PotionContentsImpl>()
+            .expect("potions have potion contents")
+            .potion_id = Some(0);
+        assert!(is_water_potion(&water));
+        let mut awkward = water.clone();
+        awkward
+            .get_data_component_mut::<PotionContentsImpl>()
+            .expect("potions have potion contents")
+            .potion_id = Some(1);
+        assert!(!is_water_potion(&awkward));
     }
 }

@@ -402,11 +402,7 @@ fn can_support_vine_at(
 
     let support_pos = vine_pos.offset(direction.to_offset());
     let support_state = block_accessor.get_block_state(&support_pos);
-    let support_face = if direction == BlockDirection::Up {
-        BlockDirection::Up
-    } else {
-        direction.opposite()
-    };
+    let support_face = direction.opposite();
     if support_state.is_side_solid(support_face) {
         return true;
     }

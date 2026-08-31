@@ -41,24 +41,33 @@ use crate::block::blocks::fire::fire::FireBlock;
 use crate::block::blocks::fire::soul_fire::SoulFireBlock;
 use crate::block::blocks::fletching_table::FletchingTableBlock;
 use crate::block::blocks::flower_pots::FlowerPotBlock;
+use crate::block::blocks::frogspawn::FrogspawnBlock;
+use crate::block::blocks::frosted_ice::FrostedIceBlock;
 use crate::block::blocks::furnace::FurnaceBlock;
 use crate::block::blocks::glass_panes::GlassPaneBlock;
 use crate::block::blocks::glazed_terracotta::GlazedTerracottaBlock;
 use crate::block::blocks::grass_block::GrassBlock;
 use crate::block::blocks::grindstone::GrindstoneBlock;
 use crate::block::blocks::hay::HayBlock;
+use crate::block::blocks::ice::IceBlock;
 use crate::block::blocks::infested::InfestedBlock;
 use crate::block::blocks::iron_bars::IronBarsBlock;
 use crate::block::blocks::jigsaw::JigsawBlock;
+use crate::block::blocks::leaves::LeavesBlock;
 use crate::block::blocks::logs::LogBlock;
 use crate::block::blocks::loom::LoomBlock;
 use crate::block::blocks::magma::MagmaBlock;
+use crate::block::blocks::mangrove_leaves::MangroveLeavesBlock;
 use crate::block::blocks::mangrove_roots::MangroveRootsBlock;
+use crate::block::blocks::mycelium::MyceliumBlock;
 use crate::block::blocks::nether_portal::NetherPortalBlock;
+use crate::block::blocks::netherrack::NetherrackBlock;
 use crate::block::blocks::note::NoteBlock;
+use crate::block::blocks::nylium::NyliumBlock;
 use crate::block::blocks::piston::piston::PistonBlock;
 use crate::block::blocks::piston::piston_extension::PistonExtensionBlock;
 use crate::block::blocks::piston::piston_head::PistonHeadBlock;
+use crate::block::blocks::plant::azalea::AzaleaBlock;
 use crate::block::blocks::plant::bamboo::BambooBlock;
 use crate::block::blocks::plant::bamboo_sapling::BambooSaplingBlock;
 use crate::block::blocks::plant::big_dripleaf::BigDripleafBlock;
@@ -66,6 +75,7 @@ use crate::block::blocks::plant::big_dripleaf_stem::BigDripleafStemBlock;
 use crate::block::blocks::plant::bush::BushBlock;
 use crate::block::blocks::plant::cactus::CactusBlock;
 use crate::block::blocks::plant::cactus_flower::CactusFlowerBlock;
+use crate::block::blocks::plant::cave_vines::CaveVinesBlock;
 use crate::block::blocks::plant::chorus_flower::ChorusFlowerBlock;
 use crate::block::blocks::plant::chorus_plant::ChorusPlantBlock;
 use crate::block::blocks::plant::crop::beetroot::BeetrootBlock;
@@ -189,6 +199,7 @@ use crate::block::OnEntityStepArgs;
 use crate::block::blocks::blast_furnace::BlastFurnaceBlock;
 use crate::block::blocks::chain::ChainBlock;
 use crate::block::blocks::cobweb::CobwebBlock;
+use crate::block::blocks::cocoa::CocoaBlock;
 use crate::block::blocks::crafting_table::CraftingTableBlock;
 use crate::block::blocks::dragon_egg::DragonEggBlock;
 use crate::block::blocks::enchanting_table::EnchantingTableBlock;
@@ -217,12 +228,14 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(BeaconBlock);
     manager.register(BedBlock);
     manager.register(SaplingBlock);
+    manager.register(AzaleaBlock);
     manager.register(MangrovePropaguleBlock);
     manager.register(CactusBlock);
     manager.register(ChorusFlowerBlock);
     manager.register(ChorusPlantBlock);
     manager.register(CarpetBlock);
     manager.register(CarvedPumpkinBlock);
+    manager.register(CocoaBlock);
     manager.register(WitherSkeletonSkullBlock);
     manager.register(CampfireBlock);
     manager.register(MossCarpetBlock);
@@ -251,6 +264,8 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(InfestedBlock);
     manager.register(JukeboxBlock);
     manager.register(LogBlock);
+    manager.register(LeavesBlock);
+    manager.register(MangroveLeavesBlock);
     manager.register(BambooBlock);
     manager.register(BambooSaplingBlock);
     manager.register(BannerBlock);
@@ -275,6 +290,7 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(DecoratedPotBlock);
     manager.register(CreakingHeartBlock);
     manager.register(SnifferEggBlock);
+    manager.register(FrogspawnBlock);
     manager.register(TurtleEggBlock);
     manager.register(BrushableBlock);
     manager.register(BushBlock);
@@ -297,6 +313,7 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(WallBlock);
     manager.register(RootsBlock);
     manager.register(NetherPortalBlock);
+    manager.register(NetherrackBlock);
     manager.register(TallPlantBlock);
     manager.register(NoteBlock);
     manager.register(PowderSnowBlock);
@@ -339,6 +356,7 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(ConduitBlock);
     manager.register(DripstoneBlock);
     manager.register(TwistingVinesBlock);
+    manager.register(CaveVinesBlock);
     manager.register(WeepingVinesBlock);
     manager.register(CactusBlock);
     manager.register(CactusFlowerBlock);
@@ -351,6 +369,10 @@ pub fn default_registry() -> Arc<BlockRegistry> {
     manager.register(AmethystBlock);
     manager.register(BuddingAmethystBlock);
     manager.register(GrassBlock);
+    manager.register(IceBlock);
+    manager.register(FrostedIceBlock);
+    manager.register(MyceliumBlock);
+    manager.register(NyliumBlock);
     manager.register(RootedDirtBlock);
     manager.register(ScaffoldingBlock);
     manager.register(BubbleColumnBlock);
@@ -1080,6 +1102,7 @@ impl BlockRegistry {
         &self,
         block: &Block,
         world: &Arc<World>,
+        position: &BlockPos,
         fall_distance: f32,
         entity: &dyn EntityBase,
     ) {
@@ -1088,6 +1111,7 @@ impl BlockRegistry {
             pumpkin_block
                 .on_landed_upon(OnLandedUponArgs {
                     world,
+                    position,
                     fall_distance,
                     entity,
                 })

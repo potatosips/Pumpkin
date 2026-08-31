@@ -47,6 +47,22 @@ impl JavaClient {
                         }
                     }
 
+                    if let Some(behaviour) = server.block_registry.get_pumpkin_block(block.id)
+                        && behaviour
+                            .on_attack(crate::block::AttackArgs {
+                                world: &world,
+                                block,
+                                state,
+                                position: &position,
+                                player,
+                            })
+                            .await
+                    {
+                        self.sync_block_state_to_client(&world, position).await;
+                        self.update_sequence(player, player_action.sequence.0);
+                        return;
+                    }
+
                     if block == &pumpkin_data::Block::NOTE_BLOCK {
                         let props =
                             pumpkin_data::block_properties::NoteBlockLikeProperties::from_state_id(

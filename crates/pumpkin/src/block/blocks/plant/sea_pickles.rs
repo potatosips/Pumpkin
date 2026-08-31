@@ -1,19 +1,19 @@
 use crate::block::blocks::plant::PlantBlockBase;
-use crate::block::registry::BlockActionResult;
 use crate::block::{
-    BlockBehaviour, CanPlaceAtArgs, CanUpdateAtArgs, GetStateForNeighborUpdateArgs, OnPlaceArgs,
-    UseWithItemArgs,
+    BlockBehaviour, BonemealArgs, CanPlaceAtArgs, CanUpdateAtArgs, GetStateForNeighborUpdateArgs,
+    OnPlaceArgs,
 };
 use crate::block::{BlockFuture, BlockIsReplacing};
 use crate::entity::EntityBase;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::block_properties::BlockProperties;
 use pumpkin_data::entity::EntityPose;
-use pumpkin_data::item::Item;
+use pumpkin_data::fluid::Fluid;
 use pumpkin_data::tag::Taggable;
 use pumpkin_data::{Block, BlockDirection, tag};
 use pumpkin_macros::pumpkin_block;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_world::tick::TickPriority;
 use pumpkin_world::world::BlockFlags;
 use rand::RngExt;
 
@@ -23,74 +23,48 @@ type SeaPickleProperties = pumpkin_data::block_properties::SeaPickleLikeProperti
 pub struct SeaPickleBlock;
 
 impl BlockBehaviour for SeaPickleBlock {
-    fn use_with_item<'a>(
-        &'a self,
-        args: UseWithItemArgs<'a>,
-    ) -> BlockFuture<'a, BlockActionResult> {
+    fn is_valid_bonemeal_target(&self, args: BonemealArgs<'_>) -> bool {
+        SeaPickleProperties::from_state_id(args.state_id, args.block).waterlogged
+            && args
+                .world
+                .get_block(&args.position.down())
+                .has_tag(&tag::Block::MINECRAFT_CORAL_BLOCKS)
+    }
+
+    fn is_bonemeal_success(&self, _args: BonemealArgs<'_>) -> bool {
+        true
+    }
+
+    fn perform_bonemeal<'a>(&'a self, args: BonemealArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            if args.item_stack.item != &Item::BONE_MEAL
-                || !args
-                    .world
-                    .get_block(&args.position.down())
-                    .has_tag(&tag::Block::MINECRAFT_CORAL_BLOCKS)
-                || !SeaPickleProperties::from_state_id(
-                    args.world.get_block_state_id(args.position),
-                    args.block,
-                )
-                .waterlogged
-            {
-                return BlockActionResult::Pass;
-            }
-
-            //1:1 vanilla algorithm
-            //TODO use pumpkin random
-
-            //let mut j = 1;
-            let mut count = 0;
-            let base_x = args.position.0.x - 2;
-            let mut removed_z = 0;
-            for added_x in 0..5 {
-                for added_z in 0..1 {
-                    let temp_y = 2 + args.position.0.y - 1;
-                    for y in (temp_y - 2)..temp_y {
-                        //let mut lv2: BlockState;
-                        let lv = BlockPos::new(
-                            base_x + added_x,
-                            y,
-                            args.position.0.z - removed_z + added_z,
-                        );
-                        if &lv == args.position
-                            || rand::rng().random_range(0..6) != 0
-                            || !args.world.get_block(&lv).eq(&Block::WATER)
-                            || !args
-                                .world
-                                .get_block(&lv.down())
-                                .has_tag(&tag::Block::MINECRAFT_CORAL_BLOCKS)
-                        {
-                            continue;
-                        }
-                        let mut sea_pickle_prop = SeaPickleProperties::default(args.block);
-
-                        sea_pickle_prop.pickles = rand::rng().random_range(1..=4);
-                        args.world
-                            .set_block_state(
-                                &lv,
-                                sea_pickle_prop.to_state_id(args.block),
-                                BlockFlags::NOTIFY_ALL,
-                            )
-                            .await;
+            let placements = {
+                let mut rng = rand::rng();
+                let mut placements = Vec::new();
+                for position in spread_positions(args.position) {
+                    // Vanilla constructs a fresh BlockPos and compares it by reference to the
+                    // origin, so the origin still consumes a roll before failing the water check.
+                    if rng.random_range(0..6) != 0
+                        || args.world.get_block(&position) != &Block::WATER
+                        || !args
+                            .world
+                            .get_block(&position.down())
+                            .has_tag(&tag::Block::MINECRAFT_CORAL_BLOCKS)
+                    {
+                        continue;
                     }
+                    let mut sea_pickle_prop = SeaPickleProperties::default(args.block);
+                    sea_pickle_prop.pickles = rng.random_range(1..=4);
+                    placements.push((position, sea_pickle_prop.to_state_id(args.block)));
                 }
-                if count < 2 {
-                    //j += 2;
-                    removed_z += 1;
-                } else {
-                    //j -= 2;
-                    removed_z -= 1;
-                }
-                count += 1;
+                placements
+            };
+
+            for (position, state_id) in placements {
+                args.world
+                    .set_block_state(&position, state_id, BlockFlags::NOTIFY_ALL)
+                    .await;
             }
-            let mut sea_pickle_prop = SeaPickleProperties::default(args.block);
+            let mut sea_pickle_prop = SeaPickleProperties::from_state_id(args.state_id, args.block);
             sea_pickle_prop.pickles = 4;
             args.world
                 .set_block_state(
@@ -99,8 +73,6 @@ impl BlockBehaviour for SeaPickleBlock {
                     BlockFlags::NOTIFY_LISTENERS,
                 )
                 .await;
-
-            BlockActionResult::Consume
         })
     }
 
@@ -124,7 +96,7 @@ impl BlockBehaviour for SeaPickleBlock {
 
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
         let support_block = args.block_accessor.get_block_state(&args.position.down());
-        support_block.is_center_solid(BlockDirection::Up)
+        can_support_sea_pickle(support_block)
     }
 
     fn can_update_at(&self, args: CanUpdateAtArgs<'_>) -> bool {
@@ -137,21 +109,67 @@ impl BlockBehaviour for SeaPickleBlock {
         args: GetStateForNeighborUpdateArgs<'a>,
     ) -> BlockFuture<'a, BlockStateId> {
         Box::pin(async move {
-            <Self as PlantBlockBase>::get_state_for_neighbor_update(
+            let state = <Self as PlantBlockBase>::get_state_for_neighbor_update(
                 self,
                 args.world,
                 args.position,
                 args.state_id,
             )
-            .await
+            .await;
+            if state != Block::AIR.default_state.id
+                && SeaPickleProperties::from_state_id(state, args.block).waterlogged
+            {
+                args.world.schedule_fluid_tick(
+                    &Fluid::WATER,
+                    *args.position,
+                    Fluid::WATER.flow_speed as u8,
+                    TickPriority::Normal,
+                );
+            }
+            state
         })
     }
 }
 
 impl PlantBlockBase for SeaPickleBlock {}
 
+fn spread_positions(origin: &BlockPos) -> Vec<BlockPos> {
+    let mut positions = Vec::with_capacity(26);
+    let mut width = 1;
+    let mut z_offset = 0;
+
+    for x_offset in 0..5 {
+        for z_index in 0..width {
+            for y in (origin.0.y - 1)..=origin.0.y {
+                positions.push(BlockPos::new(
+                    origin.0.x - 2 + x_offset,
+                    y,
+                    origin.0.z - z_offset + z_index,
+                ));
+            }
+        }
+
+        if x_offset < 2 {
+            width += 2;
+            z_offset += 1;
+        } else {
+            width -= 2;
+            z_offset -= 1;
+        }
+    }
+    positions
+}
+
+fn can_support_sea_pickle(state: &pumpkin_data::BlockState) -> bool {
+    state.is_side_solid(BlockDirection::Up)
+        || state.get_block_collision_shapes().any(|shape| {
+            shape.max.y >= 1.0 && shape.max.x > shape.min.x && shape.max.z > shape.min.z
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{can_support_sea_pickle, spread_positions};
     use pumpkin_data::Block;
     use pumpkin_data::block_properties::BlockProperties;
 
@@ -204,16 +222,22 @@ mod tests {
 
     #[test]
     fn sea_pickle_support_requires_center_solid_up() {
-        // Sea pickles require is_center_solid(Up) on the block below
-        assert!(
-            Block::STONE
-                .default_state
-                .is_center_solid(pumpkin_data::BlockDirection::Up)
-        );
-        assert!(
-            Block::DIRT
-                .default_state
-                .is_center_solid(pumpkin_data::BlockDirection::Up)
-        );
+        assert!(can_support_sea_pickle(&Block::STONE.default_state));
+        assert!(can_support_sea_pickle(&Block::DIRT.default_state));
+        assert!(can_support_sea_pickle(&Block::OAK_FENCE.default_state));
+        assert!(!can_support_sea_pickle(&Block::AIR.default_state));
+    }
+
+    #[test]
+    fn bonemeal_spread_uses_vanilla_diamond_and_two_layers() {
+        let origin = pumpkin_util::math::position::BlockPos::new(10, 64, 20);
+        let positions = spread_positions(&origin);
+        assert_eq!(positions.len(), 26);
+        assert_eq!(positions.iter().filter(|pos| pos.0.x == 8).count(), 2);
+        assert_eq!(positions.iter().filter(|pos| pos.0.x == 9).count(), 6);
+        assert_eq!(positions.iter().filter(|pos| pos.0.x == 10).count(), 10);
+        assert_eq!(positions.iter().filter(|pos| pos.0.x == 11).count(), 6);
+        assert_eq!(positions.iter().filter(|pos| pos.0.x == 12).count(), 2);
+        assert!(positions.iter().all(|pos| pos.0.y == 63 || pos.0.y == 64));
     }
 }

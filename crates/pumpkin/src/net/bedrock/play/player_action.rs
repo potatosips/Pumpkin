@@ -32,6 +32,21 @@ impl BedrockClient {
                 let world = entity.world.load_full();
                 let (block, state) = world.get_block_and_state(&location);
 
+                if matches!(packet.action, PlayerAction::StartBreak)
+                    && let Some(behaviour) = server.block_registry.get_pumpkin_block(block.id)
+                    && behaviour
+                        .on_attack(crate::block::AttackArgs {
+                            world: &world,
+                            block,
+                            state,
+                            position: &location,
+                            player,
+                        })
+                        .await
+                {
+                    return;
+                }
+
                 if player.mining.load(Ordering::Relaxed)
                     && *player.mining_pos.lock().await != location
                 {

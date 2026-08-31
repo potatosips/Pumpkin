@@ -12,10 +12,14 @@ use pumpkin_data::{
         BlockProperties, Facing, HorizontalFacing, LadderLikeProperties,
         MangroveRootsLikeProperties,
     },
+    fluid::Fluid,
     tag::{self, Taggable},
 };
 use pumpkin_util::math::position::BlockPos;
-use pumpkin_world::world::{BlockAccessor, BlockFlags};
+use pumpkin_world::{
+    tick::TickPriority,
+    world::{BlockAccessor, BlockFlags},
+};
 
 pub struct CoralFanBlock;
 
@@ -172,6 +176,23 @@ impl BlockBehaviour for CoralFanBlock {
                 if !support_block.is_center_solid(BlockDirection::Up) {
                     return BlockStateId::AIR;
                 }
+            }
+
+            let waterlogged = if is_wall_fan(args.block) {
+                CoralWallFanLikeProperties::from_state_id(args.state_id, args.block).waterlogged
+            } else {
+                CoralFanLikeProperties::from_state_id(args.state_id, args.block).waterlogged
+            };
+            if waterlogged {
+                args.world.schedule_fluid_tick(
+                    &Fluid::WATER,
+                    *args.position,
+                    Fluid::WATER.flow_speed as u8,
+                    TickPriority::Normal,
+                );
+            }
+            if !is_dead_coral(args.block) && !scan_for_water(args.world, args.position).await {
+                try_schedule_die_tick(args.block, args.world, args.position).await;
             }
 
             args.state_id

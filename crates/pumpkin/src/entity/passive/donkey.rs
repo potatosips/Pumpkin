@@ -1,14 +1,16 @@
 use std::sync::{Arc, Weak};
 
-use pumpkin_data::entity::EntityType;
+use pumpkin_data::{entity::EntityType, item_stack::ItemStack, sound::Sound};
 
 use crate::entity::{
-    Entity, NBTStorage,
+    Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
+    ageable::{AgeableData, AgeableMob},
     ai::goal::{
         look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
         wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
+    player::Player,
 };
 
 /// Represents a Donkey, a passive mob that can be tamed and equipped with chests.
@@ -16,12 +18,16 @@ use crate::entity::{
 /// Wiki: <https://minecraft.wiki/w/Donkey>
 pub struct DonkeyEntity {
     pub mob_entity: MobEntity,
+    ageable_data: AgeableData,
 }
 
 impl DonkeyEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
-        let donkey = Self { mob_entity };
+        let donkey = Self {
+            mob_entity,
+            ageable_data: AgeableData::default(),
+        };
         let mob_arc = Arc::new(donkey);
         let mob_weak: Weak<dyn Mob> = {
             let mob_arc: Arc<dyn Mob> = mob_arc.clone();
@@ -48,10 +54,49 @@ impl DonkeyEntity {
     }
 }
 
-impl NBTStorage for DonkeyEntity {}
+impl AgeableMob for DonkeyEntity {
+    fn get_ageable_data(&self) -> &AgeableData {
+        &self.ageable_data
+    }
+}
+impl NBTStorage for DonkeyEntity {
+    fn write_nbt<'a>(
+        &'a self,
+        nbt: &'a mut pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.mob_entity.write_nbt(nbt).await;
+            self.write_ageable_nbt(nbt);
+        })
+    }
+    fn read_nbt_non_mut<'a>(
+        &'a self,
+        nbt: &'a pumpkin_nbt::compound::NbtCompound,
+    ) -> NbtFuture<'a, ()> {
+        Box::pin(async move {
+            self.mob_entity.read_nbt_non_mut(nbt).await;
+            self.read_ageable_nbt(nbt);
+        })
+    }
+}
 
 impl Mob for DonkeyEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { self.ageable_ai_step() })
+    }
+    fn mob_interact<'a>(
+        &'a self,
+        player: &'a Arc<Player>,
+        stack: &'a mut ItemStack,
+    ) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async move {
+            if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
+                return true;
+            }
+            self.mob_entity.mob_interact(player, stack).await
+        })
     }
 }

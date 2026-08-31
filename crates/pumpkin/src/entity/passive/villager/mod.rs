@@ -1715,6 +1715,50 @@ impl Mob for VillagerEntity {
         &self.mob_entity
     }
 
+    fn mob_on_lightning_strike<'a>(
+        &'a self,
+        caller: &'a dyn EntityBase,
+        lightning: &'a crate::entity::lightning::LightningBoltEntity,
+    ) -> crate::entity::EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let source = self.get_entity();
+            let world = source.world.load_full();
+            if world.level_info.load().difficulty == pumpkin_util::Difficulty::Peaceful {
+                self.mob_entity
+                    .living_entity
+                    .on_lightning_strike(caller, lightning)
+                    .await;
+                return;
+            }
+
+            let witch = crate::entity::mob::witch::WitchEntity::new(Entity::new(
+                world.clone(),
+                source.pos.load(),
+                &EntityType::WITCH,
+            ));
+            witch.mob_entity.set_no_ai(self.mob_entity.is_no_ai());
+            witch.mob_entity.set_persistence_required(true);
+            let mut event =
+                crate::plugin::api::events::entity::entity_transform::EntityTransformEvent::new(
+                    source.entity_id,
+                    witch.mob_entity.living_entity.entity.entity_id,
+                    "LIGHTNING".to_string(),
+                );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire(&server, &mut event).await;
+            }
+            if event.cancelled {
+                self.mob_entity
+                    .living_entity
+                    .on_lightning_strike(caller, lightning)
+                    .await;
+                return;
+            }
+            world.remove_entity(self).await;
+            world.spawn_entity(witch).await;
+        })
+    }
+
     fn mob_bedrock_identifier(&self) -> Option<&'static str> {
         Some("minecraft:villager_v2")
     }

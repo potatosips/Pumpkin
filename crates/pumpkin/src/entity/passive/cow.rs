@@ -5,7 +5,7 @@ use pumpkin_data::sound::Sound;
 use pumpkin_data::{entity::EntityType, item::Item};
 
 use crate::entity::{
-    Entity, EntityBaseFuture, NBTStorage, NbtFuture,
+    Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::AgeableMob,
     ai::goal::{
         breed::BreedGoal, escape_danger::EscapeDangerGoal, follow_parent::FollowParentGoal,
@@ -17,6 +17,7 @@ use crate::entity::{
     player::Player,
 };
 use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_util::GameMode;
 
 const TEMPT_ITEMS: &[&Item] = &[&Item::WHEAT];
 
@@ -65,6 +66,37 @@ impl CowEntity {
     }
 }
 
+pub(crate) async fn exchange_empty_container(
+    player: &Player,
+    input: &mut ItemStack,
+    output: &'static Item,
+) {
+    exchange_empty_container_stack(player, input, ItemStack::new(1, output)).await;
+}
+
+pub(crate) async fn exchange_empty_container_stack(
+    player: &Player,
+    input: &mut ItemStack,
+    mut output: ItemStack,
+) {
+    if player.gamemode.load() == GameMode::Creative {
+        let inventory = player.inventory.main_inventory.read().await;
+        if inventory
+            .iter()
+            .any(|stack| stack.item.id == output.item.id)
+        {
+            return;
+        }
+        drop(inventory);
+        player.inventory.insert_stack_anywhere(&mut output).await;
+    } else if input.item_count == 1 {
+        *input = output;
+    } else {
+        input.decrement(1);
+        player.inventory.offer_or_drop_stack(output, player).await;
+    }
+}
+
 impl crate::entity::ageable::AgeableMob for CowEntity {
     fn get_ageable_data(&self) -> &crate::entity::ageable::AgeableData {
         &self.ageable_data
@@ -104,12 +136,33 @@ impl Mob for CowEntity {
         &self.mob_entity
     }
 
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { self.ageable_ai_step() })
+    }
+
     fn mob_interact<'a>(
         &'a self,
         player: &'a Arc<Player>,
         item_stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
         use super::animal::Animal;
-        self.animal_interact(player, item_stack, Sound::EntityCowAmbient)
+        Box::pin(async move {
+            if !self.is_baby() && item_stack.item == &Item::BUCKET {
+                self.mob_entity
+                    .living_entity
+                    .entity
+                    .world
+                    .load()
+                    .play_sound(
+                        Sound::EntityCowMilk,
+                        pumpkin_data::sound::SoundCategory::Neutral,
+                        &self.mob_entity.living_entity.entity.pos.load(),
+                    );
+                exchange_empty_container(player, item_stack, &Item::MILK_BUCKET).await;
+                return true;
+            }
+            self.animal_interact(player, item_stack, Sound::EntityCowAmbient)
+                .await
+        })
     }
 }
