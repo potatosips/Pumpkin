@@ -32,10 +32,17 @@ impl ItemBehaviour for SaddleItem {
             {
                 mob.set_saddled(true);
                 let ent = entity.get_entity();
-                let sound = if ent.entity_type == &pumpkin_data::entity::EntityType::STRIDER {
-                    Sound::EntityStriderSaddle
-                } else {
-                    Sound::EntityPigSaddle
+                let sound = match ent.entity_type {
+                    ty if ty == &pumpkin_data::entity::EntityType::STRIDER => {
+                        Sound::EntityStriderSaddle
+                    }
+                    ty if ty == &pumpkin_data::entity::EntityType::HORSE
+                        || ty == &pumpkin_data::entity::EntityType::DONKEY
+                        || ty == &pumpkin_data::entity::EntityType::MULE =>
+                    {
+                        Sound::EntityHorseSaddle
+                    }
+                    _ => Sound::EntityPigSaddle,
                 };
                 player
                     .world()

@@ -996,6 +996,10 @@ pub trait Mob: EntityBase + Send + Sync {
         None
     }
 
+    fn get_horse(&self) -> Option<&crate::entity::passive::horse::HorseEntity> {
+        None
+    }
+
     fn mob_on_lightning_strike<'a>(
         &'a self,
         caller: &'a dyn EntityBase,
