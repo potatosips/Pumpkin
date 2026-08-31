@@ -11,6 +11,7 @@ use crate::entity::player::Player;
 use crate::item::{ItemBehaviour, ItemMetadata};
 use crate::server::Server;
 use crate::world::World;
+use pumpkin_data::data_component_impl::EquipmentSlot;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
@@ -23,6 +24,7 @@ use pumpkin_util::math::vector3::Vector3;
 use pumpkin_world::world::BlockFlags;
 
 use crate::entity::NBTStorage;
+use crate::entity::mob::Mob;
 use crate::entity::passive::cow::CowEntity;
 
 pub struct ShearsItem;
@@ -96,6 +98,34 @@ impl ItemBehaviour for ShearsItem {
         entity: Arc<dyn EntityBase>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
         Box::pin(async move {
+            if let Some(wolf) = entity.get_mob().and_then(|mob| mob.get_wolf())
+                && wolf.get_owner_uuid() == Some(player.gameprofile.id)
+            {
+                let living = &wolf.mob_entity.living_entity;
+                let mut equipment = living.entity_equipment.lock().await;
+                let armor = equipment.get(&EquipmentSlot::BODY);
+                if armor.item == &Item::WOLF_ARMOR {
+                    equipment.equipment.remove(&EquipmentSlot::BODY);
+                    drop(equipment);
+                    living
+                        .send_equipment_changes(&[(EquipmentSlot::BODY, ItemStack::EMPTY.clone())]);
+                    let world = player.world();
+                    let pos = wolf.get_entity().pos.load();
+                    world.play_sound(Sound::ItemArmorUnequipWolf, SoundCategory::Players, &pos);
+                    let item_entity = Arc::new(ItemEntity::new(
+                        Entity::new(
+                            world.clone(),
+                            Vector3::new(pos.x, pos.y + 1.0, pos.z),
+                            &EntityType::ITEM,
+                        ),
+                        armor,
+                    ));
+                    world.spawn_entity(item_entity).await;
+                    let _ = item.damage_item(1);
+                    return;
+                }
+            }
+
             if let Some(sheep) = entity.get_mob().and_then(|m| m.get_sheep())
                 && sheep.mob_entity.living_entity.entity.is_alive()
                 && !sheep.is_sheared()

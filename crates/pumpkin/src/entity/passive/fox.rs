@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Weak,
+    Arc, RwLock, Weak,
     atomic::{AtomicI32, AtomicU8, Ordering},
 };
 
@@ -8,7 +8,7 @@ use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::Sound;
 use pumpkin_data::tag::{self, Taggable};
-use pumpkin_nbt::compound::NbtCompound;
+use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
 
@@ -16,9 +16,10 @@ use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
-        breed::BreedGoal, escape_danger::EscapeDangerGoal, follow_parent::FollowParentGoal,
-        look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
-        tempt::TemptGoal, wander_around::WanderAroundGoal,
+        avoid_entity::AvoidEntityGoal, breed::BreedGoal, escape_danger::EscapeDangerGoal,
+        follow_parent::FollowParentGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, swim::SwimGoal, tempt::TemptGoal,
+        wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     passive::animal::Animal,
@@ -74,6 +75,7 @@ pub struct FoxEntity {
     pub ageable_data: AgeableData,
     pub variant: AtomicI32,
     pub flags: AtomicU8,
+    pub trusted: RwLock<Vec<uuid::Uuid>>,
 }
 
 impl FoxEntity {
@@ -84,6 +86,7 @@ impl FoxEntity {
             ageable_data: AgeableData::default(),
             variant: AtomicI32::new(FoxVariant::Red.id()),
             flags: AtomicU8::new(0),
+            trusted: RwLock::new(Vec::new()),
         };
         let mob_arc = Arc::new(fox);
         let mob_weak: Weak<dyn Mob> = {
@@ -103,6 +106,10 @@ impl FoxEntity {
             goal_selector.add_goal(2, BreedGoal::new(1.0));
             goal_selector.add_goal(3, Box::new(TemptGoal::new(1.2, FOX_FOOD)));
             goal_selector.add_goal(4, Box::new(FollowParentGoal::new(1.1)));
+            goal_selector.add_goal(
+                4,
+                Box::new(AvoidEntityGoal::new(&EntityType::PLAYER, 16.0, 1.6, 1.4)),
+            );
             goal_selector.add_goal(6, Box::new(WanderAroundGoal::new(1.0)));
             goal_selector.add_goal(
                 7,
@@ -249,6 +256,22 @@ impl NBTStorage for FoxEntity {
             nbt.put_bool("Sleeping", self.is_sleeping());
             nbt.put_bool("Sitting", self.is_sitting());
             nbt.put_bool("Crouching", self.is_crouching());
+            let trusted = self
+                .trusted
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .map(|uuid| {
+                    let value = uuid.as_u128();
+                    NbtTag::IntArray(vec![
+                        (value >> 96) as i32,
+                        ((value >> 64) & 0xffff_ffff) as i32,
+                        ((value >> 32) & 0xffff_ffff) as i32,
+                        (value & 0xffff_ffff) as i32,
+                    ])
+                })
+                .collect();
+            nbt.put_list("Trusted", trusted);
         })
     }
 
@@ -269,6 +292,25 @@ impl NBTStorage for FoxEntity {
             if let Some(crouching) = nbt.get_bool("Crouching") {
                 self.set_crouching(crouching);
             }
+            if let Some(entries) = nbt.get_list("Trusted") {
+                let mut trusted = self
+                    .trusted
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                trusted.clear();
+                for entry in entries.iter().take(2) {
+                    if let NbtTag::IntArray(parts) = entry
+                        && let [a, b, c, d] = parts.as_slice()
+                    {
+                        trusted.push(uuid::Uuid::from_u128(
+                            ((*a as u32 as u128) << 96)
+                                | ((*b as u32 as u128) << 64)
+                                | ((*c as u32 as u128) << 32)
+                                | (*d as u32 as u128),
+                        ));
+                    }
+                }
+            }
         })
     }
 }
@@ -276,6 +318,51 @@ impl NBTStorage for FoxEntity {
 impl Mob for FoxEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn get_fox(&self) -> Option<&FoxEntity> {
+        Some(self)
+    }
+
+    fn trusts_player(&self, player: uuid::Uuid) -> bool {
+        self.trusted
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&player)
+    }
+
+    fn configure_bred_child<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+        child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(child_fox) = child.get_mob().and_then(Mob::get_fox) else {
+                return;
+            };
+            let variant = mate
+                .get_mob()
+                .and_then(Mob::get_fox)
+                .filter(|_| rand::random::<bool>())
+                .map_or_else(|| self.get_variant(), |mate_fox| mate_fox.get_variant());
+            child_fox.variant.store(variant.id(), Ordering::Relaxed);
+            let mut trusted = child_fox
+                .trusted
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for breeder in [
+                self.mob_entity.breeder.load(),
+                mate.get_mob()
+                    .and_then(|mob| mob.get_mob_entity().breeder.load()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !trusted.contains(&breeder) && trusted.len() < 2 {
+                    trusted.push(breeder);
+                }
+            }
+        })
     }
 
     fn mob_set_variant_name(&self, name: &str) {

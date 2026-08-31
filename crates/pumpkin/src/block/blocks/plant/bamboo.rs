@@ -108,7 +108,6 @@ impl BlockBehaviour for BambooBlock {
             if !<Self as PlantBlockBase>::can_place_at(self, args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
-                return Block::AIR.default_state.id;
             }
             let neighbor_block = args.world.get_block(args.neighbor_position);
             if args.direction == BlockDirection::Up && neighbor_block == &Block::BAMBOO {
@@ -129,7 +128,16 @@ impl BlockBehaviour for BambooBlock {
 
     fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            if rand::rng().random_range(0..=3) == 0 {
+            let props = BambooLikeProperties::from_state_id(
+                args.world.get_block_state_id(args.position),
+                args.block,
+            );
+            let above = args.position.up();
+            if props.stage == 0
+                && rand::rng().random_range(0..3) == 0
+                && args.world.get_max_local_raw_brightness(&above) >= 9
+                && args.world.get_block_state(&above).is_air()
+            {
                 update_leaves_and_grow(args.world.clone(), args.position).await;
             }
         })
@@ -154,14 +162,16 @@ async fn update_leaves_and_grow(world: Arc<World>, position: &BlockPos) {
     }
 
     let bamboo_count = count_bamboo_below(&world, position);
-    if bamboo_count >= 16 {
+    let stalk_height = bamboo_count + 1;
+    if stalk_height >= 16 {
         return;
     }
     let (block_below, state_id_below) = world.get_block_and_state_id(&below_pos);
     let (block_two_below, state_id_two_below) = world.get_block_and_state_id(&two_below_pos);
 
-    if bamboo_count >= 1 && block_below == &Block::BAMBOO {
+    let below_age = if block_below == &Block::BAMBOO {
         let mut props_below = BambooLikeProperties::from_state_id(state_id_below, block_below);
+        let age = props_below.age;
         let below_has_leaves = props_below.leaves != BambooLeaves::None;
 
         props.leaves = if !below_has_leaves {
@@ -192,17 +202,26 @@ async fn update_leaves_and_grow(world: Arc<World>, position: &BlockPos) {
                 )
                 .await;
         }
-    }
+        Some(age)
+    } else {
+        None
+    };
 
-    props.age = u8::from(!(props.age != 1 && block_two_below == &Block::BAMBOO));
+    props.age = next_age(below_age, block_two_below == &Block::BAMBOO);
 
-    props.stage = u8::from(
-        !((bamboo_count < 11 || rand::rng().random::<f32>() >= 0.25) && bamboo_count != 15),
-    );
+    props.stage = next_stage(stalk_height, rand::rng().random::<f32>());
 
     world
         .set_block_state(&above_pos, props.to_state_id(block), BlockFlags::NOTIFY_ALL)
         .await;
+}
+
+fn next_stage(stalk_height: usize, roll: f32) -> u8 {
+    u8::from(!((stalk_height < 11 || roll >= 0.25) && stalk_height != 15))
+}
+
+fn next_age(below_age: Option<u8>, two_below_is_bamboo: bool) -> u8 {
+    u8::from(!matches!(below_age, Some(age) if age != 1) || !two_below_is_bamboo)
 }
 
 fn count_bamboo_below(world: &World, pos: &BlockPos) -> usize {
@@ -322,5 +341,21 @@ mod tests {
         assert!(Block::RED_SAND.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
         assert!(Block::GRAVEL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
         assert!(Block::PODZOL.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BAMBOO));
+    }
+
+    #[test]
+    fn bamboo_terminal_stage_thresholds_match_vanilla() {
+        assert_eq!(next_stage(10, 0.0), 0);
+        assert_eq!(next_stage(11, 0.249_999), 1);
+        assert_eq!(next_stage(11, 0.25), 0);
+        assert_eq!(next_stage(15, 1.0), 1);
+    }
+
+    #[test]
+    fn bamboo_new_segment_age_uses_block_below() {
+        assert_eq!(next_age(None, false), 1);
+        assert_eq!(next_age(Some(0), false), 1);
+        assert_eq!(next_age(Some(0), true), 0);
+        assert_eq!(next_age(Some(1), true), 1);
     }
 }

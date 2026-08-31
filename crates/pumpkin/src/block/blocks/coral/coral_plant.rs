@@ -1,9 +1,10 @@
 use pumpkin_data::{
     BlockDirection, BlockId, BlockStateId,
     block_properties::{BlockProperties, MangroveRootsLikeProperties},
+    fluid::Fluid,
     tag,
 };
-use pumpkin_world::world::BlockFlags;
+use pumpkin_world::{tick::TickPriority, world::BlockFlags};
 
 use crate::block::{
     BlockBehaviour, BlockFuture, BlockMetadata, CanPlaceAtArgs, GetStateForNeighborUpdateArgs,
@@ -73,6 +74,18 @@ impl BlockBehaviour for CoralPlantBlock {
                 if !support_block.is_center_solid(BlockDirection::Up) {
                     return BlockStateId::AIR;
                 }
+            }
+            let props = CoralPlantLikeProperties::from_state_id(args.state_id, args.block);
+            if props.waterlogged {
+                args.world.schedule_fluid_tick(
+                    &Fluid::WATER,
+                    *args.position,
+                    Fluid::WATER.flow_speed as u8,
+                    TickPriority::Normal,
+                );
+            }
+            if !is_dead_coral(args.block) && !scan_for_water(args.world, args.position).await {
+                try_schedule_die_tick(args.block, args.world, args.position).await;
             }
             args.state_id
         })

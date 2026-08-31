@@ -17,6 +17,7 @@ pub mod glow_squid;
 pub mod goat;
 pub mod happy_ghast;
 pub mod horse;
+mod horse_food;
 pub mod iron_golem;
 pub mod llama;
 pub mod mooshroom;

@@ -20,6 +20,7 @@ pub struct ActiveTargetGoal {
     reciprocal_chance: i32,
     target_type: &'static EntityType,
     target_predicate: TargetPredicate,
+    only_if_untamed: bool,
 }
 
 impl ActiveTargetGoal {
@@ -51,6 +52,7 @@ impl ActiveTargetGoal {
             reciprocal_chance: to_goal_ticks(reciprocal_chance),
             target_type,
             target_predicate,
+            only_if_untamed: false,
         }
     }
 
@@ -72,7 +74,19 @@ impl ActiveTargetGoal {
             reciprocal_chance: to_goal_ticks(DEFAULT_RECIPROCAL_CHANCE),
             target_type,
             target_predicate,
+            only_if_untamed: false,
         })
+    }
+
+    #[must_use]
+    pub fn with_default_untamed(
+        mob: &MobEntity,
+        target_type: &'static EntityType,
+        check_visibility: bool,
+    ) -> Box<Self> {
+        let mut goal = Self::with_default(mob, target_type, check_visibility);
+        goal.only_if_untamed = true;
+        goal
     }
 
     pub fn set_target(&mut self, target: Option<Arc<dyn EntityBase>>) {
@@ -130,6 +144,9 @@ impl ActiveTargetGoal {
 impl Goal for ActiveTargetGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
+            if self.only_if_untamed && mob.is_tame() {
+                return false;
+            }
             if self.reciprocal_chance > 0
                 && mob.get_random().random_range(0..self.reciprocal_chance) != 0
             {
@@ -141,7 +158,12 @@ impl Goal for ActiveTargetGoal {
     }
 
     fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
-        Box::pin(async { self.track_target_goal.should_continue(mob).await })
+        Box::pin(async {
+            if self.only_if_untamed && mob.is_tame() {
+                return false;
+            }
+            self.track_target_goal.should_continue(mob).await
+        })
     }
 
     fn start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {

@@ -120,6 +120,60 @@ impl Mob for PigEntity {
         &self.mob_entity
     }
 
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { self.ageable_ai_step() })
+    }
+
+    fn mob_on_lightning_strike<'a>(
+        &'a self,
+        caller: &'a dyn EntityBase,
+        lightning: &'a crate::entity::lightning::LightningBoltEntity,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let source = &self.mob_entity.living_entity.entity;
+            let world = source.world.load_full();
+            if world.level_info.load().difficulty == pumpkin_util::Difficulty::Peaceful {
+                self.mob_entity
+                    .living_entity
+                    .on_lightning_strike(caller, lightning)
+                    .await;
+                return;
+            }
+
+            let transformed =
+                crate::entity::mob::zombified_piglin::ZombifiedPiglinEntity::new(Entity::new(
+                    world.clone(),
+                    source.pos.load(),
+                    &EntityType::ZOMBIFIED_PIGLIN,
+                ));
+            transformed.mob_entity.living_entity.entity.age.store(
+                source.age.load(std::sync::atomic::Ordering::Relaxed),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            transformed.mob_entity.set_no_ai(self.mob_entity.is_no_ai());
+            transformed.mob_entity.set_persistence_required(true);
+
+            let mut event =
+                crate::plugin::api::events::entity::entity_transform::EntityTransformEvent::new(
+                    source.entity_id,
+                    transformed.mob_entity.living_entity.entity.entity_id,
+                    "LIGHTNING".to_string(),
+                );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire(&server, &mut event).await;
+            }
+            if event.cancelled {
+                self.mob_entity
+                    .living_entity
+                    .on_lightning_strike(caller, lightning)
+                    .await;
+                return;
+            }
+            world.remove_entity(self).await;
+            world.spawn_entity(transformed).await;
+        })
+    }
+
     fn get_item_steerable(&self) -> Option<&dyn ItemSteerable> {
         Some(self)
     }

@@ -1,5 +1,6 @@
 use crate::block::{
-    BlockBehaviour, BlockFuture, BlockMetadata, OnScheduledTickArgs, PlacedArgs,
+    BlockBehaviour, BlockFuture, BlockMetadata, GetStateForNeighborUpdateArgs, OnScheduledTickArgs,
+    PlacedArgs,
     blocks::coral::{is_dead_coral, scan_for_water, try_schedule_die_tick},
 };
 use pumpkin_data::{Block, BlockId, tag};
@@ -18,6 +19,18 @@ impl BlockMetadata for CoralBlock {
     }
 }
 impl BlockBehaviour for CoralBlock {
+    fn get_state_for_neighbor_update<'a>(
+        &'a self,
+        args: GetStateForNeighborUpdateArgs<'a>,
+    ) -> BlockFuture<'a, pumpkin_data::BlockStateId> {
+        Box::pin(async move {
+            if !is_dead_coral(args.block) && !scan_for_water(args.world, args.position).await {
+                try_schedule_die_tick(args.block, args.world, args.position).await;
+            }
+            args.state_id
+        })
+    }
+
     fn placed<'a>(&'a self, args: PlacedArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             if !scan_for_water(args.world, args.position).await && !is_dead_coral(args.block) {

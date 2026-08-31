@@ -40,14 +40,18 @@ impl BlockBehaviour for SugarCaneBlock {
                 let age = CactusLikeProperties::from_state_id(state_id, args.block).age;
                 if age == 15 {
                     args.world
-                        .set_block_state(&args.position.up(), state_id, BlockFlags::empty())
+                        .set_block_state(
+                            &args.position.up(),
+                            Block::SUGAR_CANE.default_state.id,
+                            BlockFlags::NOTIFY_ALL,
+                        )
                         .await;
                     let props = CactusLikeProperties { age: 0 };
                     args.world
                         .set_block_state(
                             args.position,
                             props.to_state_id(args.block),
-                            BlockFlags::empty(),
+                            BlockFlags::SKIP_BLOCK_ENTITY_REPLACED_CALLBACK,
                         )
                         .await;
                 } else {
@@ -56,7 +60,7 @@ impl BlockBehaviour for SugarCaneBlock {
                         .set_block_state(
                             args.position,
                             props.to_state_id(args.block),
-                            BlockFlags::empty(),
+                            BlockFlags::SKIP_BLOCK_ENTITY_REPLACED_CALLBACK,
                         )
                         .await;
                 }
@@ -72,7 +76,6 @@ impl BlockBehaviour for SugarCaneBlock {
             if !can_place_at(args.world, args.position) {
                 args.world
                     .schedule_block_tick(args.block, *args.position, 1, TickPriority::Normal);
-                return Block::AIR.default_state.id;
             }
             args.state_id
         })
@@ -134,6 +137,20 @@ mod tests {
             &Block::SUGAR_CANE,
         );
         assert_eq!(default_props.age, 0);
+    }
+
+    #[test]
+    fn newly_grown_cane_uses_age_zero_default_state() {
+        let mature = CactusLikeProperties { age: 15 }.to_state_id(&Block::SUGAR_CANE);
+        assert_ne!(mature, Block::SUGAR_CANE.default_state.id);
+        assert_eq!(
+            CactusLikeProperties::from_state_id(
+                Block::SUGAR_CANE.default_state.id,
+                &Block::SUGAR_CANE,
+            )
+            .age,
+            0
+        );
     }
 
     #[test]

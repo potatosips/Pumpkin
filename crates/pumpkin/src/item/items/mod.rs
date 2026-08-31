@@ -19,6 +19,7 @@ pub mod experience_bottle;
 pub mod firework_rocket;
 pub mod fishing_rod;
 pub mod glass_bottle;
+pub mod glow_berries;
 pub mod glowing_ink_sac;
 pub mod goat_horn;
 pub mod hoe;
@@ -68,6 +69,7 @@ use crate::item::items::wind_charge::WindChargeItem;
 use crate::item::items::writable_book::WritableBookItem;
 use firework_rocket::FireworkRocketItem;
 use fishing_rod::FishingRodItem;
+use glow_berries::GlowBerriesItem;
 use glowing_ink_sac::GlowingInkSacItem;
 
 use super::registry::ItemRegistry;
@@ -114,6 +116,7 @@ pub fn default_registry() -> Arc<ItemRegistry> {
     manager.register(ShearsItem);
     manager.register(SaddleItem);
     manager.register(BoneMealItem);
+    manager.register(GlowBerriesItem);
     manager.register(GlassBottleItem);
     manager.register(ExperienceBottleItem);
     manager.register(CompassItem);

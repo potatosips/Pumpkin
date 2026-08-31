@@ -14,6 +14,7 @@ use pumpkin_data::BlockDirection;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::block_properties::BlockProperties;
 use pumpkin_data::block_properties::FarmlandLikeProperties;
+use pumpkin_data::fluid::Fluid;
 use pumpkin_data::tag;
 use pumpkin_data::tag::Taggable;
 use pumpkin_macros::pumpkin_block;
@@ -32,22 +33,20 @@ impl BlockBehaviour for FarmlandBlock {
     fn on_landed_upon<'a>(&'a self, args: OnLandedUponArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
             if let Some(living) = args.entity.get_living_entity() {
-                living
-                    .handle_fall_damage(args.entity, args.fall_distance, 1.0)
-                    .await;
-            }
-
-            if args.fall_distance > 0.5 {
-                let entity_pos = args.entity.get_entity().pos.load();
-                let target_pos = BlockPos(Vector3::new(
-                    entity_pos.x.floor() as i32,
-                    (entity_pos.y - 0.2).floor() as i32,
-                    entity_pos.z.floor() as i32,
-                ));
-                if args.world.get_block(&target_pos) == &Block::FARMLAND {
+                let entity = args.entity.get_entity();
+                let can_modify = args.entity.get_player().is_some()
+                    || args.world.level_info.load().game_rules.mob_griefing;
+                if should_trample(
+                    args.fall_distance,
+                    rand::random::<f32>(),
+                    entity.width(),
+                    entity.height(),
+                    can_modify,
+                ) && args.world.get_block(args.position) == &Block::FARMLAND
+                {
                     let mut event =
                         crate::plugin::api::events::block::block_fade::BlockFadeEvent::new(
-                            target_pos,
+                            *args.position,
                             &Block::DIRT,
                         );
                     if let Some(server) = args.world.server.upgrade() {
@@ -56,13 +55,17 @@ impl BlockBehaviour for FarmlandBlock {
                     if !event.cancelled {
                         args.world
                             .set_block_state(
-                                &target_pos,
+                                args.position,
                                 Block::DIRT.default_state.id,
                                 BlockFlags::NOTIFY_ALL,
                             )
                             .await;
                     }
                 }
+
+                living
+                    .handle_fall_damage(args.entity, args.fall_distance, 1.0)
+                    .await;
             }
         })
     }
@@ -189,8 +192,9 @@ impl BlockBehaviour for FarmlandBlock {
 }
 
 fn can_place_at(world: &dyn BlockAccessor, block_pos: &BlockPos) -> bool {
-    let state = world.get_block_state(&block_pos.up());
-    !state.is_solid() // TODO: add fence gate block
+    let above = block_pos.up();
+    let (block, state) = world.get_block_and_state(&above);
+    !state.is_solid() || block.has_tag(&tag::Block::MINECRAFT_FENCE_GATES)
 }
 
 fn is_water_nearby(world: &Arc<World>, block_pos: &BlockPos) -> bool {
@@ -202,12 +206,48 @@ fn is_water_nearby(world: &Arc<World>, block_pos: &BlockPos) -> bool {
                     y: dy,
                     z: dz,
                 });
-                //TODO this should use tag water. It does not seem to work rn.
-                if world.get_block(&check_pos) == &Block::WATER {
+                if is_hydrating_fluid(world.get_fluid(&check_pos)) {
                     return true;
                 }
             }
         }
     }
     false
+}
+
+fn is_hydrating_fluid(fluid: &Fluid) -> bool {
+    fluid.has_tag(&tag::Fluid::MINECRAFT_WATER)
+}
+
+fn should_trample(
+    fall_distance: f32,
+    random_value: f32,
+    width: f32,
+    height: f32,
+    can_modify: bool,
+) -> bool {
+    can_modify && random_value < fall_distance - 0.5 && width * width * height > 0.512
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_hydrating_fluid, should_trample};
+    use pumpkin_data::fluid::Fluid;
+
+    #[test]
+    fn water_fluid_tag_controls_farmland_hydration() {
+        assert!(is_hydrating_fluid(&Fluid::WATER));
+        assert!(is_hydrating_fluid(&Fluid::FLOWING_WATER));
+        assert!(!is_hydrating_fluid(&Fluid::LAVA));
+        assert!(!is_hydrating_fluid(&Fluid::EMPTY));
+    }
+
+    #[test]
+    fn farmland_trampling_matches_fall_chance_size_and_griefing_gates() {
+        assert!(should_trample(1.0, 0.49, 0.9, 1.8, true));
+        assert!(!should_trample(1.0, 0.5, 0.9, 1.8, true));
+        assert!(!should_trample(1.0, 0.0, 0.5, 1.0, true));
+        assert!(!should_trample(2.0, 0.0, 0.9, 1.8, false));
+        assert!(should_trample(2.0, 0.999, 0.9, 1.8, true));
+    }
 }

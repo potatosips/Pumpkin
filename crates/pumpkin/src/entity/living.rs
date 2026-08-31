@@ -1391,12 +1391,14 @@ impl LivingEntity {
                 return;
             }
             let world = self.entity.world.load();
-            let block = world.get_block(&self.entity.get_pos_with_y_offset(0.2).0);
+            let landed_position = self.entity.get_pos_with_y_offset(0.2).0;
+            let block = world.get_block(&landed_position);
             let pumpkin_block = world.block_registry.get_pumpkin_block(block.id);
             if let Some(pumpkin_block) = pumpkin_block {
                 pumpkin_block
                     .on_landed_upon(OnLandedUponArgs {
                         world: &world,
+                        position: &landed_position,
                         fall_distance,
                         entity: caller.as_ref(),
                     })
@@ -2503,6 +2505,49 @@ impl EntityBase for LivingEntity {
                 && !bypasses_cooldown_protection
             {
                 return false;
+            }
+
+            // Wolf armor absorbs the entire hit and loses durability equal to the
+            // rounded-up incoming damage. Sources in `bypasses_wolf_armor` damage
+            // the wolf normally and leave the armor untouched.
+            if self.entity.entity_type == &EntityType::WOLF
+                && amount > 0.0
+                && !damage_type.has_tag(&tag::DamageType::MINECRAFT_BYPASSES_WOLF_ARMOR)
+            {
+                let armor_update = {
+                    let mut equipment = self.entity_equipment.lock().await;
+                    if let Some(armor) = equipment.equipment.get_mut(&EquipmentSlot::BODY)
+                        && armor.item == &Item::WOLF_ARMOR
+                    {
+                        let result = armor.damage_item(amount.ceil() as i32);
+                        Some((result, armor.clone()))
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((result, armor)) = armor_update {
+                    self.send_equipment_changes(&[(EquipmentSlot::BODY, armor)]);
+                    if result == DamageResult::Broken {
+                        world.send_entity_status(
+                            &self.entity,
+                            super::equipment_break_status(&EquipmentSlot::BODY),
+                            None,
+                        );
+                        world.play_sound(
+                            Sound::ItemWolfArmorBreak,
+                            SoundCategory::Neutral,
+                            &self.entity.pos.load(),
+                        );
+                    } else {
+                        world.play_sound(
+                            Sound::ItemWolfArmorDamage,
+                            SoundCategory::Neutral,
+                            &self.entity.pos.load(),
+                        );
+                    }
+                    return true;
+                }
             }
 
             let mut damage_after_armor = amount;

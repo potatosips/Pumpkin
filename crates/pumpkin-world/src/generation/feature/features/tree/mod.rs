@@ -1,6 +1,8 @@
 use decorator::TreeDecorator;
 use foliage::FoliagePlacer;
 use pumpkin_data::BlockState;
+use pumpkin_data::block_properties::{BlockProperties, OakLeavesLikeProperties};
+use pumpkin_data::tag::Taggable;
 use pumpkin_data::{BlockId, tag};
 use pumpkin_util::{math::position::BlockPos, random::RandomGenerator};
 use root::RootPlacer;
@@ -56,6 +58,10 @@ impl TreeFeature {
             pos,
         );
 
+        if log_positions.is_empty() && foliage_positions.is_empty() {
+            return false;
+        }
+
         for decorator in &self.decorators {
             decorator.generate(
                 chunk,
@@ -66,7 +72,100 @@ impl TreeFeature {
                 &foliage_positions,
             );
         }
+
+        Self::update_leaves(chunk, &log_positions, &root_positions, &foliage_positions);
         true
+    }
+
+    pub fn update_leaves<T: GenerationCache>(
+        chunk: &mut T,
+        logs: &[BlockPos],
+        roots: &[BlockPos],
+        foliage: &[BlockPos],
+    ) {
+        if logs.is_empty() && foliage.is_empty() {
+            return;
+        }
+
+        let mut min = [i32::MAX; 3];
+        let mut max = [i32::MIN; 3];
+        for pos in logs.iter().chain(roots).chain(foliage) {
+            min[0] = min[0].min(pos.0.x);
+            min[1] = min[1].min(pos.0.y);
+            min[2] = min[2].min(pos.0.z);
+            max[0] = max[0].max(pos.0.x);
+            max[1] = max[1].max(pos.0.y);
+            max[2] = max[2].max(pos.0.z);
+        }
+
+        let spans = [
+            (max[0] - min[0] + 1) as usize,
+            (max[1] - min[1] + 1) as usize,
+            (max[2] - min[2] + 1) as usize,
+        ];
+        let mut visited = vec![false; spans[0] * spans[1] * spans[2]];
+        let index = |pos: BlockPos| {
+            if pos.0.x < min[0]
+                || pos.0.x > max[0]
+                || pos.0.y < min[1]
+                || pos.0.y > max[1]
+                || pos.0.z < min[2]
+                || pos.0.z > max[2]
+            {
+                None
+            } else {
+                Some(
+                    (((pos.0.x - min[0]) as usize * spans[1] + (pos.0.y - min[1]) as usize)
+                        * spans[2])
+                        + (pos.0.z - min[2]) as usize,
+                )
+            }
+        };
+
+        for pos in roots {
+            if let Some(i) = index(*pos) {
+                visited[i] = true;
+            }
+        }
+
+        let mut frontier: [std::collections::HashSet<BlockPos>; 7] = Default::default();
+        frontier[0].extend(logs.iter().copied());
+        for distance in 0..7 {
+            while let Some(pos) = frontier[distance].iter().next().copied() {
+                frontier[distance].remove(&pos);
+                let Some(i) = index(pos) else { continue };
+                if visited[i] {
+                    continue;
+                }
+                visited[i] = true;
+
+                if distance != 0 {
+                    let (block, state) = chunk.get_block_and_state(&pos);
+                    if OakLeavesLikeProperties::handles_block_id(block.id) {
+                        let mut props = OakLeavesLikeProperties::from_state_id(state.id, block);
+                        props.distance = distance as u8;
+                        chunk.set_block_state(&pos.0, &block.states[props.to_index() as usize]);
+                    }
+                }
+
+                if distance == 6 {
+                    continue;
+                }
+                for direction in pumpkin_data::BlockDirection::all() {
+                    let neighbor = pos.offset(direction.to_offset());
+                    let Some(neighbor_index) = index(neighbor) else {
+                        continue;
+                    };
+                    if visited[neighbor_index] {
+                        continue;
+                    }
+                    let (block, _) = chunk.get_block_and_state(&neighbor);
+                    if block.has_tag(&tag::Block::MINECRAFT_LEAVES) {
+                        frontier[distance + 1].insert(neighbor);
+                    }
+                }
+            }
+        }
     }
 
     pub fn can_replace_or_log(state: &BlockState, id: BlockId) -> bool {

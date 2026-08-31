@@ -289,7 +289,7 @@ impl SnifferEntity {
         }
     }
 
-    pub async fn spawn_child_from_breeding(&self, partner: &dyn EntityBase) {
+    async fn spawn_breeding_egg(&self) {
         let entity = self.get_entity();
         let world = entity.world.load();
         let pos = entity.pos.load();
@@ -300,13 +300,6 @@ impl SnifferEntity {
         world.spawn_entity(egg_arc).await;
 
         world.play_sound(Sound::BlockSnifferEggPlop, SoundCategory::Neutral, &pos);
-
-        self.mob_entity.reset_love_ticks();
-        self.mob_entity
-            .breeding_cooldown
-            .store(6000, Ordering::Relaxed);
-        partner.reset_love();
-        partner.set_breeding_cooldown(6000);
     }
 }
 
@@ -359,6 +352,15 @@ impl Animal for SnifferEntity {
 impl Mob for SnifferEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
+    }
+
+    fn spawn_breeding_offspring<'a>(
+        &'a self,
+        _mate: &'a dyn EntityBase,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            self.spawn_breeding_egg().await;
+        })
     }
 
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {

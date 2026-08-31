@@ -3,12 +3,17 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
-use pumpkin_data::{entity::EntityType, item::Item};
+use pumpkin_data::{
+    entity::EntityType,
+    item::Item,
+    sound::SoundCategory,
+    tag::{self, Taggable},
+};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
 
 use crate::entity::{
-    Entity, EntityBaseFuture, NBTStorage, NbtFuture,
+    Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::AgeableMob,
     ai::goal::{
         breed::BreedGoal, eat_grass::EatGrassGoal, escape_danger::EscapeDangerGoal,
@@ -25,6 +30,75 @@ use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::Sound;
 
 const TEMPT_ITEMS: &[&Item] = &[&Item::WHEAT];
+
+fn mixed_offspring_color(first: u8, second: u8, choose_second: bool) -> u8 {
+    let pair = if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    match pair {
+        (0, 11) => 3,   // white + blue = light blue
+        (0, 13) => 5,   // white + green = lime
+        (0, 14) => 6,   // white + red = pink
+        (0, 15) => 7,   // white + black = gray
+        (0, 7) => 8,    // white + gray = light gray
+        (11, 13) => 9,  // blue + green = cyan
+        (11, 14) => 10, // blue + red = purple
+        (6, 10) => 2,   // pink + purple = magenta
+        (4, 14) => 1,   // yellow + red = orange
+        _ if choose_second => second,
+        _ => first,
+    }
+}
+
+fn dye_color_from_item(item: &Item) -> Option<u8> {
+    if !item.has_tag(&tag::Item::C_DYES) {
+        return None;
+    }
+    let name = item.registry_key.strip_suffix("_dye")?;
+    Some(match name {
+        "white" => 0,
+        "orange" => 1,
+        "magenta" => 2,
+        "light_blue" => 3,
+        "yellow" => 4,
+        "lime" => 5,
+        "pink" => 6,
+        "gray" => 7,
+        "light_gray" => 8,
+        "cyan" => 9,
+        "purple" => 10,
+        "blue" => 11,
+        "brown" => 12,
+        "green" => 13,
+        "red" => 14,
+        "black" => 15,
+        _ => return None,
+    })
+}
+
+const fn event_dye_color(color: u8) -> crate::plugin::api::events::entity::entity_dye::DyeColor {
+    use crate::plugin::api::events::entity::entity_dye::DyeColor;
+    match color {
+        0 => DyeColor::White,
+        1 => DyeColor::Orange,
+        2 => DyeColor::Magenta,
+        3 => DyeColor::LightBlue,
+        4 => DyeColor::Yellow,
+        5 => DyeColor::Lime,
+        6 => DyeColor::Pink,
+        7 => DyeColor::Gray,
+        8 => DyeColor::LightGray,
+        9 => DyeColor::Cyan,
+        10 => DyeColor::Purple,
+        11 => DyeColor::Blue,
+        12 => DyeColor::Brown,
+        13 => DyeColor::Green,
+        14 => DyeColor::Red,
+        _ => DyeColor::Black,
+    }
+}
 
 pub struct SheepEntity {
     pub mob_entity: MobEntity,
@@ -160,6 +234,10 @@ impl Mob for SheepEntity {
         &self.mob_entity
     }
 
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { self.ageable_ai_step() })
+    }
+
     fn on_eating_grass(&self) -> EntityBaseFuture<'_, ()> {
         Box::pin(async {
             self.set_sheared(false);
@@ -170,18 +248,83 @@ impl Mob for SheepEntity {
         Some(self)
     }
 
+    fn configure_bred_child<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+        child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(child_sheep) = child.get_mob().and_then(Mob::get_sheep) else {
+                return;
+            };
+            let Some(mate_sheep) = mate.get_mob().and_then(Mob::get_sheep) else {
+                return;
+            };
+            let color = mixed_offspring_color(
+                self.get_color(),
+                mate_sheep.get_color(),
+                rand::random::<bool>(),
+            );
+            child_sheep
+                .color_and_sheared
+                .store(color & 0x0f, Ordering::Relaxed);
+        })
+    }
+
     fn mob_interact<'a>(
         &'a self,
         player: &'a Arc<Player>,
         item_stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
-        use super::animal::Animal;
-        self.animal_interact(player, item_stack, Sound::EntitySheepAmbient)
+        Box::pin(async move {
+            if let Some(color) = dye_color_from_item(item_stack.get_item())
+                && color != self.get_color()
+            {
+                let entity = &self.mob_entity.living_entity.entity;
+                let mut event = crate::plugin::api::events::entity::entity_dye::EntityDyeEvent::new(
+                    entity.entity_id,
+                    event_dye_color(color),
+                    Some(player.clone()),
+                );
+                let world = entity.world.load();
+                if let Some(server) = world.server.upgrade() {
+                    server.plugin_manager.fire(&server, &mut event).await;
+                }
+                if event.cancelled {
+                    return false;
+                }
+
+                self.set_color(color);
+                item_stack.decrement_unless_creative(player.gamemode.load(), 1);
+                world.play_sound(
+                    Sound::ItemDyeUse,
+                    SoundCategory::Players,
+                    &entity.pos.load(),
+                );
+                return true;
+            }
+
+            use super::animal::Animal;
+            self.animal_interact(player, item_stack, Sound::EntitySheepAmbient)
+                .await
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_dye_item_mapping() {
+        assert_eq!(dye_color_from_item(&Item::WHITE_DYE), Some(0));
+        assert_eq!(dye_color_from_item(&Item::LIGHT_BLUE_DYE), Some(3));
+        assert_eq!(dye_color_from_item(&Item::LIGHT_GRAY_DYE), Some(8));
+        assert_eq!(dye_color_from_item(&Item::RED_DYE), Some(14));
+        assert_eq!(dye_color_from_item(&Item::BLACK_DYE), Some(15));
+        assert_eq!(dye_color_from_item(&Item::STICK), None);
+    }
+
     #[test]
     fn sheep_color_and_sheared_bit_packing() {
         let color = 14u8; // Red
@@ -198,5 +341,14 @@ mod tests {
         // Eat grass / regrow wool
         byte &= !0x10;
         assert_eq!((byte & 0x10) != 0, false);
+    }
+
+    #[test]
+    fn vanilla_breeding_color_recipes_and_fallback() {
+        assert_eq!(mixed_offspring_color(0, 15, false), 7);
+        assert_eq!(mixed_offspring_color(14, 4, false), 1);
+        assert_eq!(mixed_offspring_color(10, 6, true), 2);
+        assert_eq!(mixed_offspring_color(12, 3, false), 12);
+        assert_eq!(mixed_offspring_color(12, 3, true), 3);
     }
 }

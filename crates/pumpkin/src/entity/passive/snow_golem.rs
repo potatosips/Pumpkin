@@ -4,8 +4,8 @@ use std::sync::{
 };
 
 use pumpkin_data::Block;
-use pumpkin_data::entity::EntityType;
 use pumpkin_data::tracked_data;
+use pumpkin_data::{damage::DamageType, entity::EntityType};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::math::position::BlockPos;
@@ -13,7 +13,7 @@ use pumpkin_util::version::JavaMinecraftVersion;
 use pumpkin_world::world::BlockFlags;
 
 use crate::entity::{
-    Entity, EntityBaseFuture, NBTStorage, NbtFuture,
+    Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ai::goal::{
         active_target::ActiveTargetGoal, look_around::RandomLookAroundGoal,
         look_at_entity::LookAtEntityGoal, wander_around::WanderAroundGoal,
@@ -215,13 +215,33 @@ impl Mob for SnowGolemEntity {
         Box::pin(async move {
             let entity = &self.mob_entity.living_entity.entity;
             let world = entity.world.load();
+            let pos = entity.pos.load();
+            let center = BlockPos::new(
+                pos.x.floor() as i32,
+                pos.y.floor() as i32,
+                pos.z.floor() as i32,
+            );
+
+            // Vanilla snow golems take one point every tick in biomes whose
+            // base temperature is strictly above 1.0.
+            if world.get_biome(&center).weather.base_temperature() > 1.0 {
+                self.damage(self, 1.0, DamageType::ON_FIRE).await;
+            }
+
+            let wet = entity.touching_water.load(Ordering::SeqCst)
+                || world.is_raining_at(&entity.block_pos.load()).await
+                || world
+                    .is_raining_at(&entity.bounding_box.load().max_block_pos())
+                    .await;
+            if wet {
+                self.damage(self, 1.0, DamageType::DROWN).await;
+            }
 
             // Check game rules for mob griefing
             if !world.level_info.load().game_rules.mob_griefing {
                 return;
             }
 
-            let pos = entity.pos.load();
             // Place snow layer in the 2x2 footprint of the snow golem like vanilla
             for i in 0..4 {
                 let offset_x = f64::from(i % 2 * 2 - 1) * 0.25;
@@ -232,30 +252,22 @@ impl Mob for SnowGolemEntity {
                     (pos.z + offset_z).floor() as i32,
                 );
 
-                let (current_block, current_state) = world.get_block_and_state(&block_pos);
-                let is_replaceable = current_state.is_air()
-                    || current_block.id == Block::SHORT_GRASS.id
-                    || current_block.id == Block::FERN.id
-                    || current_block.id == Block::DEAD_BUSH.id;
-
-                if is_replaceable {
-                    let block_below_pos =
-                        BlockPos::new(block_pos.0.x, block_pos.0.y - 1, block_pos.0.z);
-                    let (block_below, state_below) = world.get_block_and_state(&block_below_pos);
-                    // Snow layers can survive on solid full blocks, not air, not liquid, not barrier/structure
-                    if (state_below.is_solid() || block_below.is_solid())
-                        && !state_below.is_liquid()
-                        && block_below.id != Block::BARRIER.id
-                        && block_below.id != Block::STRUCTURE_VOID.id
-                    {
-                        world
-                            .set_block_state(
-                                &block_pos,
-                                Block::SNOW.default_state.id,
-                                BlockFlags::NOTIFY_ALL,
-                            )
-                            .await;
-                    }
+                let weather = &world.get_biome(&block_pos).weather;
+                if weather.cold_enough_to_snow(
+                    block_pos.0.x,
+                    block_pos.0.y,
+                    block_pos.0.z,
+                    world.sea_level,
+                ) && world.get_block_state(&block_pos).is_air()
+                    && crate::block::blocks::snow::can_place_at(world.as_ref(), &block_pos)
+                {
+                    world
+                        .set_block_state(
+                            &block_pos,
+                            Block::SNOW.default_state.id,
+                            BlockFlags::NOTIFY_ALL,
+                        )
+                        .await;
                 }
             }
         })

@@ -69,8 +69,11 @@ impl BlockBehaviour for BambooSaplingBlock {
 
     fn random_tick<'a>(&'a self, args: crate::block::RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
         Box::pin(async move {
-            let state_above = args.world.get_block_state(&args.position.up());
-            if !state_above.is_air() || rand::rng().random_range(0..3) > 0 {
+            let above = args.position.up();
+            if rand::rng().random_range(0..3) != 0
+                || !args.world.get_block_state(&above).is_air()
+                || args.world.get_max_local_raw_brightness(&above) < 9
+            {
                 return;
             }
             grow_bamboo(args.world, args.position).await;

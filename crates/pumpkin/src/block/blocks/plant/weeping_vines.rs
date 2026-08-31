@@ -1,12 +1,14 @@
 use crate::block::blocks::plant::PlantBlockBase;
 use crate::block::{
-    BlockBehaviour, BlockFuture, BlockMetadata, BrokenArgs, CanPlaceAtArgs,
-    GetStateForNeighborUpdateArgs, PlacedArgs,
+    BlockBehaviour, BlockFuture, BlockMetadata, BonemealArgs, BrokenArgs, CanPlaceAtArgs,
+    GetStateForNeighborUpdateArgs, PlacedArgs, RandomTickArgs,
 };
 use pumpkin_data::BlockStateId;
+use pumpkin_data::block_properties::{BlockProperties, KelpLikeProperties};
 use pumpkin_data::{Block, BlockId};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::world::{BlockAccessor, BlockFlags};
+use rand::RngExt;
 
 pub struct WeepingVinesBlock;
 impl BlockMetadata for WeepingVinesBlock {
@@ -16,6 +18,34 @@ impl BlockMetadata for WeepingVinesBlock {
 }
 
 impl BlockBehaviour for WeepingVinesBlock {
+    fn is_valid_bonemeal_target(&self, args: BonemealArgs<'_>) -> bool {
+        let destination = args.position.down();
+        args.block == &Block::WEEPING_VINES
+            && args.world.is_in_height_limit(destination.0.y)
+            && args.world.is_loaded(&destination)
+            && args.world.get_block_state(&destination).is_air()
+    }
+
+    fn perform_bonemeal<'a>(&'a self, args: BonemealArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move { grow_head(args.world, args.position, args.block).await })
+    }
+
+    fn random_tick<'a>(&'a self, args: RandomTickArgs<'a>) -> BlockFuture<'a, ()> {
+        Box::pin(async move {
+            if args.block != &Block::WEEPING_VINES {
+                return;
+            }
+            let age = KelpLikeProperties::from_state_id(
+                args.world.get_block_state_id(args.position),
+                args.block,
+            )
+            .age;
+            if natural_growth_succeeds(age, rand::rng().random::<f64>()) {
+                grow_head(args.world, args.position, args.block).await;
+            }
+        })
+    }
+
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
         <Self as PlantBlockBase>::can_place_at(self, args.block_accessor, args.position)
     }
@@ -65,6 +95,37 @@ impl BlockBehaviour for WeepingVinesBlock {
     }
 }
 
+async fn grow_head(
+    world: &std::sync::Arc<crate::world::World>,
+    position: &BlockPos,
+    block: &Block,
+) {
+    let destination = position.down();
+    if block != &Block::WEEPING_VINES || !world.get_block_state(&destination).is_air() {
+        return;
+    }
+    let mut props = KelpLikeProperties::from_state_id(world.get_block_state_id(position), block);
+    props.age = props.age.saturating_add(1).min(25);
+    world
+        .set_block_state(
+            position,
+            Block::WEEPING_VINES_PLANT.default_state.id,
+            BlockFlags::NOTIFY_ALL,
+        )
+        .await;
+    world
+        .set_block_state(
+            &destination,
+            props.to_state_id(&Block::WEEPING_VINES),
+            BlockFlags::NOTIFY_ALL,
+        )
+        .await;
+}
+
+fn natural_growth_succeeds(age: u8, roll: f64) -> bool {
+    age < 25 && roll < 0.1
+}
+
 impl PlantBlockBase for WeepingVinesBlock {
     fn can_place_at(
         &self,
@@ -78,9 +139,7 @@ impl PlantBlockBase for WeepingVinesBlock {
         if support_block == &Block::WEEPING_VINES || support_block == &Block::WEEPING_VINES_PLANT {
             return true;
         }
-        if support_block_state.is_side_solid(pumpkin_data::BlockDirection::Down)
-            && support_block.is_solid()
-        {
+        if support_block_state.is_side_solid(pumpkin_data::BlockDirection::Down) {
             return true;
         }
         false
@@ -100,7 +159,7 @@ impl PlantBlockBase for WeepingVinesBlock {
 
 #[cfg(test)]
 mod tests {
-    use super::WeepingVinesBlock;
+    use super::{WeepingVinesBlock, natural_growth_succeeds};
     use crate::block::BlockMetadata;
     use pumpkin_data::Block;
     use pumpkin_data::BlockId;
@@ -125,5 +184,12 @@ mod tests {
             Block::WEEPING_VINES_PLANT.default_state.id,
             Block::AIR.default_state.id
         );
+    }
+
+    #[test]
+    fn weeping_vines_growth_probability_and_age_cap() {
+        assert!(natural_growth_succeeds(24, 0.099_999));
+        assert!(!natural_growth_succeeds(24, 0.1));
+        assert!(!natural_growth_succeeds(25, 0.0));
     }
 }

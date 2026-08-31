@@ -1091,16 +1091,40 @@ impl World {
         category: SoundCategory,
         position: &Vector3<f64>,
     ) {
+        self.play_sound_event_fine(sound, category, position, 1.0, 1.0);
+    }
+
+    pub fn play_sound_event_fine(
+        &self,
+        sound: &pumpkin_data::data_component_impl::IdOr<
+            pumpkin_data::data_component_impl::SoundEvent,
+        >,
+        category: SoundCategory,
+        position: &Vector3<f64>,
+        volume: f32,
+        pitch: f32,
+    ) {
         let seed = rng().random::<f64>();
         let packet = CSoundEffect::new(
             data_to_proto_sound(sound),
             category,
             position,
-            1.0,
-            1.0,
+            volume,
+            pitch,
             seed,
         );
-        self.broadcast_packet_all(&packet);
+        let audible_chunks = f64::from(volume.max(1.0)).ceil() as i32;
+        let chunk_pos = BlockPos::floored_v(*position).chunk_position();
+        let players = self.players.load();
+        let recipients = players.iter().filter(|player| {
+            is_within_view_distance(
+                chunk_pos,
+                player.get_entity().chunk_pos.load(),
+                audible_chunks,
+            )
+        });
+        let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
+        Self::broadcast_java_grouped(&packet, recipients_by_version);
     }
 
     pub fn play_sound_fine(
@@ -2155,6 +2179,58 @@ impl World {
                     &EntityType::LIGHTNING_BOLT,
                 );
                 self.spawn_entity(Arc::new(entity)).await;
+            }
+        }
+
+        // Vanilla samples one exposed column in each ticking chunk on 1/16 of
+        // rainy chunk ticks. Cauldrons then apply their precipitation-specific
+        // fill chance (5% rain, 10% snow).
+        if is_raining && rng().random_range(0..16) == 0 {
+            let x = (chunk_pos.x << 4) + rng().random_range(0..16);
+            let z = (chunk_pos.y << 4) + rng().random_range(0..16);
+            let y = self.get_heightmap_height(MotionBlocking, x, z);
+            let pos = BlockPos(Vector3::new(x, y, z));
+            let weather = &self.get_biome(&pos).weather;
+            let snow = weather.is_snow_at(x, y, z, self.sea_level);
+            let rain = weather.is_rain_at(x, y, z, self.sea_level);
+
+            if snow {
+                let below = pos.down();
+                let freezes =
+                    self.get_biome(&below)
+                        .weather
+                        .cold_enough_to_snow(x, y - 1, z, self.sea_level);
+                if freezes
+                    && self.get_block_light_level(&below).unwrap_or(0) < 10
+                    && self.get_block(&below) == &Block::WATER
+                    && self.get_fluid(&below) == &pumpkin_data::fluid::Fluid::WATER
+                {
+                    self.set_block_state(
+                        &below,
+                        Block::ICE.default_state.id,
+                        BlockFlags::NOTIFY_ALL,
+                    )
+                    .await;
+                }
+                if self.get_block_light_level(&pos).unwrap_or(0) < 10
+                    && self.is_in_build_limit(pos)
+                    && self.get_block_state(&pos).is_air()
+                    && crate::block::blocks::snow::can_place_at(self.as_ref(), &pos)
+                {
+                    self.set_block_state(
+                        &pos,
+                        Block::SNOW.default_state.id,
+                        BlockFlags::NOTIFY_ALL,
+                    )
+                    .await;
+                }
+            }
+
+            let fills =
+                (snow && rng().random::<f32>() < 0.1) || (rain && rng().random::<f32>() < 0.05);
+            if fills {
+                crate::block::blocks::cauldron::fill_from_precipitation(self, pos.down(), snow)
+                    .await;
             }
         }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::{Controls, Goal, GoalFuture};
 use crate::entity::{EntityBase, ai::pathfinder::NavigatorGoal, mob::Mob};
 use pumpkin_data::entity::EntityType;
+use pumpkin_util::GameMode;
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
 use rand::RngExt;
 
@@ -18,6 +19,8 @@ pub struct AvoidEntityGoal {
     fast_speed: f64,
     target: Option<Arc<dyn EntityBase>>,
     flee_pos: Option<Vector3<f64>>,
+    only_if_untamed: bool,
+    only_if_not_trusting: bool,
 }
 
 impl AvoidEntityGoal {
@@ -36,7 +39,33 @@ impl AvoidEntityGoal {
             fast_speed,
             target: None,
             flee_pos: None,
+            only_if_untamed: false,
+            only_if_not_trusting: false,
         }
+    }
+
+    #[must_use]
+    pub fn new_untamed(
+        flee_type: &'static EntityType,
+        flee_distance: f64,
+        slow_speed: f64,
+        fast_speed: f64,
+    ) -> Self {
+        let mut goal = Self::new(flee_type, flee_distance, slow_speed, fast_speed);
+        goal.only_if_untamed = true;
+        goal
+    }
+
+    #[must_use]
+    pub fn new_not_trusting(
+        flee_type: &'static EntityType,
+        flee_distance: f64,
+        slow_speed: f64,
+        fast_speed: f64,
+    ) -> Self {
+        let mut goal = Self::new(flee_type, flee_distance, slow_speed, fast_speed);
+        goal.only_if_not_trusting = true;
+        goal
     }
 
     fn find_threat(&self, mob: &dyn Mob) -> Option<Arc<dyn EntityBase>> {
@@ -46,8 +75,22 @@ impl AvoidEntityGoal {
 
         if self.flee_type == &EntityType::PLAYER {
             world
-                .get_closest_player(pos, self.flee_distance)
-                .map(|p| p as Arc<dyn EntityBase>)
+                .get_nearby_players(pos, self.flee_distance)
+                .into_iter()
+                .filter(|player| {
+                    !matches!(
+                        player.gamemode.load(),
+                        GameMode::Creative | GameMode::Spectator
+                    ) && !mob.trusts_player(player.gameprofile.id)
+                })
+                .min_by(|a, b| {
+                    a.get_entity()
+                        .pos
+                        .load()
+                        .squared_distance_to_vec(&pos)
+                        .total_cmp(&b.get_entity().pos.load().squared_distance_to_vec(&pos))
+                })
+                .map(|player| player as Arc<dyn EntityBase>)
         } else {
             world.get_closest_entity(pos, self.flee_distance, Some(&[self.flee_type]))
         }
@@ -129,6 +172,11 @@ impl AvoidEntityGoal {
 impl Goal for AvoidEntityGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async move {
+            if (self.only_if_untamed && mob.is_tame())
+                || (self.only_if_not_trusting && mob.is_trusting())
+            {
+                return false;
+            }
             let threat = self.find_threat(mob);
             let Some(target) = threat else {
                 return false;
@@ -148,6 +196,18 @@ impl Goal for AvoidEntityGoal {
 
     fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async move {
+            if (self.only_if_untamed && mob.is_tame())
+                || (self.only_if_not_trusting && mob.is_trusting())
+            {
+                return false;
+            }
+            if self.target.as_ref().is_some_and(|target| {
+                target
+                    .get_player()
+                    .is_some_and(|player| mob.trusts_player(player.gameprofile.id))
+            }) {
+                return false;
+            }
             let navigator = mob
                 .get_mob_entity()
                 .navigator

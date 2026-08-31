@@ -142,8 +142,18 @@ impl Weather {
     }
 
     #[must_use]
+    pub fn cold_enough_to_snow(&self, x: i32, y: i32, z: i32, sea_level: i32) -> bool {
+        self.compute_temperature(f64::from(x), y, f64::from(z), sea_level) < 0.15
+    }
+
+    #[must_use]
     pub fn is_rain_at(&self, x: i32, y: i32, z: i32, sea_level: i32) -> bool {
         self.has_precipitation && self.warm_enough_to_rain(x, y, z, sea_level)
+    }
+
+    #[must_use]
+    pub fn is_snow_at(&self, x: i32, y: i32, z: i32, sea_level: i32) -> bool {
+        self.has_precipitation && self.cold_enough_to_snow(x, y, z, sea_level)
     }
 }
 
@@ -155,17 +165,25 @@ mod tests {
     fn precipitation_controls_rain() {
         let weather = Weather::new(false, 1.0, TemperatureModifier::None, 0.0);
         assert!(!weather.is_rain_at(0, 64, 0, 63));
+        assert!(!weather.is_snow_at(0, 64, 0, 63));
     }
 
     #[test]
     fn warm_precipitation_is_rain() {
         let weather = Weather::new(true, 1.0, TemperatureModifier::None, 0.0);
         assert!(weather.is_rain_at(0, 64, 0, 63));
+        assert!(!weather.cold_enough_to_snow(0, 64, 0, 63));
+
+        let boundary = Weather::new(true, 0.15, TemperatureModifier::None, 0.0);
+        assert!(boundary.warm_enough_to_rain(0, 64, 0, 63));
+        assert!(!boundary.cold_enough_to_snow(0, 64, 0, 63));
     }
 
     #[test]
     fn cold_precipitation_is_snow() {
         let weather = Weather::new(true, 0.0, TemperatureModifier::None, 0.0);
         assert!(!weather.is_rain_at(0, 64, 0, 63));
+        assert!(weather.is_snow_at(0, 64, 0, 63));
+        assert!(weather.cold_enough_to_snow(0, 64, 0, 63));
     }
 }

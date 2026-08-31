@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
+    ageable::{AgeableData, AgeableMob},
     ai::goal::{
         active_target::ActiveTargetGoal, avoid_entity::AvoidEntityGoal, breed::BreedGoal,
         escape_danger::EscapeDangerGoal, follow_owner::FollowOwnerGoal,
@@ -70,6 +71,28 @@ fn get_dye_color_from_item(item: &Item) -> Option<u8> {
     }
 }
 
+const fn event_dye_color(color: u8) -> crate::plugin::api::events::entity::entity_dye::DyeColor {
+    use crate::plugin::api::events::entity::entity_dye::DyeColor;
+    match color {
+        0 => DyeColor::White,
+        1 => DyeColor::Orange,
+        2 => DyeColor::Magenta,
+        3 => DyeColor::LightBlue,
+        4 => DyeColor::Yellow,
+        5 => DyeColor::Lime,
+        6 => DyeColor::Pink,
+        7 => DyeColor::Gray,
+        8 => DyeColor::LightGray,
+        9 => DyeColor::Cyan,
+        10 => DyeColor::Purple,
+        11 => DyeColor::Blue,
+        12 => DyeColor::Brown,
+        13 => DyeColor::Green,
+        14 => DyeColor::Red,
+        _ => DyeColor::Black,
+    }
+}
+
 pub struct CatEntity {
     pub mob_entity: MobEntity,
     pub variant: AtomicU8,
@@ -80,6 +103,7 @@ pub struct CatEntity {
     pub is_lying: AtomicBool,
     pub relax_state_one: AtomicBool,
     pub owner: AtomicCell<Option<Uuid>>,
+    pub ageable_data: AgeableData,
 }
 
 impl CatEntity {
@@ -95,6 +119,7 @@ impl CatEntity {
             is_lying: AtomicBool::new(false),
             relax_state_one: AtomicBool::new(false),
             owner: AtomicCell::new(None),
+            ageable_data: AgeableData::default(),
         };
         let mob_arc = Arc::new(cat);
         let mob_weak: Weak<dyn Mob> = {
@@ -118,7 +143,12 @@ impl CatEntity {
             // Goal 4: CatAvoidEntityGoal (when untamed)
             goal_selector.add_goal(
                 4,
-                Box::new(AvoidEntityGoal::new(&EntityType::PLAYER, 16.0, 0.8, 1.33)),
+                Box::new(AvoidEntityGoal::new_untamed(
+                    &EntityType::PLAYER,
+                    16.0,
+                    0.8,
+                    1.33,
+                )),
             );
             // Goal 5: BreedGoal
             goal_selector.add_goal(5, BreedGoal::new(0.8));
@@ -147,11 +177,19 @@ impl CatEntity {
             // Target Goal 1: NonTameRandomTargetGoal for Rabbit and Turtle
             target_selector.add_goal(
                 1,
-                ActiveTargetGoal::with_default(&mob_arc.mob_entity, &EntityType::RABBIT, false),
+                ActiveTargetGoal::with_default_untamed(
+                    &mob_arc.mob_entity,
+                    &EntityType::RABBIT,
+                    false,
+                ),
             );
             target_selector.add_goal(
                 1,
-                ActiveTargetGoal::with_default(&mob_arc.mob_entity, &EntityType::TURTLE, false),
+                ActiveTargetGoal::with_default_untamed(
+                    &mob_arc.mob_entity,
+                    &EntityType::TURTLE,
+                    false,
+                ),
             );
         };
 
@@ -273,6 +311,7 @@ impl NBTStorage for CatEntity {
     fn write_nbt<'a>(&'a self, nbt: &'a mut NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.mob_entity.write_nbt(nbt).await;
+            self.write_ageable_nbt(nbt);
             self.write_animal_nbt(nbt);
             let variant_str = match self.variant.load(Ordering::Relaxed) {
                 0 => "minecraft:all_black",
@@ -304,6 +343,7 @@ impl NBTStorage for CatEntity {
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.mob_entity.read_nbt_non_mut(nbt).await;
+            self.read_ageable_nbt(nbt);
             self.read_animal_nbt(nbt);
             if let Some(variant_str) = nbt.get_string("variant") {
                 let variant = match variant_str
@@ -342,6 +382,12 @@ impl NBTStorage for CatEntity {
     }
 }
 
+impl AgeableMob for CatEntity {
+    fn get_ageable_data(&self) -> &AgeableData {
+        &self.ageable_data
+    }
+}
+
 impl Animal for CatEntity {
     fn is_food(&self, item_stack: &ItemStack) -> bool {
         let item = item_stack.get_item();
@@ -360,6 +406,49 @@ impl Mob for CatEntity {
 
     fn is_sitting(&self) -> bool {
         self.is_sitting.load(Ordering::Relaxed)
+    }
+
+    fn is_tame(&self) -> bool {
+        self.is_tame.load(Ordering::Relaxed)
+    }
+
+    fn get_cat(&self) -> Option<&CatEntity> {
+        Some(self)
+    }
+
+    fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            self.ageable_ai_step();
+        })
+    }
+
+    fn configure_bred_child<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+        child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(child_cat) = child.get_mob().and_then(Mob::get_cat) else {
+                return;
+            };
+
+            let inherited_variant = mate
+                .get_mob()
+                .and_then(Mob::get_cat)
+                .filter(|_| rand::random::<bool>())
+                .map_or_else(
+                    || self.variant.load(Ordering::Relaxed),
+                    |mate_cat| mate_cat.variant.load(Ordering::Relaxed),
+                );
+            child_cat
+                .variant
+                .store(inherited_variant, Ordering::Relaxed);
+
+            if let Some(owner) = self.owner.load() {
+                child_cat.owner.store(Some(owner));
+                child_cat.is_tame.store(true, Ordering::Relaxed);
+            }
+        })
     }
 
     fn mob_set_variant_name(&self, name: &str) {
@@ -454,8 +543,26 @@ impl Mob for CatEntity {
                         if let Some(color) = get_dye_color_from_item(item)
                             && color != self.get_collar_color()
                         {
+                            let entity = self.get_entity();
+                            let mut event =
+                                crate::plugin::api::events::entity::entity_dye::EntityDyeEvent::new(
+                                    entity.entity_id,
+                                    event_dye_color(color),
+                                    Some(player.clone()),
+                                );
+                            if let Some(server) = entity.world.load().server.upgrade() {
+                                server.plugin_manager.fire(&server, &mut event).await;
+                            }
+                            if event.cancelled {
+                                return false;
+                            }
                             self.set_collar_color(color);
                             item_stack.decrement_unless_creative(player.gamemode.load(), 1);
+                            entity.world.load().play_sound(
+                                pumpkin_data::sound::Sound::ItemDyeUse,
+                                pumpkin_data::sound::SoundCategory::Players,
+                                &entity.pos.load(),
+                            );
                             return true;
                         }
                     } else if is_food
@@ -479,12 +586,24 @@ impl Mob for CatEntity {
                 item_stack.decrement_unless_creative(player.gamemode.load(), 1);
                 self.play_eating_sound();
 
-                let mut rng = rand::rng();
-                if rng.random_range(0..3) == 0 {
+                let tame_succeeded = rand::rng().random_range(0..3) == 0;
+                if tame_succeeded {
+                    let entity = self.get_entity();
+                    let mut event =
+                        crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(
+                            entity.entity_id,
+                            player.clone(),
+                        );
+                    if let Some(server) = entity.world.load().server.upgrade() {
+                        server.plugin_manager.fire(&server, &mut event).await;
+                    }
+                    if event.cancelled {
+                        return true;
+                    }
                     self.set_tame(true, Some(player.gameprofile.id));
                     self.set_sitting(true);
-                    self.get_entity().world.load().send_entity_status(
-                        self.get_entity(),
+                    entity.world.load().send_entity_status(
+                        entity,
                         EntityStatus::TamingSucceeded,
                         Some(ActorEventType::TamingSucceeded),
                     );
