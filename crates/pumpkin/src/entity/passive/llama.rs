@@ -39,6 +39,7 @@ pub struct LlamaEntity {
     tamed: AtomicBool,
     temper: AtomicI32,
     owner: AtomicCell<Option<Uuid>>,
+    animation_state: super::horse_food::EquineAnimationState,
     pub chested_horse: super::chested_horse::ChestedHorseData,
 }
 
@@ -55,6 +56,7 @@ impl LlamaEntity {
             tamed: AtomicBool::new(false),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
+            animation_state: super::horse_food::EquineAnimationState::default(),
             chested_horse: super::chested_horse::ChestedHorseData::default(),
         };
         let mob_arc = Arc::new(llama);
@@ -115,10 +117,19 @@ impl LlamaEntity {
     fn set_tamed(&self, tamed: bool, owner: Option<Uuid>) {
         self.tamed.store(tamed, Ordering::Relaxed);
         self.owner.store(if tamed { owner } else { None });
+        self.sync_flags();
+    }
+
+    fn sync_flags(&self) {
+        let flags = (if self.tamed.load(Ordering::Relaxed) {
+            0x02
+        } else {
+            0
+        }) | self.animation_state.flags();
         self.get_entity().send_meta_data(
             &[Metadata::new(
                 tracked_data::abstract_horse::DATA_ID_FLAGS,
-                if tamed { 0x02i8 } else { 0i8 },
+                flags as i8,
             )],
             None,
         );
@@ -140,6 +151,14 @@ impl AgeableMob for LlamaEntity {
     }
 }
 impl super::horse_food::Equine for LlamaEntity {
+    fn animation_state(&self) -> Option<&super::horse_food::EquineAnimationState> {
+        Some(&self.animation_state)
+    }
+
+    fn sync_equine_flags(&self) {
+        self.sync_flags();
+    }
+
     fn temper(&self) -> i32 {
         self.temper.load(Ordering::Relaxed)
     }
@@ -319,6 +338,7 @@ impl Mob for LlamaEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
             super::horse_food::tick_untamed_riding(self).await;
         })
@@ -333,6 +353,10 @@ impl Mob for LlamaEntity {
                 return true;
             }
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityLlamaEat).await {
+                return true;
+            }
+            if !stack.is_empty() && !self.is_tame() {
+                super::horse_food::make_equine_mad(self, Sound::EntityLlamaAngry);
                 return true;
             }
             if self.is_tame()

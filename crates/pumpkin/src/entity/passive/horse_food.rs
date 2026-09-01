@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
@@ -17,6 +18,73 @@ use uuid::Uuid;
 
 pub(super) struct EquineRiderControl {
     jump_scale: AtomicCell<f32>,
+}
+
+/// Server-owned portion of AbstractHorse's client-visible animation flags.
+/// Mouth animation lasts 30 ticks and rearing lasts 20 grounded ticks in
+/// Vanilla 1.21.4.
+pub(super) struct EquineAnimationState {
+    flags: AtomicU8,
+    mouth_counter: AtomicI32,
+    stand_counter: AtomicI32,
+}
+
+impl Default for EquineAnimationState {
+    fn default() -> Self {
+        Self {
+            flags: AtomicU8::new(0),
+            mouth_counter: AtomicI32::new(0),
+            stand_counter: AtomicI32::new(0),
+        }
+    }
+}
+
+impl EquineAnimationState {
+    pub fn flags(&self) -> u8 {
+        self.flags.load(Ordering::Relaxed)
+    }
+
+    fn open_mouth(&self) {
+        self.mouth_counter.store(1, Ordering::Relaxed);
+        self.flags.fetch_or(0x40, Ordering::Relaxed);
+    }
+
+    fn stand(&self) {
+        self.stand_counter.store(1, Ordering::Relaxed);
+        self.flags
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |flags| {
+                Some((flags & !0x10) | 0x20)
+            })
+            .ok();
+    }
+
+    /// Returns whether a metadata flag expired and clients need an update.
+    fn tick(&self, on_ground: bool) -> bool {
+        let mut changed = false;
+        let mouth = self.mouth_counter.load(Ordering::Relaxed);
+        if mouth > 0 {
+            let next = mouth + 1;
+            if next > 30 {
+                self.mouth_counter.store(0, Ordering::Relaxed);
+                self.flags.fetch_and(!0x40, Ordering::Relaxed);
+                changed = true;
+            } else {
+                self.mouth_counter.store(next, Ordering::Relaxed);
+            }
+        }
+        let standing = self.stand_counter.load(Ordering::Relaxed);
+        if on_ground && standing > 0 {
+            let next = standing + 1;
+            if next > 20 {
+                self.stand_counter.store(0, Ordering::Relaxed);
+                self.flags.fetch_and(!0x20, Ordering::Relaxed);
+                changed = true;
+            } else {
+                self.stand_counter.store(next, Ordering::Relaxed);
+            }
+        }
+        changed
+    }
 }
 
 impl Default for EquineRiderControl {
@@ -184,6 +252,10 @@ pub(super) fn configure_bred_equine_attributes(
 }
 
 pub(super) trait Equine: AgeableMob {
+    fn animation_state(&self) -> Option<&EquineAnimationState> {
+        None
+    }
+    fn sync_equine_flags(&self) {}
     fn temper(&self) -> i32 {
         100
     }
@@ -197,6 +269,41 @@ pub(super) trait Equine: AgeableMob {
     }
     fn food_effect(&self, item: &Item) -> Option<FoodEffect> {
         horse_food_effect(item)
+    }
+}
+
+pub(super) fn open_equine_mouth<T: Equine>(equine: &T) {
+    if let Some(animation) = equine.animation_state() {
+        animation.open_mouth();
+        equine.sync_equine_flags();
+    }
+}
+
+pub(super) fn make_equine_mad<T: Equine>(equine: &T, sound: Sound) {
+    if let Some(animation) = equine.animation_state() {
+        if animation.flags() & 0x20 == 0 {
+            animation.stand();
+            equine.sync_equine_flags();
+            let entity = equine.get_entity();
+            entity
+                .world
+                .load()
+                .play_sound(sound, SoundCategory::Neutral, &entity.pos.load());
+        }
+    }
+}
+
+pub(super) fn tick_equine_animations<T: Equine>(equine: &T) {
+    let Some(animation) = equine.animation_state() else {
+        return;
+    };
+    if animation.tick(
+        equine
+            .get_entity()
+            .on_ground
+            .load(std::sync::atomic::Ordering::Relaxed),
+    ) {
+        equine.sync_equine_flags();
     }
 }
 
@@ -389,6 +496,7 @@ pub async fn feed_equine<T: Equine>(
     let entity = equine.get_entity();
     let pos = entity.pos.load();
     let world = entity.world.load();
+    open_equine_mouth(equine);
     world.play_sound(sound, SoundCategory::Neutral, &pos);
     world.spawn_particle(
         pos + Vector3::new(0.0, f64::from(entity.height()), 0.0),
@@ -513,5 +621,30 @@ mod tests {
         assert!((jump_scale_from_power(89) - (0.4 + 0.4 * 89.0 / 90.0)).abs() < f32::EPSILON);
         assert!((jump_scale_from_power(90) - 1.0).abs() < f32::EPSILON);
         assert!((jump_scale_from_power(100) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn abstract_horse_animation_flags_use_vanilla_lifetimes() {
+        let animation = EquineAnimationState::default();
+
+        animation.open_mouth();
+        assert_eq!(animation.flags(), 0x40);
+        for _ in 0..29 {
+            assert!(!animation.tick(true));
+        }
+        assert!(animation.tick(true));
+        assert_eq!(animation.flags(), 0);
+
+        animation.stand();
+        assert_eq!(animation.flags(), 0x20);
+        for _ in 0..10 {
+            assert!(!animation.tick(false));
+        }
+        assert_eq!(animation.flags(), 0x20);
+        for _ in 0..19 {
+            assert!(!animation.tick(true));
+        }
+        assert!(animation.tick(true));
+        assert_eq!(animation.flags(), 0);
     }
 }
