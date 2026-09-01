@@ -2163,15 +2163,26 @@ impl World {
             if true {
                 // TODO biome.getPrecipitationAt(pos, this.getSeaLevel()) == Biome.Precipitation.RAIN
                 // TODO this.getCurrentDifficultyAt(blockPos);
-                if rng().random::<f32>() < 0.0675
+                let trap_chance = crate::entity::mob::equipment::RegionalDifficulty::at(
+                    self,
+                    random_pos.to_f64(),
+                )
+                .effective_difficulty
+                    * 0.01;
+                if self.level_info.load().game_rules.spawn_mobs
+                    && rng().random::<f32>() < trap_chance
                     && self.get_block(&random_pos.to_block_pos().down()) != &Block::LIGHTNING_ROD
                 {
-                    let entity = Entity::new(
-                        self.clone(),
-                        random_pos.to_f64(),
-                        &EntityType::SKELETON_HORSE,
+                    let horse = crate::entity::passive::skeleton_horse::SkeletonHorseEntity::new(
+                        Entity::from_uuid(
+                            Uuid::new_v4(),
+                            self.clone(),
+                            random_pos.to_f64(),
+                            &EntityType::SKELETON_HORSE,
+                        ),
                     );
-                    self.spawn_entity(Arc::new(entity)).await;
+                    horse.set_skeleton_trap(true);
+                    self.spawn_entity(horse).await;
                 }
                 let entity = Entity::new(
                     self.clone(),

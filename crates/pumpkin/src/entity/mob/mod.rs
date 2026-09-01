@@ -23,6 +23,7 @@ use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::random::xoroshiro128::Xoroshiro;
 use pumpkin_util::random::{RandomGenerator, get_seed};
 use pumpkin_util::version::JavaMinecraftVersion;
+use pumpkin_world::inventory::Inventory;
 use rand::RngExt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -678,6 +679,20 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn set_saddled(&self, _saddled: bool) {}
 
+    fn saddle_stack(&self) -> EntityBaseFuture<'_, ItemStack> {
+        Box::pin(async { ItemStack::EMPTY.clone() })
+    }
+
+    fn set_saddle_stack(&self, stack: ItemStack) -> EntityBaseFuture<'_, ()> {
+        Box::pin(async move {
+            self.set_saddled(!stack.is_empty());
+        })
+    }
+
+    fn create_mount_inventory(&self, _entity: Arc<dyn EntityBase>) -> Option<Arc<dyn Inventory>> {
+        None
+    }
+
     /// Per-mob lifecycle hook that continues while `NoAI` is set. This is for
     /// state machines implemented by Java entity `tick` overrides rather than
     /// goal/navigation AI (for example, an already-ignited creeper's fuse).
@@ -689,6 +704,16 @@ pub trait Mob: EntityBase + Send + Sync {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async {})
     }
+
+    /// Runs after AI/controllers and immediately before living movement.
+    fn mob_before_living_tick<'a>(
+        &'a self,
+        _caller: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
+    fn set_rider_jump_power(&self, _power: i32) {}
 
     fn post_tick(&self) -> EntityBaseFuture<'_, ()> {
         Box::pin(async {})
@@ -1215,6 +1240,7 @@ impl<T: Mob + Send + 'static> EntityBase for T {
                 };
             }
 
+            self.mob_before_living_tick(caller).await;
             mob_entity.living_entity.tick(caller, server).await;
             self.post_tick().await;
 

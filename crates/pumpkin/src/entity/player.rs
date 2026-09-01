@@ -17,6 +17,7 @@ use arc_swap::ArcSwap;
 use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::Receiver;
 use pumpkin_data::dimension::Dimension;
+use pumpkin_inventory::mount_screen_handler::MountScreenHandler;
 use pumpkin_inventory::player::ender_chest_inventory::EnderChestInventory;
 use pumpkin_protocol::bedrock::client::play_status::CPlayStatus;
 use pumpkin_protocol::bedrock::client::set_time::CSetTime;
@@ -235,13 +236,13 @@ use pumpkin_protocol::java::client::play::block_particle_data_for_version;
 use pumpkin_protocol::java::client::play::{
     Animation, CActionBar, CAwardStats, CChangeDifficulty, CCloseContainer, CCombatDeath,
     CCustomPayload, CDisguisedChatMessage, CEntityAnimation, CEntityPositionSync, CEntityStatus,
-    CGameEvent, CItemCooldown, CMapItemData, COpenScreen, CParticle, CPlayerAbilities,
-    CPlayerInfoUpdate, CPlayerPosition, CPlayerSpawnPosition, CRespawn, CSetCamera,
-    CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem, CSetExperience,
-    CSetHealth, CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound, CSubtitle,
-    CSystemChatMessage, CTabList, CTitleAnimation, CTitleText, CUnloadChunk, CUpdateMobEffect,
-    CUpdateTime, GameEvent, MapIcon, MapPatch, Metadata, PlayerAction, PlayerInfoFlags,
-    PlayerSpawnData, PreviousMessage, Statistic,
+    CGameEvent, CItemCooldown, CMapItemData, COpenMountScreen, COpenScreen, CParticle,
+    CPlayerAbilities, CPlayerInfoUpdate, CPlayerPosition, CPlayerSpawnPosition, CRespawn,
+    CSetCamera, CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+    CSetExperience, CSetHealth, CSetPlayerInventory, CSetSelectedSlot, CSoundEffect, CStopSound,
+    CSubtitle, CSystemChatMessage, CTabList, CTitleAnimation, CTitleText, CUnloadChunk,
+    CUpdateMobEffect, CUpdateTime, GameEvent, MapIcon, MapPatch, Metadata, PlayerAction,
+    PlayerInfoFlags, PlayerSpawnData, PreviousMessage, Statistic,
 };
 use pumpkin_protocol::java::server::play::{
     SClickSlot, SContainerButtonClick, SRenameItem, SlotActionType,
@@ -5169,6 +5170,67 @@ impl Player {
         self.on_screen_handler_opened(screen_handler.clone()).await;
         *self.current_screen_handler.lock().await = screen_handler;
         self.open_container_pos.store(None);
+    }
+
+    pub async fn open_mount_screen(self: &Arc<Self>, mount: Arc<dyn EntityBase>) -> Option<u8> {
+        if !self
+            .current_screen_handler
+            .lock()
+            .await
+            .lock()
+            .await
+            .as_any()
+            .is::<PlayerScreenHandler>()
+        {
+            self.close_handled_screen().await;
+        }
+
+        let mob = mount.get_mob()?;
+        let inventory = mob.create_mount_inventory(mount.clone())?;
+
+        let server = self.world().server.upgrade();
+        if let Some(server) = server {
+            let mut event =
+                crate::plugin::api::events::inventory::inventory_open::InventoryOpenEvent::new(
+                    self.clone(),
+                );
+            server.plugin_manager.fire(&server, &mut event).await;
+            if event.cancelled {
+                return None;
+            }
+        }
+
+        self.increment_screen_handler_sync_id();
+        let sync_id = self.screen_handler_sync_id.load(Ordering::Relaxed);
+        let slot_count = inventory.size();
+        let mut mount_handler = MountScreenHandler::new(sync_id, &self.inventory, inventory).await;
+        let weak_mount = Arc::downgrade(&mount);
+        mount_handler
+            .get_behaviour_mut()
+            .set_validity_check(move |inventory_player| {
+                let Some(mount) = weak_mount.upgrade() else {
+                    return false;
+                };
+                let Some(player) = inventory_player.as_any().downcast_ref::<Player>() else {
+                    return false;
+                };
+                mount.get_entity().is_alive()
+                    && (mount.get_entity().pos.load() - player.get_entity().pos.load())
+                        .length_squared()
+                        < 64.0
+            });
+        let handler: Arc<Mutex<dyn ScreenHandler>> = Arc::new(Mutex::new(mount_handler));
+
+        self.send_client_packet(&COpenMountScreen::new(
+            sync_id,
+            (slot_count as i32).into(),
+            mount.get_entity().entity_id,
+        ))
+        .await;
+        self.on_screen_handler_opened(handler.clone()).await;
+        *self.current_screen_handler.lock().await = handler;
+        self.open_container_pos.store(None);
+        Some(sync_id)
     }
 
     #[allow(clippy::too_many_lines)]

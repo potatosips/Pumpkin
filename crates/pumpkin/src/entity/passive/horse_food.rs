@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
     attributes::Attributes,
     entity::{EntityStatus, EntityType},
@@ -9,9 +10,106 @@ use pumpkin_data::{
     sound::{Sound, SoundCategory},
 };
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
+use pumpkin_protocol::java::server::play::SPlayerInput;
 use pumpkin_util::math::vector3::Vector3;
 use rand::RngExt;
 use uuid::Uuid;
+
+pub(super) struct EquineRiderControl {
+    jump_scale: AtomicCell<f32>,
+}
+
+impl Default for EquineRiderControl {
+    fn default() -> Self {
+        Self {
+            jump_scale: AtomicCell::new(0.0),
+        }
+    }
+}
+
+fn jump_scale_from_power(power: i32) -> f32 {
+    if power >= 90 {
+        1.0
+    } else {
+        0.4 + 0.4 * power.max(0) as f32 / 90.0
+    }
+}
+
+impl EquineRiderControl {
+    pub fn set_jump_power(&self, power: i32) {
+        self.jump_scale.store(jump_scale_from_power(power));
+    }
+
+    fn take_jump_scale(&self) -> f32 {
+        self.jump_scale.swap(0.0)
+    }
+}
+
+pub(super) async fn tick_ridden_equine<T: Equine>(equine: &T, control: &EquineRiderControl) {
+    if !equine.is_saddled() {
+        return;
+    }
+    let living = &equine.get_mob_entity().living_entity;
+    let passenger = living.entity.passengers.lock().await.first().cloned();
+    let Some(passenger) = passenger else {
+        return;
+    };
+    let Some(player) = passenger.get_player() else {
+        return;
+    };
+
+    let rider = player.get_entity();
+    let yaw = rider.yaw.load();
+    living.entity.yaw.store(yaw);
+    living.entity.head_yaw.store(yaw);
+    living.entity.body_yaw.store(yaw);
+    living.entity.pitch.store(rider.pitch.load() * 0.5);
+
+    let input = player.last_input.load(std::sync::atomic::Ordering::Relaxed);
+    let sideways = if input & SPlayerInput::LEFT != 0 {
+        0.5
+    } else if input & SPlayerInput::RIGHT != 0 {
+        -0.5
+    } else {
+        0.0
+    };
+    let forward = if input & SPlayerInput::FORWARD != 0 {
+        1.0
+    } else if input & SPlayerInput::BACKWARD != 0 {
+        -0.25
+    } else {
+        0.0
+    };
+    living
+        .movement_input
+        .store(Vector3::new(sideways, 0.0, forward));
+    living
+        .jumping
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+
+    if living
+        .entity
+        .on_ground
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let jump_scale = control.take_jump_scale();
+        if jump_scale <= 0.0 {
+            return;
+        }
+        let mut velocity = living.entity.velocity.load();
+        velocity.y = living.get_jump_velocity(f64::from(jump_scale)).await;
+        if forward > 0.0 {
+            let yaw = f64::from(yaw).to_radians();
+            velocity.x += -0.4 * f64::from(jump_scale) * yaw.sin();
+            velocity.z += 0.4 * f64::from(jump_scale) * yaw.cos();
+        }
+        living.entity.velocity.store(velocity);
+        living
+            .entity
+            .velocity_dirty
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 use crate::entity::{EntityBase, ageable::AgeableMob, living::LivingEntity, player::Player};
 
@@ -102,6 +200,17 @@ pub(super) trait Equine: AgeableMob {
     }
 }
 
+pub(super) async fn open_equine_inventory<T: Equine>(equine: &T, player: &Arc<Player>) -> bool {
+    if !equine.is_tame() || equine.is_baby() || !player.get_entity().is_sneaking() {
+        return false;
+    }
+    let entity = equine.get_entity();
+    let Some(entity) = entity.world.load().get_entity_by_id(entity.entity_id) else {
+        return false;
+    };
+    player.open_mount_screen(entity).await.is_some()
+}
+
 pub(super) async fn tick_untamed_riding<T: Equine>(equine: &T) {
     if equine.is_tame() {
         return;
@@ -155,6 +264,21 @@ pub(super) async fn tick_untamed_riding<T: Equine>(equine: &T) {
         EntityStatus::TamingFailed,
         Some(ActorEventType::TamingFailed),
     );
+}
+
+/// Abstract horses have a one-in-900 chance each AI tick to recover one health.
+pub(super) fn tick_equine_natural_regeneration<T: Equine>(equine: &T) {
+    let living = &equine.get_mob_entity().living_entity;
+    if living.health.load() > 0.0
+        && living.health.load() < living.get_max_health()
+        && natural_regeneration_triggers(rand::rng().random_range(0..900))
+    {
+        living.heal(1.0);
+    }
+}
+
+const fn natural_regeneration_triggers(roll: i32) -> bool {
+    roll == 0
 }
 
 pub(super) async fn mount_equine<T: Equine>(
@@ -298,6 +422,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn equine_natural_regeneration_uses_vanilla_one_in_900_roll() {
+        assert!(natural_regeneration_triggers(0));
+        assert!(!natural_regeneration_triggers(1));
+        assert!(!natural_regeneration_triggers(899));
+    }
+
+    #[test]
     fn vanilla_foal_growth_values() {
         let wheat = horse_food_effect(&Item::WHEAT).unwrap();
         assert_eq!(
@@ -372,5 +503,15 @@ mod tests {
         assert!((high - 27.75).abs() < f64::EPSILON);
         let low = inherited_attribute(15.0, 15.0, 15.0, 30.0, -0.5);
         assert!((low - 17.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ridden_jump_charge_matches_vanilla_curve() {
+        assert!((jump_scale_from_power(-1) - 0.4).abs() < f32::EPSILON);
+        assert!((jump_scale_from_power(0) - 0.4).abs() < f32::EPSILON);
+        assert!((jump_scale_from_power(45) - 0.6).abs() < f32::EPSILON);
+        assert!((jump_scale_from_power(89) - (0.4 + 0.4 * 89.0 / 90.0)).abs() < f32::EPSILON);
+        assert!((jump_scale_from_power(90) - 1.0).abs() < f32::EPSILON);
+        assert!((jump_scale_from_power(100) - 1.0).abs() < f32::EPSILON);
     }
 }

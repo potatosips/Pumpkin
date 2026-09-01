@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::entity::EntityBase;
 use crate::entity::player::Player;
 use crate::item::{ItemBehaviour, ItemMetadata};
+use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
@@ -30,20 +31,9 @@ impl ItemBehaviour for SaddleItem {
                 && mob.can_be_saddled()
                 && !mob.is_saddled()
             {
-                mob.set_saddled(true);
+                mob.set_saddle_stack(item.copy_with_count(1)).await;
                 let ent = entity.get_entity();
-                let sound = match ent.entity_type {
-                    ty if ty == &pumpkin_data::entity::EntityType::STRIDER => {
-                        Sound::EntityStriderSaddle
-                    }
-                    ty if ty == &pumpkin_data::entity::EntityType::HORSE
-                        || ty == &pumpkin_data::entity::EntityType::DONKEY
-                        || ty == &pumpkin_data::entity::EntityType::MULE =>
-                    {
-                        Sound::EntityHorseSaddle
-                    }
-                    _ => Sound::EntityPigSaddle,
-                };
+                let sound = saddle_sound_for_entity_type(ent.entity_type);
                 player
                     .world()
                     .play_sound(sound, SoundCategory::Neutral, &ent.pos.load());
@@ -54,5 +44,41 @@ impl ItemBehaviour for SaddleItem {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+fn saddle_sound_for_entity_type(entity_type: &EntityType) -> Sound {
+    match entity_type {
+        ty if ty == &EntityType::STRIDER => Sound::EntityStriderSaddle,
+        ty if ty == &EntityType::HORSE
+            || ty == &EntityType::DONKEY
+            || ty == &EntityType::MULE
+            || ty == &EntityType::SKELETON_HORSE
+            || ty == &EntityType::ZOMBIE_HORSE =>
+        {
+            Sound::EntityHorseSaddle
+        }
+        _ => Sound::EntityPigSaddle,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undead_horses_use_the_abstract_horse_saddle_sound() {
+        assert_eq!(
+            saddle_sound_for_entity_type(&EntityType::SKELETON_HORSE),
+            Sound::EntityHorseSaddle
+        );
+        assert_eq!(
+            saddle_sound_for_entity_type(&EntityType::ZOMBIE_HORSE),
+            Sound::EntityHorseSaddle
+        );
+        assert_eq!(
+            saddle_sound_for_entity_type(&EntityType::STRIDER),
+            Sound::EntityStriderSaddle
+        );
     }
 }
