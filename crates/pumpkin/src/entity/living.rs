@@ -645,6 +645,7 @@ impl LivingEntity {
                         id,
                         amount: scaled_amount,
                         operation: op,
+                        persistent: false,
                     };
 
                     self.update_attribute(m.attribute, |inst| {
@@ -2282,6 +2283,24 @@ impl NBTStorage for LivingEntity {
                     let mut attribute_nbt = NbtCompound::new();
                     attribute_nbt.put_string("id", attribute.name.to_string());
                     attribute_nbt.put_double("base", instance.base_value);
+                    let modifiers = instance
+                        .modifiers
+                        .iter()
+                        .filter(|modifier| modifier.persistent)
+                        .map(|modifier| {
+                            let mut modifier_nbt = NbtCompound::new();
+                            modifier_nbt.put_string("id", modifier.id.clone());
+                            modifier_nbt.put_double("amount", modifier.amount);
+                            modifier_nbt.put_string(
+                                "operation",
+                                modifier.operation.serialized_name().to_string(),
+                            );
+                            NbtTag::Compound(modifier_nbt)
+                        })
+                        .collect::<Vec<_>>();
+                    if !modifiers.is_empty() {
+                        attribute_nbt.put("modifiers", NbtTag::List(modifiers));
+                    }
                     list.push(NbtTag::Compound(attribute_nbt));
                 }
                 list
@@ -2361,11 +2380,45 @@ impl NBTStorage for LivingEntity {
                     ) else {
                         continue;
                     };
+                    if !base.is_finite() {
+                        continue;
+                    }
                     if let Some(attribute) = Attributes::ALL
                         .iter()
                         .find(|attribute| attribute.name == id && supported.contains(&attribute.id))
                     {
-                        self.set_attribute_base(attribute, base);
+                        self.update_attribute(attribute, |instance| {
+                            instance.base_value = base;
+                            instance.modifiers.retain(|modifier| !modifier.persistent);
+                            if let Some(modifiers) = attribute_nbt.get_list("modifiers") {
+                                for modifier in modifiers {
+                                    let NbtTag::Compound(modifier_nbt) = modifier else {
+                                        continue;
+                                    };
+                                    let (Some(id), Some(amount), Some(operation)) = (
+                                        modifier_nbt.get_string("id"),
+                                        modifier_nbt.get_double("amount"),
+                                        modifier_nbt.get_string("operation"),
+                                    ) else {
+                                        continue;
+                                    };
+                                    let Some(operation) =
+                                        ModifierOperation::from_serialized_name(operation)
+                                    else {
+                                        continue;
+                                    };
+                                    if amount.is_finite() {
+                                        instance.add_or_replace_modifier(Modifier {
+                                            id: id.to_string(),
+                                            amount,
+                                            operation,
+                                            persistent: true,
+                                        });
+                                    }
+                                }
+                            }
+                            instance.dirty.store(true, Ordering::Relaxed);
+                        });
                     }
                 }
             }

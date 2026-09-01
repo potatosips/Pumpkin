@@ -293,6 +293,7 @@ impl EndermanEntity {
                     id: ENDERMAN_SPEED_BOOST_ID.to_string(),
                     amount: SPEED_BOOST,
                     operation: ModifierOperation::Add,
+                    persistent: false,
                 };
 
                 living.update_attribute(&Attributes::MOVEMENT_SPEED, |inst| {
