@@ -5,6 +5,7 @@ use std::sync::{
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
+    attributes::Attributes,
     data_component_impl::EquipmentSlot,
     entity::EntityType,
     item::Item,
@@ -44,6 +45,28 @@ pub struct HorseEntity {
 impl HorseEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
+        let mut rng = rand::rng();
+        let max_health =
+            15.0 + f64::from(rng.random_range(0..8)) + f64::from(rng.random_range(0..9));
+        let movement_speed = (0.449_999_988_079_071_04
+            + rng.random::<f64>() * 0.3
+            + rng.random::<f64>() * 0.3
+            + rng.random::<f64>() * 0.3)
+            * 0.25;
+        let jump_strength = 0.400_000_005_960_464_5
+            + rng.random::<f64>() * 0.2
+            + rng.random::<f64>() * 0.2
+            + rng.random::<f64>() * 0.2;
+        mob_entity
+            .living_entity
+            .set_attribute_base(&Attributes::MAX_HEALTH, max_health);
+        mob_entity
+            .living_entity
+            .set_attribute_base(&Attributes::MOVEMENT_SPEED, movement_speed);
+        mob_entity
+            .living_entity
+            .set_attribute_base(&Attributes::JUMP_STRENGTH, jump_strength);
+        mob_entity.living_entity.health.store(max_health as f32);
         let horse = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
@@ -196,13 +219,6 @@ impl NBTStorage for HorseEntity {
                 ItemStack::new(1, &Item::SADDLE).write_item_stack(&mut saddle);
                 nbt.put_compound("SaddleItem", saddle);
             }
-            let equipment = self.mob_entity.living_entity.entity_equipment.lock().await;
-            let armor = equipment.get(&EquipmentSlot::BODY);
-            if !armor.is_empty() {
-                let mut armor_nbt = pumpkin_nbt::compound::NbtCompound::new();
-                armor.write_item_stack(&mut armor_nbt);
-                nbt.put_compound("ArmorItem", armor_nbt);
-            }
         })
     }
     fn read_nbt_non_mut<'a>(
@@ -226,15 +242,6 @@ impl NBTStorage for HorseEntity {
                     .and_then(ItemStack::read_item_stack)
                     .is_some_and(|stack| stack.item == &Item::SADDLE),
             );
-            let mut equipment = self.mob_entity.living_entity.entity_equipment.lock().await;
-            equipment.equipment.remove(&EquipmentSlot::BODY);
-            if let Some(armor) = nbt
-                .get_compound("ArmorItem")
-                .and_then(ItemStack::read_item_stack)
-                .filter(|stack| stack.item.has_tag(&tag::Item::C_ARMORS_HORSE))
-            {
-                equipment.put(&EquipmentSlot::BODY, armor);
-            }
         })
     }
 }
@@ -299,12 +306,31 @@ impl Mob for HorseEntity {
     fn get_horse(&self) -> Option<&HorseEntity> {
         Some(self)
     }
+    fn can_mate_with(&self, mate: &dyn EntityBase) -> bool {
+        super::horse_food::horse_family_offspring_type(
+            &EntityType::HORSE,
+            mate.get_entity().entity_type,
+        )
+        .is_some()
+    }
+    fn breeding_offspring_type(&self, mate: &dyn EntityBase) -> &'static EntityType {
+        super::horse_food::horse_family_offspring_type(
+            &EntityType::HORSE,
+            mate.get_entity().entity_type,
+        )
+        .unwrap_or(&EntityType::HORSE)
+    }
     fn configure_bred_child<'a>(
         &'a self,
         mate: &'a dyn EntityBase,
         child: &'a Arc<dyn EntityBase>,
     ) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
+            super::horse_food::configure_bred_equine_attributes(
+                &self.mob_entity.living_entity,
+                mate,
+                child,
+            );
             let (Some(mate), Some(child)) = (
                 mate.get_mob().and_then(Mob::get_horse),
                 child.get_mob().and_then(Mob::get_horse),

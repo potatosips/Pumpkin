@@ -539,6 +539,16 @@ impl NBTStorage for MobEntity {
             nbt.put_bool("CanPickUpLoot", self.can_pick_up_loot());
             nbt.put_bool("LeftHanded", self.is_left_handed());
             nbt.put_bool("PersistenceRequired", self.is_persistence_required());
+            let equipment = self.living_entity.entity_equipment.lock().await;
+            let body_armor = equipment.get(&pumpkin_data::data_component_impl::EquipmentSlot::BODY);
+            if body_armor.is_empty() {
+                nbt.child_tags.remove("body_armor_item");
+            } else {
+                let mut item_nbt = pumpkin_nbt::compound::NbtCompound::new();
+                body_armor.write_item_stack(&mut item_nbt);
+                nbt.put_compound("body_armor_item", item_nbt);
+            }
+            drop(equipment);
             if self.is_no_ai() {
                 nbt.put_bool("NoAI", true);
             } else {
@@ -561,6 +571,20 @@ impl NBTStorage for MobEntity {
             self.set_left_handed(nbt.get_bool("LeftHanded").unwrap_or(false));
             self.set_no_ai(nbt.get_bool("NoAI").unwrap_or(false));
             self.set_persistence_required(nbt.get_bool("PersistenceRequired").unwrap_or(false));
+            let mut equipment = self.living_entity.entity_equipment.lock().await;
+            equipment
+                .equipment
+                .remove(&pumpkin_data::data_component_impl::EquipmentSlot::BODY);
+            if let Some(body_armor) = nbt
+                .get_compound("body_armor_item")
+                .and_then(ItemStack::read_item_stack)
+                .filter(|stack| !stack.is_empty())
+            {
+                equipment.put(
+                    &pumpkin_data::data_component_impl::EquipmentSlot::BODY,
+                    body_armor,
+                );
+            }
         })
     }
 }
@@ -708,6 +732,18 @@ pub trait Mob: EntityBase + Send + Sync {
         Box::pin(async {})
     }
 
+    /// Returns whether this mob accepts `mate` as a breeding partner. Most
+    /// animals only mate with their own entity type; horse-family hybrids
+    /// override this rule.
+    fn can_mate_with(&self, mate: &dyn EntityBase) -> bool {
+        self.get_entity().entity_type == mate.get_entity().entity_type
+    }
+
+    /// Selects the entity type produced by this pairing.
+    fn breeding_offspring_type(&self, _mate: &dyn EntityBase) -> &'static EntityType {
+        self.get_entity().entity_type
+    }
+
     /// Produces this species' breeding result. Most animals spawn a baby of
     /// their own type; species with a non-mob result (such as sniffers) can
     /// override this without duplicating the common breeding bookkeeping.
@@ -719,7 +755,7 @@ pub trait Mob: EntityBase + Send + Sync {
             let entity = self.get_entity();
             let world = entity.world.load();
             let child = from_type(
-                entity.entity_type,
+                self.breeding_offspring_type(mate),
                 entity.pos.load(),
                 &world,
                 Uuid::new_v4(),
@@ -997,6 +1033,10 @@ pub trait Mob: EntityBase + Send + Sync {
     }
 
     fn get_horse(&self) -> Option<&crate::entity::passive::horse::HorseEntity> {
+        None
+    }
+
+    fn get_llama(&self) -> Option<&crate::entity::passive::llama::LlamaEntity> {
         None
     }
 

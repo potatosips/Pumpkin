@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use pumpkin_data::{
-    entity::EntityStatus,
+    attributes::Attributes,
+    entity::{EntityStatus, EntityType},
     item::Item,
     item_stack::ItemStack,
     particle::Particle,
@@ -12,10 +13,76 @@ use pumpkin_util::math::vector3::Vector3;
 use rand::RngExt;
 use uuid::Uuid;
 
-use crate::entity::{EntityBase, ageable::AgeableMob, player::Player};
+use crate::entity::{EntityBase, ageable::AgeableMob, living::LivingEntity, player::Player};
 
 pub(super) fn taming_succeeds(temper: i32, max_temper: i32, roll: i32) -> bool {
     roll < temper.clamp(0, max_temper.max(1))
+}
+
+pub(super) fn horse_family_offspring_type(
+    first: &'static EntityType,
+    second: &'static EntityType,
+) -> Option<&'static EntityType> {
+    match (first.id, second.id) {
+        (a, b) if a == EntityType::HORSE.id && b == EntityType::HORSE.id => {
+            Some(&EntityType::HORSE)
+        }
+        (a, b) if a == EntityType::DONKEY.id && b == EntityType::DONKEY.id => {
+            Some(&EntityType::DONKEY)
+        }
+        (a, b)
+            if (a == EntityType::HORSE.id && b == EntityType::DONKEY.id)
+                || (a == EntityType::DONKEY.id && b == EntityType::HORSE.id) =>
+        {
+            Some(&EntityType::MULE)
+        }
+        _ => None,
+    }
+}
+
+fn inherited_attribute(first: f64, second: f64, min: f64, max: f64, random_offset: f64) -> f64 {
+    let first = first.clamp(min, max);
+    let second = second.clamp(min, max);
+    let spread = (first - second).abs() + 0.3 * (max - min);
+    let value = (first + second) / 2.0 + spread * random_offset.clamp(-0.5, 0.5);
+    if value > max {
+        2.0 * max - value
+    } else if value < min {
+        2.0 * min - value
+    } else {
+        value
+    }
+}
+
+pub(super) fn configure_bred_equine_attributes(
+    first: &LivingEntity,
+    mate: &dyn EntityBase,
+    child: &Arc<dyn EntityBase>,
+) {
+    let (Some(second), Some(child)) = (mate.get_living_entity(), child.get_living_entity()) else {
+        return;
+    };
+    let mut rng = rand::rng();
+    for (attribute, min, max) in [
+        (&Attributes::MAX_HEALTH, 15.0, 30.0),
+        (&Attributes::JUMP_STRENGTH, 0.4, 1.0),
+        (&Attributes::MOVEMENT_SPEED, 0.1125, 0.3375),
+    ] {
+        let offset = (rng.random::<f64>() + rng.random::<f64>() + rng.random::<f64>()) / 3.0 - 0.5;
+        child.set_attribute_base(
+            attribute,
+            inherited_attribute(
+                first.get_attribute_base(attribute),
+                second.get_attribute_base(attribute),
+                min,
+                max,
+                offset,
+            ),
+        );
+    }
+    child
+        .health
+        .store(child.get_attribute_value(&Attributes::MAX_HEALTH) as f32);
 }
 
 pub(super) trait Equine: AgeableMob {
@@ -272,5 +339,38 @@ mod tests {
             ),
             (10.0, 240, 10, true)
         );
+    }
+
+    #[test]
+    fn horse_and_donkey_pairings_produce_vanilla_offspring() {
+        assert_eq!(
+            horse_family_offspring_type(&EntityType::HORSE, &EntityType::HORSE),
+            Some(&EntityType::HORSE)
+        );
+        assert_eq!(
+            horse_family_offspring_type(&EntityType::DONKEY, &EntityType::DONKEY),
+            Some(&EntityType::DONKEY)
+        );
+        assert_eq!(
+            horse_family_offspring_type(&EntityType::HORSE, &EntityType::DONKEY),
+            Some(&EntityType::MULE)
+        );
+        assert_eq!(
+            horse_family_offspring_type(&EntityType::DONKEY, &EntityType::HORSE),
+            Some(&EntityType::MULE)
+        );
+        assert_eq!(
+            horse_family_offspring_type(&EntityType::HORSE, &EntityType::LLAMA),
+            None
+        );
+    }
+
+    #[test]
+    fn horse_attribute_inheritance_averages_and_reflects_into_range() {
+        assert_eq!(inherited_attribute(20.0, 24.0, 15.0, 30.0, 0.0), 22.0);
+        let high = inherited_attribute(30.0, 30.0, 15.0, 30.0, 0.5);
+        assert!((high - 27.75).abs() < f64::EPSILON);
+        let low = inherited_attribute(15.0, 15.0, 15.0, 30.0, -0.5);
+        assert!((low - 17.25).abs() < f64::EPSILON);
     }
 }
