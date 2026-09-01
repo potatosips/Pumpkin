@@ -15,8 +15,8 @@ use pumpkin_util::GameMode;
 use pumpkin_util::text::{TextComponent, color::NamedColor, hover::HoverEvent};
 use rand;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
 use std::cmp::{max, min};
+use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1103,7 +1103,10 @@ mod tests {
         assert_eq!(decoded.0.to_nbt_compound(), compound);
 
         let display = stack.to_hoverable_text(1).0.to_nbt_compound();
-        assert_eq!(display.get_string("translate"), Some("chat.square_brackets"));
+        assert_eq!(
+            display.get_string("translate"),
+            Some("chat.square_brackets")
+        );
         assert_eq!(display.get_string("color"), Some("white"));
         let hover = display.get_compound("hoverEvent").expect("show item hover");
         let contents = hover.get_compound("contents").expect("hover contents");

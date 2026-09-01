@@ -33,6 +33,7 @@ pub struct DonkeyEntity {
     owner: AtomicCell<Option<Uuid>>,
     saddled: AtomicBool,
     rider_control: super::horse_food::EquineRiderControl,
+    animation_state: super::horse_food::EquineAnimationState,
     pub chested_horse: super::chested_horse::ChestedHorseData,
 }
 
@@ -47,6 +48,7 @@ impl DonkeyEntity {
             owner: AtomicCell::new(None),
             saddled: AtomicBool::new(false),
             rider_control: super::horse_food::EquineRiderControl::default(),
+            animation_state: super::horse_food::EquineAnimationState::default(),
             chested_horse: super::chested_horse::ChestedHorseData::default(),
         };
         let mob_arc = Arc::new(donkey);
@@ -90,7 +92,7 @@ impl DonkeyEntity {
             0x04
         } else {
             0
-        });
+        }) | self.animation_state.flags();
         self.get_entity().send_meta_data(
             &[Metadata::new(
                 tracked_data::abstract_horse::DATA_ID_FLAGS,
@@ -107,6 +109,14 @@ impl AgeableMob for DonkeyEntity {
     }
 }
 impl super::horse_food::Equine for DonkeyEntity {
+    fn animation_state(&self) -> Option<&super::horse_food::EquineAnimationState> {
+        Some(&self.animation_state)
+    }
+
+    fn sync_equine_flags(&self) {
+        self.sync_flags();
+    }
+
     fn temper(&self) -> i32 {
         self.temper.load(Ordering::Relaxed)
     }
@@ -298,6 +308,7 @@ impl Mob for DonkeyEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
             super::horse_food::tick_untamed_riding(self).await;
         })
@@ -312,6 +323,10 @@ impl Mob for DonkeyEntity {
                 return true;
             }
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
+                return true;
+            }
+            if !stack.is_empty() && !self.is_tame() {
+                super::horse_food::make_equine_mad(self, Sound::EntityDonkeyAngry);
                 return true;
             }
             if self.is_tame()

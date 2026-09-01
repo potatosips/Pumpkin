@@ -41,6 +41,7 @@ pub struct HorseEntity {
     owner: AtomicCell<Option<Uuid>>,
     saddled: AtomicBool,
     rider_control: super::horse_food::EquineRiderControl,
+    animation_state: super::horse_food::EquineAnimationState,
 }
 
 impl HorseEntity {
@@ -77,6 +78,7 @@ impl HorseEntity {
             owner: AtomicCell::new(None),
             saddled: AtomicBool::new(false),
             rider_control: super::horse_food::EquineRiderControl::default(),
+            animation_state: super::horse_food::EquineAnimationState::default(),
         };
         let mob_arc = Arc::new(horse);
         let mob_weak: Weak<dyn Mob> = {
@@ -134,6 +136,7 @@ impl HorseEntity {
         if self.saddled.load(Ordering::Relaxed) {
             flags |= 0x04;
         }
+        flags |= self.animation_state.flags();
         self.get_entity().send_meta_data(
             &[Metadata::new(
                 tracked_data::abstract_horse::DATA_ID_FLAGS,
@@ -153,6 +156,14 @@ impl HorseEntity {
 }
 
 impl super::horse_food::Equine for HorseEntity {
+    fn animation_state(&self) -> Option<&super::horse_food::EquineAnimationState> {
+        Some(&self.animation_state)
+    }
+
+    fn sync_equine_flags(&self) {
+        self.sync_horse_flags();
+    }
+
     fn temper(&self) -> i32 {
         self.temper.load(Ordering::Relaxed)
     }
@@ -420,6 +431,7 @@ impl Mob for HorseEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
             super::horse_food::tick_untamed_riding(self).await;
         })
@@ -434,6 +446,10 @@ impl Mob for HorseEntity {
                 return true;
             }
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
+                return true;
+            }
+            if !stack.is_empty() && !self.is_tame() {
+                super::horse_food::make_equine_mad(self, Sound::EntityHorseAngry);
                 return true;
             }
             if self.is_tame() && !self.is_baby() && stack.item.has_tag(&tag::Item::C_ARMORS_HORSE) {

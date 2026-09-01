@@ -6,7 +6,7 @@ use std::sync::{
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
     attributes::Attributes, data_component_impl::EquipmentSlot, entity::EntityType, item::Item,
-    item_stack::ItemStack, tracked_data,
+    item_stack::ItemStack, sound::Sound, tracked_data,
 };
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::math::vector3::Vector3;
@@ -35,6 +35,7 @@ pub struct SkeletonHorseEntity {
     skeleton_trap: AtomicBool,
     skeleton_trap_time: AtomicI32,
     rider_control: super::horse_food::EquineRiderControl,
+    animation_state: super::horse_food::EquineAnimationState,
 }
 
 impl SkeletonHorseEntity {
@@ -50,6 +51,7 @@ impl SkeletonHorseEntity {
             skeleton_trap: AtomicBool::new(false),
             skeleton_trap_time: AtomicI32::new(0),
             rider_control: super::horse_food::EquineRiderControl::default(),
+            animation_state: super::horse_food::EquineAnimationState::default(),
         };
         horse.mob_entity.living_entity.set_attribute_base(
             &Attributes::JUMP_STRENGTH,
@@ -91,7 +93,7 @@ impl SkeletonHorseEntity {
         let flags = horse_flags(
             self.tamed.load(Ordering::Relaxed),
             self.saddled.load(Ordering::Relaxed),
-        );
+        ) | self.animation_state.flags();
         self.get_entity().send_meta_data(
             &[Metadata::new(
                 tracked_data::abstract_horse::DATA_ID_FLAGS,
@@ -224,6 +226,14 @@ impl AgeableMob for SkeletonHorseEntity {
 }
 
 impl super::horse_food::Equine for SkeletonHorseEntity {
+    fn animation_state(&self) -> Option<&super::horse_food::EquineAnimationState> {
+        Some(&self.animation_state)
+    }
+
+    fn sync_equine_flags(&self) {
+        self.sync_horse_flags();
+    }
+
     fn temper(&self) -> i32 {
         self.temper.load(Ordering::Relaxed)
     }
@@ -395,6 +405,7 @@ impl Mob for SkeletonHorseEntity {
                 }
             }
             self.ageable_ai_step();
+            super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
         })
     }
@@ -405,6 +416,11 @@ impl Mob for SkeletonHorseEntity {
     ) -> EntityBaseFuture<'a, bool> {
         Box::pin(async move {
             if super::horse_food::open_equine_inventory(self, player).await {
+                return true;
+            }
+            if self.is_tame()
+                && super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await
+            {
                 return true;
             }
             if self.is_tame() && super::horse_food::mount_equine(self, player, stack).await {
