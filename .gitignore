@@ -157,3 +157,6 @@ version_history.json
 world_nether/
 world_the_end/
 patchbukkit/
+
+# Local Codex project memory
+CODEX_PUMPKINMC_MEMORY.md
