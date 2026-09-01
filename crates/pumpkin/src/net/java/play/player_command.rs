@@ -42,8 +42,27 @@ impl JavaClient {
             }
             Action::LeaveBed => player.wake_up().await,
 
-            Action::StartHorseJump | Action::StopHorseJump | Action::OpenVehicleInventory => {
-                debug!("todo");
+            Action::OpenVehicleInventory => {
+                let vehicle = player.get_entity().vehicle.lock().await.clone();
+                if let Some(vehicle) = vehicle
+                    && vehicle.get_mob().is_some_and(|mob| mob.is_tame())
+                {
+                    player.open_mount_screen(vehicle).await;
+                }
+            }
+            Action::StartHorseJump => {
+                let vehicle = player.get_entity().vehicle.lock().await.clone();
+                if let Some(vehicle) = vehicle
+                    && let Some(mob) = vehicle.get_mob()
+                    && mob.is_saddled()
+                {
+                    mob.set_rider_jump_power(command.jump_boost.0);
+                }
+            }
+            Action::StopHorseJump => {
+                // Vanilla's stop hook is intentionally empty for horses. The
+                // charged power arrives with StartHorseJump and is consumed on
+                // the next grounded ridden movement tick.
             }
             Action::StartFlyingElytra => {
                 let fall_flying = entity.check_fall_flying();

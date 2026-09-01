@@ -750,7 +750,7 @@ fn conflicts_with(candidate: &Enchantment, applied: &[&Enchantment]) -> bool {
 /// enchantments by weight, resolves exclusive-set conflicts, and determines
 /// the level from the remaining cost. Cost is halved each iteration so
 /// later enchantments receive lower levels.
-fn apply_vanilla_enchantments(
+pub(crate) fn apply_vanilla_enchantments(
     stack: &mut ItemStack,
     slot: &EquipmentSlot,
     special_multiplier: f32,
@@ -1080,5 +1080,21 @@ mod tests {
         assert!(conflicts_with(&Enchantment::SMITE, &applied));
         assert!(conflicts_with(&Enchantment::BANE_OF_ARTHROPODS, &applied));
         assert!(!conflicts_with(&Enchantment::UNBREAKING, &applied));
+    }
+
+    #[test]
+    fn direct_spawn_enchantment_provider_handles_trap_bow_and_helmet() {
+        for (item, slot) in [
+            (&Item::BOW, EquipmentSlot::MAIN_HAND),
+            (&Item::IRON_HELMET, EquipmentSlot::HEAD),
+        ] {
+            let mut stack = ItemStack::new(1, item);
+            apply_vanilla_enchantments(&mut stack, &slot, 1.0);
+            assert!(
+                stack
+                    .get_data_component::<pumpkin_data::data_component_impl::EnchantmentsImpl>()
+                    .is_some_and(|enchantments| !enchantments.enchantment.is_empty())
+            );
+        }
     }
 }

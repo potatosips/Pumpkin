@@ -39,6 +39,7 @@ pub struct LlamaEntity {
     tamed: AtomicBool,
     temper: AtomicI32,
     owner: AtomicCell<Option<Uuid>>,
+    pub chested_horse: super::chested_horse::ChestedHorseData,
 }
 
 impl LlamaEntity {
@@ -54,6 +55,7 @@ impl LlamaEntity {
             tamed: AtomicBool::new(false),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
+            chested_horse: super::chested_horse::ChestedHorseData::default(),
         };
         let mob_arc = Arc::new(llama);
         let mob_weak: Weak<dyn Mob> = {
@@ -198,6 +200,7 @@ impl NBTStorage for LlamaEntity {
             if let Some(owner) = self.owner.load() {
                 nbt.put_uuid("Owner", owner);
             }
+            self.chested_horse.write_nbt(nbt).await;
         })
     }
     fn read_nbt_non_mut<'a>(
@@ -206,6 +209,11 @@ impl NBTStorage for LlamaEntity {
     ) -> NbtFuture<'a, ()> {
         Box::pin(async move {
             self.mob_entity.read_nbt_non_mut(nbt).await;
+            super::chested_horse::sanitize_body_equipment(
+                &self.mob_entity,
+                super::chested_horse::MountBodySlotKind::LlamaDecor,
+            )
+            .await;
             self.read_ageable_nbt(nbt);
             super::animal::Animal::read_animal_nbt(self, nbt);
             if let Some(variant) = nbt.get_int("Variant") {
@@ -219,6 +227,7 @@ impl NBTStorage for LlamaEntity {
                 Ordering::Relaxed,
             );
             self.set_tamed(nbt.get_bool("Tame").unwrap_or(false), nbt.get_uuid("Owner"));
+            self.chested_horse.read_nbt(self, nbt).await;
         })
     }
 }
@@ -256,6 +265,30 @@ impl Mob for LlamaEntity {
     fn get_llama(&self) -> Option<&LlamaEntity> {
         Some(self)
     }
+    fn create_mount_inventory(
+        &self,
+        entity: Arc<dyn EntityBase>,
+    ) -> Option<Arc<dyn pumpkin_world::inventory::Inventory>> {
+        let has_chest = self.chested_horse.has_chest();
+        Some(Arc::new(super::chested_horse::MountInventory::new(
+            entity,
+            has_chest.then(|| self.chested_horse.inventory.clone()),
+            if has_chest {
+                (self.strength().clamp(1, 5) * 3) as usize
+            } else {
+                0
+            },
+        )))
+    }
+    fn mob_on_death<'a>(&'a self, _cause: Option<&'a dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            super::chested_horse::drop_mount_inventory_on_death(
+                &self.mob_entity,
+                Some(&self.chested_horse),
+            )
+            .await;
+        })
+    }
     fn configure_bred_child<'a>(
         &'a self,
         mate: &'a dyn EntityBase,
@@ -286,6 +319,7 @@ impl Mob for LlamaEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::tick_equine_natural_regeneration(self);
             super::horse_food::tick_untamed_riding(self).await;
         })
     }
@@ -295,7 +329,19 @@ impl Mob for LlamaEntity {
         stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
         Box::pin(async move {
+            if super::horse_food::open_equine_inventory(self, player).await {
+                return true;
+            }
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityLlamaEat).await {
+                return true;
+            }
+            if self.is_tame()
+                && !self.is_baby()
+                && self
+                    .chested_horse
+                    .try_attach(self, player, stack, Sound::EntityLlamaChest)
+                    .await
+            {
                 return true;
             }
             if self.is_tame()

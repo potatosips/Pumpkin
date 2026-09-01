@@ -40,6 +40,7 @@ pub struct HorseEntity {
     temper: AtomicI32,
     owner: AtomicCell<Option<Uuid>>,
     saddled: AtomicBool,
+    rider_control: super::horse_food::EquineRiderControl,
 }
 
 impl HorseEntity {
@@ -75,6 +76,7 @@ impl HorseEntity {
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
             saddled: AtomicBool::new(false),
+            rider_control: super::horse_food::EquineRiderControl::default(),
         };
         let mob_arc = Arc::new(horse);
         let mob_weak: Weak<dyn Mob> = {
@@ -214,10 +216,11 @@ impl NBTStorage for HorseEntity {
             if let Some(owner) = self.owner.load() {
                 nbt.put_uuid("Owner", owner);
             }
-            if self.saddled.load(Ordering::Relaxed) {
-                let mut saddle = pumpkin_nbt::compound::NbtCompound::new();
-                ItemStack::new(1, &Item::SADDLE).write_item_stack(&mut saddle);
-                nbt.put_compound("SaddleItem", saddle);
+            let saddle = self.saddle_stack().await;
+            if !saddle.is_empty() {
+                let mut saddle_nbt = pumpkin_nbt::compound::NbtCompound::new();
+                saddle.write_item_stack(&mut saddle_nbt);
+                nbt.put_compound("SaddleItem", saddle_nbt);
             }
         })
     }
@@ -227,6 +230,11 @@ impl NBTStorage for HorseEntity {
     ) -> NbtFuture<'a, ()> {
         Box::pin(async move {
             self.mob_entity.read_nbt_non_mut(nbt).await;
+            super::chested_horse::sanitize_body_equipment(
+                &self.mob_entity,
+                super::chested_horse::MountBodySlotKind::HorseArmor,
+            )
+            .await;
             self.read_ageable_nbt(nbt);
             super::animal::Animal::read_animal_nbt(self, nbt);
             if let Some(variant) = nbt.get_int("Variant") {
@@ -237,11 +245,12 @@ impl NBTStorage for HorseEntity {
                 Ordering::Relaxed,
             );
             self.set_tamed(nbt.get_bool("Tame").unwrap_or(false), nbt.get_uuid("Owner"));
-            self.set_saddled(
-                nbt.get_compound("SaddleItem")
-                    .and_then(ItemStack::read_item_stack)
-                    .is_some_and(|stack| stack.item == &Item::SADDLE),
-            );
+            let saddle = nbt
+                .get_compound("SaddleItem")
+                .and_then(ItemStack::read_item_stack)
+                .filter(|stack| stack.item == &Item::SADDLE)
+                .unwrap_or_else(|| ItemStack::EMPTY.clone());
+            self.set_saddle_stack(saddle).await;
         })
     }
 }
@@ -355,9 +364,63 @@ impl Mob for HorseEntity {
         self.saddled.store(saddled, Ordering::Relaxed);
         self.sync_horse_flags();
     }
+    fn saddle_stack(&self) -> EntityBaseFuture<'_, ItemStack> {
+        Box::pin(async move {
+            self.mob_entity
+                .living_entity
+                .entity_equipment
+                .lock()
+                .await
+                .get(&EquipmentSlot::SADDLE)
+        })
+    }
+    fn set_saddle_stack(&self, stack: ItemStack) -> EntityBaseFuture<'_, ()> {
+        Box::pin(async move {
+            let saddled = stack.item == &Item::SADDLE && !stack.is_empty();
+            self.mob_entity
+                .living_entity
+                .entity_equipment
+                .lock()
+                .await
+                .put(
+                    &EquipmentSlot::SADDLE,
+                    if saddled {
+                        stack
+                    } else {
+                        ItemStack::EMPTY.clone()
+                    },
+                );
+            self.set_saddled(saddled);
+        })
+    }
+    fn create_mount_inventory(
+        &self,
+        entity: Arc<dyn EntityBase>,
+    ) -> Option<Arc<dyn pumpkin_world::inventory::Inventory>> {
+        Some(Arc::new(super::chested_horse::MountInventory::new(
+            entity, None, 0,
+        )))
+    }
+    fn mob_on_death<'a>(&'a self, _cause: Option<&'a dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            super::chested_horse::drop_mount_inventory_on_death(&self.mob_entity, None).await;
+        })
+    }
+    fn set_rider_jump_power(&self, power: i32) {
+        self.rider_control.set_jump_power(power);
+    }
+    fn mob_before_living_tick<'a>(
+        &'a self,
+        _caller: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            super::horse_food::tick_ridden_equine(self, &self.rider_control).await;
+        })
+    }
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::tick_equine_natural_regeneration(self);
             super::horse_food::tick_untamed_riding(self).await;
         })
     }
@@ -367,6 +430,9 @@ impl Mob for HorseEntity {
         stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
         Box::pin(async move {
+            if super::horse_food::open_equine_inventory(self, player).await {
+                return true;
+            }
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
                 return true;
             }

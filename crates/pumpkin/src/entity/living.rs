@@ -51,7 +51,7 @@ use pumpkin_data::entity::{EntityPose, EntityStatus, EntityType};
 use pumpkin_data::fluid::Fluid;
 use pumpkin_data::item_stack::{DamageResult, ItemStack};
 use pumpkin_data::sound::SoundCategory;
-use pumpkin_data::{Block, Enchantment, translation};
+use pumpkin_data::{AttributeModifierSlot, Block, Enchantment, translation};
 use pumpkin_data::{damage::DamageType, sound::Sound};
 use pumpkin_inventory::entity_equipment::EntityEquipment;
 use pumpkin_nbt::compound::NbtCompound;
@@ -1365,7 +1365,7 @@ impl LivingEntity {
         self.entity.velocity_dirty.store(true, SeqCst);
     }
 
-    async fn get_jump_velocity(&self, mut strength: f64) -> f64 {
+    pub(crate) async fn get_jump_velocity(&self, mut strength: f64) -> f64 {
         strength *= self.get_attribute_value(&Attributes::JUMP_STRENGTH);
         strength *= f64::from(self.entity.get_jump_velocity_multiplier());
         if let Some(effect) = self.get_effect(&StatusEffect::JUMP_BOOST).await {
@@ -2676,6 +2676,7 @@ impl EntityBase for LivingEntity {
                         EquipmentSlot::CHEST,
                         EquipmentSlot::LEGS,
                         EquipmentSlot::FEET,
+                        EquipmentSlot::BODY,
                     ] {
                         if let Some(stack) = equipment_lock.equipment.get(&slot)
                             && !stack.is_empty()
@@ -2683,6 +2684,12 @@ impl EntityBase for LivingEntity {
                                 stack.get_data_component::<AttributeModifiersImpl>()
                         {
                             for modifier in modifiers.attribute_modifiers.iter() {
+                                if !attribute_modifier_applies_to_equipment_slot(
+                                    &modifier.slot,
+                                    &slot,
+                                ) {
+                                    continue;
+                                }
                                 if modifier.r#type == &Attributes::ARMOR {
                                     armor += modifier.amount as f32;
                                 } else if modifier.r#type == &Attributes::ARMOR_TOUGHNESS {
@@ -2709,6 +2716,7 @@ impl EntityBase for LivingEntity {
                         EquipmentSlot::CHEST,
                         EquipmentSlot::LEGS,
                         EquipmentSlot::FEET,
+                        EquipmentSlot::BODY,
                     ] {
                         if let Some(stack) = equipment_lock.equipment.get(&slot)
                             && !stack.is_empty()
@@ -2716,6 +2724,14 @@ impl EntityBase for LivingEntity {
                                 stack.get_data_component::<EnchantmentsImpl>()
                         {
                             for (enchantment, level) in enchantments.enchantment.iter() {
+                                if !enchantment.slots.iter().any(|enchantment_slot| {
+                                    attribute_modifier_applies_to_equipment_slot(
+                                        enchantment_slot,
+                                        &slot,
+                                    )
+                                }) {
+                                    continue;
+                                }
                                 let mut factor = 0;
                                 let enc = *enchantment;
                                 if enc == &Enchantment::PROTECTION {
@@ -3534,6 +3550,36 @@ fn random_teleport_coordinate(center: f64, diameter: f32, random: f64) -> f64 {
     center + (random - 0.5) * f64::from(diameter)
 }
 
+/// Matches vanilla's equipment-slot-group predicates. In particular, `Armor`
+/// means humanoid armor and does not include the distinct animal `Body` slot.
+fn attribute_modifier_applies_to_equipment_slot(
+    modifier_slot: &AttributeModifierSlot,
+    equipment_slot: &EquipmentSlot,
+) -> bool {
+    match modifier_slot {
+        AttributeModifierSlot::Any => true,
+        AttributeModifierSlot::MainHand => equipment_slot == &EquipmentSlot::MAIN_HAND,
+        AttributeModifierSlot::OffHand => equipment_slot == &EquipmentSlot::OFF_HAND,
+        AttributeModifierSlot::Hand => matches!(
+            equipment_slot,
+            EquipmentSlot::MainHand(_) | EquipmentSlot::OffHand(_)
+        ),
+        AttributeModifierSlot::Feet => equipment_slot == &EquipmentSlot::FEET,
+        AttributeModifierSlot::Legs => equipment_slot == &EquipmentSlot::LEGS,
+        AttributeModifierSlot::Chest => equipment_slot == &EquipmentSlot::CHEST,
+        AttributeModifierSlot::Head => equipment_slot == &EquipmentSlot::HEAD,
+        AttributeModifierSlot::Armor => matches!(
+            equipment_slot,
+            EquipmentSlot::Feet(_)
+                | EquipmentSlot::Legs(_)
+                | EquipmentSlot::Chest(_)
+                | EquipmentSlot::Head(_)
+        ),
+        AttributeModifierSlot::Body => equipment_slot == &EquipmentSlot::BODY,
+        AttributeModifierSlot::Saddle => equipment_slot == &EquipmentSlot::SADDLE,
+    }
+}
+
 /// Mirrors vanilla's strict `random < probability` consume-effect gate.
 const fn consume_effect_probability_applies(probability: f32, random: f32) -> bool {
     random < probability
@@ -3639,6 +3685,34 @@ fn store_float_if_present(target: &AtomicCell<f32>, value: Option<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equipment_slot_groups_keep_animal_body_distinct_from_humanoid_armor() {
+        assert!(attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Body,
+            &EquipmentSlot::BODY
+        ));
+        assert!(attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Any,
+            &EquipmentSlot::BODY
+        ));
+        assert!(!attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Armor,
+            &EquipmentSlot::BODY
+        ));
+        assert!(attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Armor,
+            &EquipmentSlot::CHEST
+        ));
+        assert!(attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Hand,
+            &EquipmentSlot::OFF_HAND
+        ));
+        assert!(!attribute_modifier_applies_to_equipment_slot(
+            &AttributeModifierSlot::Saddle,
+            &EquipmentSlot::BODY
+        ));
+    }
 
     #[test]
     fn vanilla_cramming_threshold_counts_other_entities_and_disables_at_nonpositive_values() {
