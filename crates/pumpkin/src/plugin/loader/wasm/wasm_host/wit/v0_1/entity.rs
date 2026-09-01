@@ -646,6 +646,7 @@ impl HostEntity for PluginHostState {
                 id: modifier.id,
                 amount: modifier.amount,
                 operation: from_wit_modifier_op(modifier.operation),
+                persistent: true,
             };
             living.update_attribute(attribute, |inst| inst.add_or_replace_modifier(internal_mod));
             crate::entity::attributes::send_attribute_updates_for_living(

@@ -119,6 +119,7 @@ impl WitchEntity {
                     id: DRINKING_SPEED_MODIFIER_ID.to_string(),
                     amount: -0.25,
                     operation: ModifierOperation::MultiplyTotal,
+                    persistent: false,
                 });
             });
         crate::entity::attributes::send_attribute_updates_for_living(

@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 #[repr(i8)]
 pub enum ModifierOperation {
     Add = 0,           // add value
@@ -13,11 +13,33 @@ pub enum ModifierOperation {
     MultiplyTotal = 2, // multiply total (applied last)
 }
 
+impl ModifierOperation {
+    pub const fn serialized_name(self) -> &'static str {
+        match self {
+            Self::Add => "add_value",
+            Self::MultiplyBase => "add_multiplied_base",
+            Self::MultiplyTotal => "add_multiplied_total",
+        }
+    }
+
+    pub fn from_serialized_name(name: &str) -> Option<Self> {
+        match name {
+            "add_value" => Some(Self::Add),
+            "add_multiplied_base" => Some(Self::MultiplyBase),
+            "add_multiplied_total" => Some(Self::MultiplyTotal),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Modifier {
     pub id: String,
     pub amount: f64,
     pub operation: ModifierOperation,
+    /// Permanent modifiers are serialized in entity NBT. Runtime modifiers
+    /// supplied by effects or AI state are reconstructed instead.
+    pub persistent: bool,
 }
 
 /// Per-entity attribute instance used at runtime.
@@ -268,6 +290,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn attribute_modifier_operation_nbt_names_round_trip() {
+        for operation in [
+            ModifierOperation::Add,
+            ModifierOperation::MultiplyBase,
+            ModifierOperation::MultiplyTotal,
+        ] {
+            assert_eq!(
+                ModifierOperation::from_serialized_name(operation.serialized_name()),
+                Some(operation)
+            );
+        }
+        assert_eq!(ModifierOperation::from_serialized_name("invalid"), None);
+    }
+
+    #[test]
     fn attribute_modifier_math_evaluation_parity() {
         let mut instance = AttributeInstance::new(10.0);
 
@@ -276,6 +313,7 @@ mod tests {
             id: "test:add".to_string(),
             amount: 2.0,
             operation: ModifierOperation::Add,
+            persistent: true,
         });
         assert_eq!(instance.value(), 12.0);
 
@@ -284,6 +322,7 @@ mod tests {
             id: "test:mul_base".to_string(),
             amount: 0.5,
             operation: ModifierOperation::MultiplyBase,
+            persistent: true,
         });
         assert_eq!(instance.value(), 18.0);
 
@@ -292,6 +331,7 @@ mod tests {
             id: "test:mul_total".to_string(),
             amount: 0.2,
             operation: ModifierOperation::MultiplyTotal,
+            persistent: true,
         });
         assert!((instance.value() - 21.6).abs() < 1e-9);
 
