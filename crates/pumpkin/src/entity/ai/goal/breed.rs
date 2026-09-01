@@ -33,7 +33,6 @@ impl BreedGoal {
         let entity = mob.get_entity();
         let pos = entity.pos.load();
         let world = entity.world.load();
-        let my_type = entity.entity_type;
         let my_uuid = entity.entity_uuid;
 
         let nearby = world.get_nearby_entities(pos, 8.0);
@@ -44,7 +43,7 @@ impl BreedGoal {
             if c_entity.entity_uuid == my_uuid {
                 continue;
             }
-            if c_entity.entity_type != my_type {
+            if !mob.can_mate_with(candidate.as_ref()) {
                 continue;
             }
             if !candidate.is_in_love()

@@ -2267,6 +2267,26 @@ impl NBTStorage for LivingEntity {
         Box::pin(async move {
             self.entity.write_nbt(nbt).await;
             nbt.put("Health", NbtTag::Float(self.health.load()));
+            let attribute_list = {
+                let attributes = self
+                    .attributes
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut list = Vec::with_capacity(attributes.len());
+                for (id, instance) in attributes.iter() {
+                    let Some(attribute) =
+                        Attributes::ALL.iter().find(|attribute| attribute.id == *id)
+                    else {
+                        continue;
+                    };
+                    let mut attribute_nbt = NbtCompound::new();
+                    attribute_nbt.put_string("id", attribute.name.to_string());
+                    attribute_nbt.put_double("base", instance.base_value);
+                    list.push(NbtTag::Compound(attribute_nbt));
+                }
+                list
+            };
+            nbt.put("attributes", NbtTag::List(attribute_list));
             // Avoid persisting a lethal fall distance when the entity is dead to prevent death loops
             let fall_distance = if self.dead.load(Relaxed) {
                 0.0
@@ -2323,7 +2343,37 @@ impl NBTStorage for LivingEntity {
     fn read_nbt_non_mut<'a>(&'a self, nbt: &'a NbtCompound) -> NbtFuture<'a, ()> {
         Box::pin(async {
             self.entity.read_nbt_non_mut(nbt).await;
+            if let Some(attributes) = nbt.get_list("attributes") {
+                let supported: std::collections::HashSet<u8> = self
+                    .entity
+                    .entity_type
+                    .attributes
+                    .iter()
+                    .map(|(attribute, _)| attribute.id)
+                    .collect();
+                for tag in attributes {
+                    let NbtTag::Compound(attribute_nbt) = tag else {
+                        continue;
+                    };
+                    let (Some(id), Some(base)) = (
+                        attribute_nbt.get_string("id"),
+                        attribute_nbt.get_double("base"),
+                    ) else {
+                        continue;
+                    };
+                    if let Some(attribute) = Attributes::ALL
+                        .iter()
+                        .find(|attribute| attribute.name == id && supported.contains(&attribute.id))
+                    {
+                        self.set_attribute_base(attribute, base);
+                    }
+                }
+            }
             store_float_if_present(&self.health, nbt.get_float("Health"));
+            self.health.store(self.health.load().clamp(
+                0.0,
+                self.get_attribute_value(&Attributes::MAX_HEALTH) as f32,
+            ));
 
             // Clamp any persisted absorption to the entity's configured max
             if let Some(raw_abs) = nbt.get_float("AbsorptionAmount") {

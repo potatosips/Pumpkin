@@ -179,6 +179,33 @@ impl Mob for DonkeyEntity {
     fn is_tame(&self) -> bool {
         self.tamed.load(Ordering::Relaxed)
     }
+    fn can_mate_with(&self, mate: &dyn EntityBase) -> bool {
+        super::horse_food::horse_family_offspring_type(
+            &EntityType::DONKEY,
+            mate.get_entity().entity_type,
+        )
+        .is_some()
+    }
+    fn breeding_offspring_type(&self, mate: &dyn EntityBase) -> &'static EntityType {
+        super::horse_food::horse_family_offspring_type(
+            &EntityType::DONKEY,
+            mate.get_entity().entity_type,
+        )
+        .unwrap_or(&EntityType::DONKEY)
+    }
+    fn configure_bred_child<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+        child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            super::horse_food::configure_bred_equine_attributes(
+                &self.mob_entity.living_entity,
+                mate,
+                child,
+            );
+        })
+    }
     fn is_saddled(&self) -> bool {
         self.saddled.load(Ordering::Relaxed)
     }

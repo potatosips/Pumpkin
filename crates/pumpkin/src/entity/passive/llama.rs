@@ -5,7 +5,13 @@ use std::sync::{
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
-    entity::EntityType, item::Item, item_stack::ItemStack, sound::Sound, tracked_data,
+    data_component_impl::EquipmentSlot,
+    entity::EntityType,
+    item::Item,
+    item_stack::ItemStack,
+    sound::Sound,
+    tag::{self, Taggable},
+    tracked_data,
 };
 use pumpkin_protocol::java::client::play::Metadata;
 use rand::RngExt;
@@ -75,6 +81,14 @@ impl LlamaEntity {
         mob_arc
     }
 
+    pub fn variant(&self) -> i32 {
+        self.variant.load(Ordering::Relaxed)
+    }
+
+    pub fn strength(&self) -> i32 {
+        self.strength.load(Ordering::Relaxed)
+    }
+
     pub fn set_variant(&self, variant: i32) {
         let variant = variant.clamp(0, 3);
         self.variant.store(variant, Ordering::Relaxed);
@@ -107,6 +121,15 @@ impl LlamaEntity {
             None,
         );
     }
+}
+
+fn inherited_strength(first: i32, second: i32, roll: i32, mutates: bool) -> i32 {
+    let strongest = first.max(second).clamp(1, 5);
+    (roll.clamp(0, strongest - 1) + 1 + i32::from(mutates)).clamp(1, 5)
+}
+
+fn inherited_variant(first: i32, second: i32, choose_first: bool) -> i32 {
+    if choose_first { first } else { second }.clamp(0, 3)
 }
 
 impl AgeableMob for LlamaEntity {
@@ -202,12 +225,24 @@ impl NBTStorage for LlamaEntity {
 
 #[cfg(test)]
 mod tests {
+    use super::{inherited_strength, inherited_variant};
+
     #[test]
     fn llama_state_ranges() {
         assert_eq!(0.clamp(0, 3), 0);
         assert_eq!(9.clamp(0, 3), 3);
         assert_eq!((-2).clamp(1, 5), 1);
         assert_eq!(9.clamp(1, 5), 5);
+    }
+
+    #[test]
+    fn llama_inheritance_uses_strongest_parent_and_rare_mutation() {
+        assert_eq!(inherited_strength(2, 4, 0, false), 1);
+        assert_eq!(inherited_strength(2, 4, 3, false), 4);
+        assert_eq!(inherited_strength(2, 4, 3, true), 5);
+        assert_eq!(inherited_strength(5, 5, 4, true), 5);
+        assert_eq!(inherited_variant(1, 3, true), 1);
+        assert_eq!(inherited_variant(1, 3, false), 3);
     }
 }
 
@@ -217,6 +252,36 @@ impl Mob for LlamaEntity {
     }
     fn is_tame(&self) -> bool {
         self.tamed.load(Ordering::Relaxed)
+    }
+    fn get_llama(&self) -> Option<&LlamaEntity> {
+        Some(self)
+    }
+    fn configure_bred_child<'a>(
+        &'a self,
+        mate: &'a dyn EntityBase,
+        child: &'a Arc<dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move {
+            let (Some(mate), Some(child)) = (
+                mate.get_mob().and_then(Mob::get_llama),
+                child.get_mob().and_then(Mob::get_llama),
+            ) else {
+                return;
+            };
+            let strongest = self.strength().max(mate.strength()).clamp(1, 5);
+            let mut rng = rand::rng();
+            child.set_strength(inherited_strength(
+                self.strength(),
+                mate.strength(),
+                rng.random_range(0..strongest),
+                rng.random_bool(0.03),
+            ));
+            child.set_variant(inherited_variant(
+                self.variant(),
+                mate.variant(),
+                rng.random_bool(0.5),
+            ));
+        })
     }
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
@@ -232,6 +297,27 @@ impl Mob for LlamaEntity {
         Box::pin(async move {
             if super::horse_food::feed_equine(self, player, stack, Sound::EntityLlamaEat).await {
                 return true;
+            }
+            if self.is_tame()
+                && !self.is_baby()
+                && stack.item.has_tag(&tag::Item::MINECRAFT_WOOL_CARPETS)
+            {
+                let living = &self.mob_entity.living_entity;
+                let mut equipment = living.entity_equipment.lock().await;
+                if equipment.get(&EquipmentSlot::BODY).is_empty() {
+                    let decor = stack.copy_with_count(1);
+                    equipment.put(&EquipmentSlot::BODY, decor.clone());
+                    drop(equipment);
+                    stack.decrement_unless_creative(player.gamemode.load(), 1);
+                    living.send_equipment_changes(&[(EquipmentSlot::BODY, decor)]);
+                    let entity = self.get_entity();
+                    entity.world.load().play_sound(
+                        Sound::EntityLlamaSwag,
+                        pumpkin_data::sound::SoundCategory::Neutral,
+                        &entity.pos.load(),
+                    );
+                    return true;
+                }
             }
             if super::horse_food::mount_equine(self, player, stack).await {
                 return true;
