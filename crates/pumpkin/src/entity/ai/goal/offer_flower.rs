@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use pumpkin_data::entity::EntityType;
 use pumpkin_util::math::boundingbox::BoundingBox;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use super::{Controls, Goal, GoalFuture, to_goal_ticks};
 use crate::entity::{EntityBase, mob::Mob, passive::iron_golem::IronGolemEntity};
@@ -42,7 +42,7 @@ impl Goal for OfferFlowerGoal {
         Box::pin(async move {
             let world = mob.get_entity().world.load();
             if world.level_time.lock().await.is_night()
-                || mob.get_random().random_range(0..START_CHANCE) != 0
+                || mob.get_entity_random().next_bounded_i32(START_CHANCE) != 0
             {
                 return false;
             }

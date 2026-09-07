@@ -14,7 +14,7 @@ use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use uuid::Uuid;
 
 use crate::entity::{
@@ -375,7 +375,7 @@ impl Mob for WolfEntity {
             };
 
             if let Some(mate_wolf) = mate.get_mob().and_then(Mob::get_wolf)
-                && rand::random::<bool>()
+                && self.get_entity_random().next_bool()
             {
                 child_wolf
                     .variant
@@ -462,7 +462,7 @@ impl Mob for WolfEntity {
             let tame = self.is_tame.load(Ordering::Relaxed);
             if !tame && item_stack.item == &Item::BONE {
                 item_stack.decrement_unless_creative(player.gamemode.load(), 1);
-                if rand::rng().random_range(0..3) == 0 {
+                if self.get_entity_random().next_bounded_i32(3) == 0 {
                     let entity = self.get_entity();
                     let mut event =
                         crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(

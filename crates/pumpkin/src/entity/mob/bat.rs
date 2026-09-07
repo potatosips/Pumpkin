@@ -7,8 +7,9 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_util::random::RandomImpl;
 use pumpkin_world::chunk::ChunkHeightmapType;
-use rand::RngExt;
+use time::{Month, OffsetDateTime};
 use tokio::sync::Mutex;
 
 use crate::entity::mob::{Mob, MobEntity};
@@ -19,6 +20,10 @@ const ROOSTING_FLAG: u8 = 1;
 const CLOSE_PLAYER_DISTANCE: f64 = 4.0;
 /// Vanilla: `getMinAmbientSoundDelay()` returns 80 for most mobs
 const MIN_AMBIENT_SOUND_DELAY: i32 = 80;
+
+const fn is_bat_halloween_season(month: Month, day: u8) -> bool {
+    (matches!(month, Month::October) && day >= 20) || (matches!(month, Month::November) && day <= 3)
+}
 
 pub struct BatEntity {
     pub mob_entity: MobEntity,
@@ -43,19 +48,28 @@ impl BatEntity {
         mob_arc
     }
 
-    pub fn check_bat_spawn_rules(world: &World, pos: &BlockPos) -> bool {
+    pub fn check_bat_spawn_rules(
+        world: &World,
+        pos: &BlockPos,
+        random: &mut pumpkin_util::random::RandomGenerator,
+    ) -> bool {
         if pos.0.y >= world.get_heightmap_height(ChunkHeightmapType::WorldSurface, pos.0.x, pos.0.z)
         {
             return false;
         }
-        if rand::random_bool(1.0) {
+        let now = OffsetDateTime::now_utc();
+        let seasonal = is_bat_halloween_season(now.month(), now.day());
+        if !seasonal && random.next_bool() {
             return false;
         }
-        if world.get_max_local_raw_brightness(pos) > rand::random_range(0..4) {
+        let brightness_bound = if seasonal { 7 } else { 4 };
+        if i32::from(world.get_max_local_raw_brightness(pos))
+            > random.next_bounded_i32(brightness_bound)
+        {
             return false;
         }
-        if world
-            .get_block(pos)
+        if !world
+            .get_block(&pos.down())
             .has_tag(&tag::Block::MINECRAFT_BATS_SPAWNABLE_ON)
         {
             return false;
@@ -132,9 +146,8 @@ impl Mob for BatEntity {
                 let above_state = world.get_block_state(&above_pos);
                 if above_state.is_solid_block() {
                     let rotate_head = {
-                        let mut rng = rand::rng();
-                        (rng.random_range(0u32..200) == 0)
-                            .then(|| rng.random_range(0i32..360) as f32)
+                        let mut rng = self.get_entity_random();
+                        (rng.next_bounded_i32(200) == 0).then(|| rng.next_bounded_i32(360) as f32)
                     };
                     if let Some(head_yaw) = rotate_head {
                         entity.head_yaw.store(head_yaw);
@@ -161,9 +174,9 @@ impl Mob for BatEntity {
                 }
 
                 let (should_pick_new, new_target, try_roost) = {
-                    let mut rng = rand::rng();
+                    let mut rng = self.get_entity_random();
                     let should_pick = hanging_pos.is_none()
-                        || rng.random_range(0u32..30) == 0
+                        || rng.next_bounded_i32(30) == 0
                         || hanging_pos.is_some_and(|hp| {
                             let pos = entity.pos.load();
                             let dx = f64::from(hp.0.x) + 0.5 - pos.x;
@@ -174,12 +187,12 @@ impl Mob for BatEntity {
                     let new_target = should_pick.then(|| {
                         let pos = entity.pos.load();
                         BlockPos::new(
-                            pos.x as i32 + rng.random_range(0i32..7) - rng.random_range(0i32..7),
-                            (pos.y + f64::from(rng.random_range(0i32..6)) - 2.0) as i32,
-                            pos.z as i32 + rng.random_range(0i32..7) - rng.random_range(0i32..7),
+                            pos.x as i32 + rng.next_bounded_i32(7) - rng.next_bounded_i32(7),
+                            (pos.y + f64::from(rng.next_bounded_i32(6)) - 2.0) as i32,
+                            pos.z as i32 + rng.next_bounded_i32(7) - rng.next_bounded_i32(7),
                         )
                     });
-                    let try_roost = rng.random_range(0u32..100) == 0;
+                    let try_roost = rng.next_bounded_i32(100) == 0;
                     (should_pick, new_target, try_roost)
                 };
 
@@ -262,11 +275,20 @@ impl Mob for BatEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::Month;
 
     #[test]
     fn bat_constants_and_flag_parity() {
         assert_eq!(ROOSTING_FLAG, 1);
         assert_eq!(CLOSE_PLAYER_DISTANCE, 4.0);
         assert_eq!(MIN_AMBIENT_SOUND_DELAY, 80);
+    }
+
+    #[test]
+    fn bat_halloween_spawn_window_matches_vanilla() {
+        assert!(!is_bat_halloween_season(Month::October, 19));
+        assert!(is_bat_halloween_season(Month::October, 20));
+        assert!(is_bat_halloween_season(Month::November, 3));
+        assert!(!is_bat_halloween_season(Month::November, 4));
     }
 }

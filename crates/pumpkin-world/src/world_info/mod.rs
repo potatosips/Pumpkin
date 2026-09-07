@@ -6,6 +6,7 @@ use pumpkin_data::game_rules::GameRuleRegistry;
 use pumpkin_util::{Difficulty, serde_enum_as_integer, world_seed::Seed};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 pub mod anvil;
 pub mod data_files;
@@ -76,6 +77,12 @@ pub struct LevelData {
     pub level_version: i32,
     #[serde(rename = "map_id", default)]
     pub map_id: i32,
+    #[serde(default)]
+    pub wandering_trader_spawn_delay: i32,
+    #[serde(default)]
+    pub wandering_trader_spawn_chance: i32,
+    #[serde(default)]
+    pub wandering_trader_id: Option<Uuid>,
 
     // These are NOT serialized to level.dat, but are still deserialized from it if present.
     // They are loaded and saved by AnvilLevelInfo via the data_files module.
@@ -332,6 +339,9 @@ impl LevelData {
             world_version: WorldVersion::default(),
             level_version: MAXIMUM_SUPPORTED_LEVEL_VERSION,
             map_id: 0,
+            wandering_trader_spawn_delay: 0,
+            wandering_trader_spawn_chance: 0,
+            wandering_trader_id: None,
             // fields now in data/minecraft/*.dat
             game_rules: GameRuleRegistry::default(),
             world_gen_settings: WorldGenSettings::new(seed),

@@ -32,10 +32,7 @@ impl DefendVillageTargetGoal {
     pub fn new(golem: Arc<IronGolemEntity>) -> Self {
         Self {
             golem,
-            // Vanilla constructs TargetGoal with checkVisibility=false and
-            // checkCanNavigate=true. Pumpkin's navigation reachability probe is
-            // not implemented yet, so enabling it would reject every target.
-            track_target_goal: TrackTargetGoal::new(false, false),
+            track_target_goal: TrackTargetGoal::new(false, true),
             target_predicate: TargetPredicate::create_attackable()
                 .set_base_max_distance(TARGET_RANGE),
             target: None,
@@ -87,12 +84,8 @@ impl Goal for DefendVillageTargetGoal {
                         continue;
                     }
                     if self
-                        .target_predicate
-                        .test(
-                            &world,
-                            Some(&mob.get_mob_entity().living_entity),
-                            &player.living_entity,
-                        )
+                        .track_target_goal
+                        .can_track(mob, Some(&player.living_entity), &self.target_predicate)
                         .await
                     {
                         self.target = Some(player.clone());

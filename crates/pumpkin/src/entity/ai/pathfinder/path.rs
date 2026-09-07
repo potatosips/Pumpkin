@@ -134,6 +134,11 @@ impl Path {
     }
 
     #[must_use]
+    pub fn get_end_node_pos(&self) -> Option<Vector3<i32>> {
+        self.nodes.last().map(|node| node.pos.0)
+    }
+
+    #[must_use]
     pub fn same_as(&self, other: &Self) -> bool {
         self.nodes.len() == other.nodes.len()
             && self.nodes.iter().zip(&other.nodes).all(|(a, b)| a == b)

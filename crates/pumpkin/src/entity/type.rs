@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use pumpkin_data::entity::EntityType;
+use pumpkin_data::tag::{self, Taggable};
+use pumpkin_util::GameMode;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_util::random::RandomImpl;
 use uuid::Uuid;
 
 use crate::entity::boss::ender_dragon::EnderDragonEntity;
@@ -96,7 +99,6 @@ use crate::entity::passive::snow_golem::SnowGolemEntity;
 use crate::entity::passive::squid::SquidEntity;
 use crate::entity::passive::strider::StriderEntity;
 use crate::entity::passive::tadpole::TadpoleEntity;
-use crate::entity::passive::trader_llama::TraderLlamaEntity;
 use crate::entity::passive::tropical_fish::TropicalFishEntity;
 use crate::entity::passive::turtle::TurtleEntity;
 use crate::entity::passive::villager::VillagerEntity;
@@ -112,6 +114,7 @@ use crate::entity::projectile::eye_of_ender::EyeOfEnder;
 use crate::entity::projectile::fireball::FireballEntity;
 use crate::entity::projectile::firework_rocket::FireworkRocketEntity;
 use crate::entity::projectile::lingering_potion::LingeringPotionEntity;
+use crate::entity::projectile::llama_spit::LlamaSpitEntity;
 use crate::entity::projectile::shulker_bullet::ShulkerBulletEntity;
 use crate::entity::projectile::small_fireball::SmallFireballEntity;
 use crate::entity::projectile::snowball::SnowballEntity;
@@ -196,7 +199,9 @@ pub fn from_type(
         id if id == EntityType::ZOMBIE_HORSE.id => ZombieHorseEntity::new(entity),
         id if id == EntityType::SKELETON_HORSE.id => SkeletonHorseEntity::new(entity),
         id if id == EntityType::LLAMA.id => LlamaEntity::new(entity),
-        id if id == EntityType::TRADER_LLAMA.id => TraderLlamaEntity::new(entity),
+        // TraderLlama extends Llama in Vanilla; use the shared implementation so it retains
+        // llama inventory, taming, breeding, caravan, combat, and persistence behavior.
+        id if id == EntityType::TRADER_LLAMA.id => LlamaEntity::new(entity),
         id if id == EntityType::WANDERING_TRADER.id => WanderingTraderEntity::new(entity),
         id if id == EntityType::ALLAY.id => AllayEntity::new(entity),
         id if id == EntityType::ARMADILLO.id => ArmadilloEntity::new(entity),
@@ -246,6 +251,7 @@ pub fn from_type(
         id if id == EntityType::END_CRYSTAL.id => Arc::new(EndCrystalEntity::new(entity)),
         id if id == EntityType::ENDER_PEARL.id => Arc::new(EnderPearlEntity::new(entity)),
         id if id == EntityType::SNOWBALL.id => Arc::new(SnowballEntity::new(entity)),
+        id if id == EntityType::LLAMA_SPIT.id => Arc::new(LlamaSpitEntity::new(entity)),
         id if id == EntityType::EGG.id => Arc::new(EggEntity::new(entity)),
         id if id == EntityType::EXPERIENCE_BOTTLE.id => {
             Arc::new(ExperienceBottleEntity::new(entity))
@@ -347,8 +353,35 @@ pub fn check_spawn_rules(
     world: &World,
     pos: &BlockPos,
     is_thundering: bool,
+    random: &mut pumpkin_util::random::RandomGenerator,
 ) -> bool {
     let id = entity_type.id;
+    let bright_ground = |spawnable_on: &'static pumpkin_data::tag::Tag| {
+        world.get_block(&pos.down()).has_tag(spawnable_on)
+            && world.get_max_local_raw_brightness(pos) > 8
+    };
+    let surface_water = || {
+        pos.0.y >= world.sea_level - 13
+            && pos.0.y <= world.sea_level
+            && world
+                .get_fluid(&pos.down())
+                .has_tag(&tag::Fluid::MINECRAFT_WATER)
+            && world.get_block(&pos.up()) == &pumpkin_data::Block::WATER
+    };
+    let no_player_within_five = || {
+        let center = pos.to_centered_f64();
+        world
+            .players
+            .load()
+            .iter()
+            .filter(|player| {
+                !matches!(
+                    player.gamemode.load(),
+                    GameMode::Creative | GameMode::Spectator
+                )
+            })
+            .all(|player| player.position().squared_distance_to_vec(&center) > 25.0)
+    };
 
     if id == EntityType::BOGGED.id
         || id == EntityType::CAVE_SPIDER.id
@@ -371,13 +404,174 @@ pub fn check_spawn_rules(
         || id == EntityType::VINDICATOR.id
         || id == EntityType::WARDEN.id
     {
-        return mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering);
+        return mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering, random);
     }
     if id == EntityType::BAT.id {
-        return bat::BatEntity::check_bat_spawn_rules(world, pos);
+        return bat::BatEntity::check_bat_spawn_rules(world, pos, random);
     }
     if id == EntityType::SLIME.id {
-        return SlimeEntity::check_slime_spawn_rules(world, pos);
+        return SlimeEntity::check_slime_spawn_rules(world, pos, random);
+    }
+    if id == EntityType::GHAST.id {
+        return world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful
+            && random.next_bounded_i32(20) == 0;
+    }
+    if id == EntityType::MAGMA_CUBE.id {
+        return world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful;
+    }
+    if id == EntityType::BLAZE.id {
+        return world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful;
+    }
+    if id == EntityType::HOGLIN.id || id == EntityType::PIGLIN.id {
+        return world.get_block(&pos.down()) != &pumpkin_data::Block::NETHER_WART_BLOCK;
+    }
+    if id == EntityType::ZOMBIFIED_PIGLIN.id {
+        return world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful
+            && world.get_block(&pos.down()) != &pumpkin_data::Block::NETHER_WART_BLOCK;
+    }
+    if id == EntityType::STRIDER.id {
+        let max_y = world.min_y + world.dimension.height;
+        let mut scan = *pos;
+        while scan.0.y < max_y && world.get_fluid(&scan).has_tag(&tag::Fluid::MINECRAFT_LAVA) {
+            scan = scan.up();
+        }
+        return scan.0.y < max_y && world.get_block_state(&scan).is_air();
+    }
+    if id == EntityType::GUARDIAN.id {
+        return (random.next_bounded_i32(20) == 0 || !world.can_see_sky(pos))
+            && world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful
+            && world.get_fluid(pos).has_tag(&tag::Fluid::MINECRAFT_WATER)
+            && world
+                .get_fluid(&pos.down())
+                .has_tag(&tag::Fluid::MINECRAFT_WATER);
+    }
+    if id == EntityType::DROWNED.id {
+        if !world
+            .get_fluid(&pos.down())
+            .has_tag(&tag::Fluid::MINECRAFT_WATER)
+        {
+            return false;
+        }
+        let base = mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering, random)
+            && world.get_fluid(pos).has_tag(&tag::Fluid::MINECRAFT_WATER);
+        if world
+            .get_biome(pos)
+            .has_tag(&tag::WorldgenBiome::MINECRAFT_MORE_FREQUENT_DROWNED_SPAWNS)
+        {
+            return random.next_bounded_i32(15) == 0 && base;
+        }
+        return random.next_bounded_i32(40) == 0 && pos.0.y < world.sea_level - 5 && base;
+    }
+    if id == EntityType::HUSK.id {
+        return mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering, random)
+            && world.can_see_sky(pos);
+    }
+    if id == EntityType::STRAY.id {
+        let max_y = world.min_y + world.dimension.height;
+        let mut above = pos.up();
+        while above.0.y < max_y && world.get_block(&above) == &pumpkin_data::Block::POWDER_SNOW {
+            above = above.up();
+        }
+        return mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering, random)
+            && world.can_see_sky(&above.down());
+    }
+    if id == EntityType::ENDERMITE.id || id == EntityType::SILVERFISH.id {
+        return world.level_info.load().difficulty != pumpkin_util::Difficulty::Peaceful
+            && no_player_within_five();
+    }
+    if id == EntityType::AXOLOTL.id {
+        return world
+            .get_block(&pos.down())
+            .has_tag(&tag::Block::MINECRAFT_AXOLOTLS_SPAWNABLE_ON);
+    }
+    if id == EntityType::COD.id
+        || id == EntityType::DOLPHIN.id
+        || id == EntityType::PUFFERFISH.id
+        || id == EntityType::SALMON.id
+        || id == EntityType::SQUID.id
+    {
+        return surface_water();
+    }
+    if id == EntityType::GLOW_SQUID.id {
+        return pos.0.y <= world.sea_level - 33
+            && world.get_max_local_raw_brightness(pos) == 0
+            && world.get_block(pos) == &pumpkin_data::Block::WATER;
+    }
+    if id == EntityType::TROPICAL_FISH.id {
+        let water_column = world
+            .get_fluid(&pos.down())
+            .has_tag(&tag::Fluid::MINECRAFT_WATER)
+            && world.get_block(&pos.up()) == &pumpkin_data::Block::WATER;
+        return water_column
+            && (world.get_biome(pos).has_tag(
+                &tag::WorldgenBiome::MINECRAFT_ALLOWS_TROPICAL_FISH_SPAWNS_AT_ANY_HEIGHT,
+            ) || surface_water());
+    }
+    if id == EntityType::TURTLE.id {
+        return pos.0.y < world.sea_level + 4
+            && world
+                .get_block(&pos.down())
+                .has_tag(&tag::Block::MINECRAFT_SAND)
+            && world.get_max_local_raw_brightness(pos) > 8;
+    }
+    if id == EntityType::CAMEL.id
+        || id == EntityType::CHICKEN.id
+        || id == EntityType::COW.id
+        || id == EntityType::DONKEY.id
+        || id == EntityType::HORSE.id
+        || id == EntityType::LLAMA.id
+        || id == EntityType::PANDA.id
+        || id == EntityType::PIG.id
+        || id == EntityType::SHEEP.id
+    {
+        // Animal.checkAnimalSpawnRules for natural spawning: the block below
+        // must be in #animals_spawnable_on and raw brightness must exceed 8.
+        return bright_ground(&tag::Block::MINECRAFT_ANIMALS_SPAWNABLE_ON);
+    }
+    if id == EntityType::ARMADILLO.id {
+        return bright_ground(&tag::Block::MINECRAFT_ARMADILLO_SPAWNABLE_ON);
+    }
+    if id == EntityType::FOX.id {
+        return bright_ground(&tag::Block::MINECRAFT_FOXES_SPAWNABLE_ON);
+    }
+    if id == EntityType::FROG.id {
+        return bright_ground(&tag::Block::MINECRAFT_FROGS_SPAWNABLE_ON);
+    }
+    if id == EntityType::GOAT.id {
+        return bright_ground(&tag::Block::MINECRAFT_GOATS_SPAWNABLE_ON);
+    }
+    if id == EntityType::MOOSHROOM.id {
+        return bright_ground(&tag::Block::MINECRAFT_MOOSHROOMS_SPAWNABLE_ON);
+    }
+    if id == EntityType::OCELOT.id {
+        // Ocelot's registered static predicate is a 2-in-3 gate. Its instance
+        // obstruction check then requires sea level or above and grass/leaves
+        // below; fold that check here because natural spawning currently runs
+        // predicates before constructing the mob.
+        if random.next_bounded_i32(3) == 0 || pos.0.y < world.sea_level {
+            return false;
+        }
+        let below = world.get_block(&pos.down());
+        return below == &pumpkin_data::Block::GRASS_BLOCK
+            || below.has_tag(&tag::Block::MINECRAFT_LEAVES);
+    }
+    if id == EntityType::POLAR_BEAR.id {
+        if world
+            .get_biome(pos)
+            .has_tag(&tag::WorldgenBiome::MINECRAFT_POLAR_BEARS_SPAWN_ON_ALTERNATE_BLOCKS)
+        {
+            return bright_ground(&tag::Block::MINECRAFT_POLAR_BEARS_SPAWNABLE_ON_ALTERNATE);
+        }
+        return bright_ground(&tag::Block::MINECRAFT_ANIMALS_SPAWNABLE_ON);
+    }
+    if id == EntityType::PARROT.id {
+        return bright_ground(&tag::Block::MINECRAFT_PARROTS_SPAWNABLE_ON);
+    }
+    if id == EntityType::RABBIT.id {
+        return bright_ground(&tag::Block::MINECRAFT_RABBITS_SPAWNABLE_ON);
+    }
+    if id == EntityType::WOLF.id {
+        return bright_ground(&tag::Block::MINECRAFT_WOLVES_SPAWNABLE_ON);
     }
 
     // TODO

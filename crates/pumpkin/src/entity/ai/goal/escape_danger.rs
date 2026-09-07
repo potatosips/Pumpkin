@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use super::{Controls, Goal, GoalFuture};
 use crate::entity::{ai::pathfinder::NavigatorGoal, mob::Mob};
 use pumpkin_util::math::vector3::Vector3;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 const RANGE: i32 = 5;
 const RECENT_DAMAGE_TICKS: i32 = 100;
@@ -42,11 +42,11 @@ impl EscapeDangerGoal {
 
     fn find_escape_target(mob: &dyn Mob) -> Option<Vector3<f64>> {
         let pos = mob.get_mob_entity().living_entity.entity.pos.load();
-        let mut rng = mob.get_random();
+        let mut rng = mob.get_entity_random();
 
         for _ in 0..TARGET_ATTEMPTS {
-            let dx = rng.random_range(-RANGE..=RANGE);
-            let dz = rng.random_range(-RANGE..=RANGE);
+            let dx = rng.next_inbetween_i32(-RANGE, RANGE);
+            let dz = rng.next_inbetween_i32(-RANGE, RANGE);
             if dx == 0 && dz == 0 {
                 continue;
             }

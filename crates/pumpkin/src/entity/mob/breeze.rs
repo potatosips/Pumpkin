@@ -83,6 +83,10 @@ impl Mob for BreezeEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
     }
+
+    fn can_attack_type(&self, target_type: &'static EntityType) -> bool {
+        target_type == &EntityType::PLAYER || target_type == &EntityType::IRON_GOLEM
+    }
 }
 
 #[cfg(test)]

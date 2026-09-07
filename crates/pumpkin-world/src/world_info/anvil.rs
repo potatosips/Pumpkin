@@ -19,10 +19,9 @@ use crate::world_info::{
     MINIMUM_SUPPORTED_LEVEL_VERSION, MINIMUM_SUPPORTED_WORLD_DATA_VERSION, WorldVersion,
     data_files::{
         apply_java_game_rules_from_nbt, java_game_rules_to_nbt, minecraft_data_dir,
-        read_game_rules, read_wandering_trader, read_weather, read_world_clocks,
-        read_world_gen_settings, write_custom_boss_events_stub, write_game_rules,
-        write_scheduled_events_stub, write_wandering_trader, write_weather, write_world_clocks,
-        write_world_gen_settings,
+        read_game_rules, read_weather, read_world_clocks, read_world_gen_settings,
+        write_custom_boss_events_stub, write_game_rules, write_scheduled_events_stub,
+        write_weather, write_world_clocks, write_world_gen_settings,
     },
     default_data_packs,
 };
@@ -246,6 +245,13 @@ fn level_data_from_nbt(data: &NbtCompound, seed: i64) -> LevelData {
     if let Some(map_id) = data.get_int("map_id") {
         level_data.map_id = map_id;
     }
+    if let Some(delay) = data.get_int("WanderingTraderSpawnDelay") {
+        level_data.wandering_trader_spawn_delay = delay;
+    }
+    if let Some(chance) = data.get_int("WanderingTraderSpawnChance") {
+        level_data.wandering_trader_spawn_chance = chance;
+    }
+    level_data.wandering_trader_id = data.get_uuid("WanderingTraderId");
     if let Some(day_time) = data.get_long("DayTime") {
         level_data.day_time = day_time;
     }
@@ -284,6 +290,19 @@ fn level_data_to_nbt(info: &LevelData, data: &mut NbtCompound) {
     data.put_compound("Version", world_version_to_nbt(&info.world_version));
     data.put_int("version", info.level_version);
     data.put_int("map_id", info.map_id);
+    data.put_int(
+        "WanderingTraderSpawnDelay",
+        info.wandering_trader_spawn_delay,
+    );
+    data.put_int(
+        "WanderingTraderSpawnChance",
+        info.wandering_trader_spawn_chance,
+    );
+    if let Some(id) = info.wandering_trader_id {
+        data.put_uuid("WanderingTraderId", id);
+    } else {
+        data.child_tags.remove("WanderingTraderId");
+    }
     data.put_compound("GameRules", java_game_rules_to_nbt(&info.game_rules));
     put_world_gen_settings_seed(data, info.world_gen_settings.seed);
 }
@@ -421,13 +440,6 @@ impl WorldInfoWriter for AnvilLevelInfo {
             error!("Failed to write weather.dat: {e}");
         }
 
-        // wandering_trader.dat (stub / load-save)
-        let mut wandering_trader = read_wandering_trader(level_folder);
-        wandering_trader.data_version = data_version;
-        if let Err(e) = write_wandering_trader(level_folder, &wandering_trader) {
-            error!("Failed to write wandering_trader.dat: {e}");
-        }
-
         // custom_boss_events.dat
         if let Err(e) = write_custom_boss_events_stub(level_folder, data_version) {
             error!("Failed to write custom_boss_events.dat: {e}");
@@ -476,9 +488,30 @@ mod test {
         },
     };
 
-    use super::{AnvilLevelInfo, LEVEL_DAT_FILE_NAME, LevelDat, WorldInfoReader, WorldInfoWriter};
+    use super::{
+        AnvilLevelInfo, LEVEL_DAT_FILE_NAME, LevelDat, WorldInfoReader, WorldInfoWriter,
+        level_data_from_nbt, level_data_to_nbt,
+    };
 
     const CONVERTED_LEVEL_NAME: &str = "Converted World";
+
+    #[test]
+    fn wandering_trader_fields_use_vanilla_level_dat_keys() {
+        let id = uuid::Uuid::from_u128(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210);
+        let mut expected = LevelData::default(pumpkin_util::world_seed::Seed(7));
+        expected.wandering_trader_spawn_delay = 12_000;
+        expected.wandering_trader_spawn_chance = 50;
+        expected.wandering_trader_id = Some(id);
+        let mut nbt = NbtCompound::new();
+        level_data_to_nbt(&expected, &mut nbt);
+        assert_eq!(nbt.get_int("WanderingTraderSpawnDelay"), Some(12_000));
+        assert_eq!(nbt.get_int("WanderingTraderSpawnChance"), Some(50));
+        assert_eq!(nbt.get_uuid("WanderingTraderId"), Some(id));
+        let decoded = level_data_from_nbt(&nbt, 7);
+        assert_eq!(decoded.wandering_trader_spawn_delay, 12_000);
+        assert_eq!(decoded.wandering_trader_spawn_chance, 50);
+        assert_eq!(decoded.wandering_trader_id, Some(id));
+    }
 
     fn converted_level_dat(seed: Option<i64>) -> NbtCompound {
         let mut world_version = NbtCompound::new();
@@ -792,6 +825,9 @@ mod test {
                 series: "main".to_string(),
             },
             map_id: 0,
+            wandering_trader_spawn_delay: 0,
+            wandering_trader_spawn_chance: 0,
+            wandering_trader_id: None,
         },
     });
 

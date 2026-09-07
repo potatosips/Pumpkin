@@ -5,8 +5,8 @@ use std::sync::{
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
-    data_component_impl::EquipmentSlot, entity::EntityType, item::Item, item_stack::ItemStack,
-    sound::Sound, tracked_data,
+    damage::DamageType, data_component_impl::EquipmentSlot, entity::EntityType, item::Item,
+    item_stack::ItemStack, sound::Sound, tracked_data,
 };
 use pumpkin_protocol::java::client::play::Metadata;
 use uuid::Uuid;
@@ -15,8 +15,10 @@ use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
-        look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
-        wander_around::WanderAroundGoal,
+        ambient_stand::AmbientStandGoal, breed::BreedGoal, escape_danger::EscapeDangerGoal,
+        follow_parent::FollowParentGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, run_around_like_crazy::RunAroundLikeCrazyGoal,
+        swim::SwimGoal, tempt::TemptGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -40,6 +42,9 @@ pub struct MuleEntity {
 impl MuleEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
+        // Naturally spawned/summoned mules run the same chested-horse health
+        // randomization as donkeys. Bred mules are overwritten by inheritance.
+        super::horse_food::randomize_chested_horse_health(&mob_entity);
         let mule = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
@@ -65,12 +70,21 @@ impl MuleEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(SwimGoal::default()));
-            goal_selector.add_goal(1, Box::new(WanderAroundGoal::new(0.7)));
+            goal_selector.add_goal(1, EscapeDangerGoal::new(1.2));
+            goal_selector.add_goal(1, Box::new(RunAroundLikeCrazyGoal::new()));
+            goal_selector.add_goal(2, BreedGoal::new(1.0));
             goal_selector.add_goal(
-                2,
+                3,
+                Box::new(TemptGoal::new(1.25, super::horse_food::HORSE_TEMPT_ITEMS)),
+            );
+            goal_selector.add_goal(4, Box::new(FollowParentGoal::new(1.0)));
+            goal_selector.add_goal(6, Box::new(WanderAroundGoal::new(0.7)));
+            goal_selector.add_goal(
+                7,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
             );
-            goal_selector.add_goal(3, Box::new(RandomLookAroundGoal::default()));
+            goal_selector.add_goal(8, Box::new(RandomLookAroundGoal::default()));
+            goal_selector.add_goal(9, Box::new(AmbientStandGoal::new(400)));
         };
 
         mob_arc
@@ -135,6 +149,14 @@ impl super::horse_food::Equine for MuleEntity {
     fn can_breed(&self) -> bool {
         false
     }
+    fn jump_sound(&self) -> Sound {
+        Sound::EntityMuleJump
+    }
+}
+impl super::animal::Animal for MuleEntity {
+    fn is_food(&self, _item_stack: &ItemStack) -> bool {
+        false
+    }
 }
 impl NBTStorage for MuleEntity {
     fn write_nbt<'a>(
@@ -144,6 +166,8 @@ impl NBTStorage for MuleEntity {
         Box::pin(async move {
             self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
+            super::animal::Animal::write_animal_nbt(self, nbt);
+            super::horse_food::write_equine_state_nbt(self, nbt);
             nbt.put_bool("Tame", self.tamed.load(Ordering::Relaxed));
             nbt.put_int("Temper", self.temper.load(Ordering::Relaxed));
             if let Some(owner) = self.owner.load() {
@@ -170,6 +194,8 @@ impl NBTStorage for MuleEntity {
             )
             .await;
             self.read_ageable_nbt(nbt);
+            super::animal::Animal::read_animal_nbt(self, nbt);
+            super::horse_food::read_equine_state_nbt(self, nbt);
             self.temper.store(
                 nbt.get_int("Temper").unwrap_or(0).clamp(0, 100),
                 Ordering::Relaxed,
@@ -190,8 +216,27 @@ impl Mob for MuleEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
     }
+    fn on_damage<'a>(
+        &'a self,
+        _damage_type: DamageType,
+        _source: Option<&'a dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { super::horse_food::react_to_equine_damage(self) })
+    }
+    fn can_ambient_stand<'a>(&'a self) -> EntityBaseFuture<'a, bool> {
+        Box::pin(super::horse_food::can_equine_ambient_stand(self))
+    }
+    fn tick_untamed_riding<'a>(&'a self) -> EntityBaseFuture<'a, ()> {
+        Box::pin(super::horse_food::tick_untamed_riding(self))
+    }
+    fn start_ambient_stand(&self) {
+        super::horse_food::start_equine_ambient_stand(self, Sound::EntityMuleAmbient);
+    }
     fn is_tame(&self) -> bool {
         self.tamed.load(Ordering::Relaxed)
+    }
+    fn can_mate_with<'a>(&'a self, _mate: &'a dyn EntityBase) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async { false })
     }
     fn is_saddled(&self) -> bool {
         self.saddled.load(Ordering::Relaxed)
@@ -271,9 +316,9 @@ impl Mob for MuleEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::try_start_equine_grazing(self).await;
             super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
-            super::horse_food::tick_untamed_riding(self).await;
         })
     }
     fn mob_interact<'a>(
@@ -285,11 +330,15 @@ impl Mob for MuleEntity {
             if super::horse_food::open_equine_inventory(self, player).await {
                 return true;
             }
-            if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
+            if super::horse_food::feed_equine(self, player, stack).await {
                 return true;
             }
-            if !stack.is_empty() && !self.is_tame() {
-                super::horse_food::make_equine_mad(self, Sound::EntityDonkeyAngry);
+            if super::horse_food::should_make_untamed_equine_mad(
+                self.is_tame(),
+                stack.is_empty(),
+                super::horse_food::is_equine_food(self, stack.item),
+            ) {
+                super::horse_food::make_equine_mad(self);
                 return true;
             }
             if self.is_tame()
@@ -301,7 +350,7 @@ impl Mob for MuleEntity {
             {
                 return true;
             }
-            if super::horse_food::mount_equine(self, player, stack).await {
+            if super::horse_food::mount_equine(self, player).await {
                 return true;
             }
             self.mob_entity.mob_interact(player, stack).await

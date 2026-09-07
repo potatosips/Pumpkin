@@ -13,6 +13,7 @@ use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -270,7 +271,7 @@ impl SnifferEntity {
 
         if self.drop_seed_at_tick.load(Ordering::Relaxed) == current_tick {
             let head_pos = self.get_head_position();
-            let seed_item = if rand::random::<bool>() {
+            let seed_item = if self.get_entity_random().next_bool() {
                 &Item::TORCHFLOWER_SEEDS
             } else {
                 &Item::PITCHER_POD

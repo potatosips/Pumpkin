@@ -5,8 +5,8 @@ use std::sync::{
 
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
-    attributes::Attributes, data_component_impl::EquipmentSlot, entity::EntityType, item::Item,
-    item_stack::ItemStack, sound::Sound, tracked_data,
+    attributes::Attributes, damage::DamageType, data_component_impl::EquipmentSlot,
+    entity::EntityType, item::Item, item_stack::ItemStack, sound::Sound, tracked_data,
 };
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::math::vector3::Vector3;
@@ -17,7 +17,9 @@ use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, LightningBoltEntity, NBTStorage, NbtFuture,
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
-        look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal, swim::SwimGoal,
+        ambient_stand::AmbientStandGoal, breed::BreedGoal, escape_danger::EscapeDangerGoal,
+        follow_parent::FollowParentGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, run_around_like_crazy::RunAroundLikeCrazyGoal,
         wander_around::WanderAroundGoal,
     },
     mob::skeleton::skeleton::SkeletonEntity,
@@ -72,13 +74,17 @@ impl SkeletonHorseEntity {
                 .goals_selector
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            goals.add_goal(0, Box::new(SwimGoal::default()));
-            goals.add_goal(1, Box::new(WanderAroundGoal::new(0.7)));
+            goals.add_goal(1, EscapeDangerGoal::new(1.2));
+            goals.add_goal(1, Box::new(RunAroundLikeCrazyGoal::new()));
+            goals.add_goal(2, BreedGoal::new(1.0));
+            goals.add_goal(4, Box::new(FollowParentGoal::new(1.0)));
+            goals.add_goal(6, Box::new(WanderAroundGoal::new(0.7)));
             goals.add_goal(
-                2,
+                7,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
             );
-            goals.add_goal(3, Box::new(RandomLookAroundGoal::default()));
+            goals.add_goal(8, Box::new(RandomLookAroundGoal::default()));
+            goals.add_goal(9, Box::new(AmbientStandGoal::new(400)));
         }
         mob_arc
     }
@@ -191,10 +197,9 @@ impl SkeletonHorseEntity {
                 .living_entity
                 .hurt_cooldown
                 .store(60, Ordering::Relaxed);
-            horse.get_entity().velocity.store(Vector3::new(
-                (rand::random::<f64>() - rand::random::<f64>()) * 1.1485,
-                0.0,
-                (rand::random::<f64>() - rand::random::<f64>()) * 1.1485,
+            horse.get_entity().velocity.store(trap_horse_push(
+                rand::random::<f64>(),
+                rand::random::<f64>(),
             ));
             horse
                 .get_entity()
@@ -243,6 +248,18 @@ impl super::horse_food::Equine for SkeletonHorseEntity {
     fn can_breed(&self) -> bool {
         false
     }
+    fn jump_sound(&self) -> Sound {
+        undead_horse_jump_sound(
+            self.get_entity().entity_type,
+            self.mob_entity.living_entity.is_in_water(),
+        )
+    }
+}
+
+impl super::animal::Animal for SkeletonHorseEntity {
+    fn is_food(&self, _item_stack: &ItemStack) -> bool {
+        false
+    }
 }
 
 impl NBTStorage for SkeletonHorseEntity {
@@ -253,6 +270,8 @@ impl NBTStorage for SkeletonHorseEntity {
         Box::pin(async move {
             self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
+            super::animal::Animal::write_animal_nbt(self, nbt);
+            super::horse_food::write_equine_state_nbt(self, nbt);
             nbt.put_bool("Tame", self.tamed.load(Ordering::Relaxed));
             nbt.put_int("Temper", self.temper.load(Ordering::Relaxed));
             if let Some(owner) = self.owner.load() {
@@ -286,6 +305,8 @@ impl NBTStorage for SkeletonHorseEntity {
             )
             .await;
             self.read_ageable_nbt(nbt);
+            super::animal::Animal::read_animal_nbt(self, nbt);
+            super::horse_food::read_equine_state_nbt(self, nbt);
             self.temper.store(
                 nbt.get_int("Temper").unwrap_or(0).clamp(0, 100),
                 Ordering::Relaxed,
@@ -312,8 +333,32 @@ impl Mob for SkeletonHorseEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
     }
+    fn on_damage<'a>(
+        &'a self,
+        _damage_type: DamageType,
+        _source: Option<&'a dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { super::horse_food::react_to_equine_damage(self) })
+    }
+    fn can_ambient_stand<'a>(&'a self) -> EntityBaseFuture<'a, bool> {
+        Box::pin(super::horse_food::can_equine_ambient_stand(self))
+    }
+    fn tick_untamed_riding<'a>(&'a self) -> EntityBaseFuture<'a, ()> {
+        Box::pin(super::horse_food::tick_untamed_riding(self))
+    }
+    fn start_ambient_stand(&self) {
+        let sound = if self.get_entity().entity_type == &EntityType::ZOMBIE_HORSE {
+            Sound::EntityZombieHorseAmbient
+        } else {
+            Sound::EntitySkeletonHorseAmbient
+        };
+        super::horse_food::start_equine_ambient_stand(self, sound);
+    }
     fn is_tame(&self) -> bool {
         self.tamed.load(Ordering::Relaxed)
+    }
+    fn can_mate_with<'a>(&'a self, _mate: &'a dyn EntityBase) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async { false })
     }
     fn is_saddled(&self) -> bool {
         self.saddled.load(Ordering::Relaxed)
@@ -386,12 +431,13 @@ impl Mob for SkeletonHorseEntity {
     fn mob_tick<'a>(&'a self, caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             if self.skeleton_trap.load(Ordering::Relaxed) {
-                if self
-                    .get_entity()
-                    .world
-                    .load()
-                    .get_closest_player(self.get_entity().pos.load(), 10.0)
-                    .is_some()
+                let world = self.get_entity().world.load();
+                if world
+                    .get_nearby_players(self.get_entity().pos.load(), 10.0)
+                    .iter()
+                    .any(|player| {
+                        trap_player_qualifies(player.get_entity().is_alive(), player.is_spectator())
+                    })
                 {
                     self.activate_skeleton_trap(caller).await;
                     return;
@@ -405,6 +451,7 @@ impl Mob for SkeletonHorseEntity {
                 }
             }
             self.ageable_ai_step();
+            super::horse_food::try_start_equine_grazing(self).await;
             super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
         })
@@ -415,15 +462,26 @@ impl Mob for SkeletonHorseEntity {
         stack: &'a mut ItemStack,
     ) -> EntityBaseFuture<'a, bool> {
         Box::pin(async move {
+            // ZombieHorse rejects every untamed interaction. SkeletonHorse does not
+            // override AbstractHorse.mobInteract and therefore remains tameable by riding.
+            if !undead_horse_allows_interaction(self.get_entity().entity_type, self.is_tame()) {
+                return self.mob_entity.mob_interact(player, stack).await;
+            }
             if super::horse_food::open_equine_inventory(self, player).await {
                 return true;
             }
-            if self.is_tame()
-                && super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await
-            {
+            if super::horse_food::feed_equine(self, player, stack).await {
                 return true;
             }
-            if self.is_tame() && super::horse_food::mount_equine(self, player, stack).await {
+            if super::horse_food::should_make_untamed_equine_mad(
+                self.is_tame(),
+                stack.is_empty(),
+                super::horse_food::is_equine_food(self, stack.item),
+            ) {
+                super::horse_food::make_equine_mad(self);
+                return true;
+            }
+            if super::horse_food::mount_equine(self, player).await {
                 return true;
             }
             self.mob_entity.mob_interact(player, stack).await
@@ -433,7 +491,29 @@ impl Mob for SkeletonHorseEntity {
 
 #[cfg(test)]
 mod tests {
-    use super::{horse_flags, randomized_undead_jump_strength, skeleton_trap_expires};
+    use super::{
+        horse_flags, randomized_undead_jump_strength, skeleton_trap_expires, trap_horse_push,
+        trap_player_qualifies, undead_horse_allows_interaction, undead_horse_jump_sound,
+    };
+    use pumpkin_data::entity::EntityType;
+    use pumpkin_data::sound::Sound;
+    use pumpkin_util::math::vector3::Vector3;
+
+    #[test]
+    fn zombie_horse_rejects_untamed_interaction_but_skeleton_horse_does_not() {
+        assert!(!undead_horse_allows_interaction(
+            &EntityType::ZOMBIE_HORSE,
+            false
+        ));
+        assert!(undead_horse_allows_interaction(
+            &EntityType::ZOMBIE_HORSE,
+            true
+        ));
+        assert!(undead_horse_allows_interaction(
+            &EntityType::SKELETON_HORSE,
+            false
+        ));
+    }
 
     #[test]
     fn skeleton_horse_tame_and_saddle_metadata_bits_match_abstract_horse() {
@@ -460,8 +540,61 @@ mod tests {
                 < 1.0e-12
         );
     }
+
+    #[test]
+    fn skeleton_trap_horse_push_uses_positive_uniform_components() {
+        assert_eq!(trap_horse_push(0.0, 0.0), Vector3::new(0.0, 0.0, 0.0));
+        assert_eq!(trap_horse_push(1.0, 1.0), Vector3::new(1.1485, 0.0, 1.1485));
+    }
+
+    #[test]
+    fn skeleton_trap_requires_a_living_non_spectator_player() {
+        assert!(trap_player_qualifies(true, false));
+        assert!(!trap_player_qualifies(false, false));
+        assert!(!trap_player_qualifies(true, true));
+    }
+
+    #[test]
+    fn only_submerged_skeleton_horses_use_the_water_jump_sound() {
+        assert_eq!(
+            undead_horse_jump_sound(&EntityType::SKELETON_HORSE, true),
+            Sound::EntitySkeletonHorseJumpWater
+        );
+        assert_eq!(
+            undead_horse_jump_sound(&EntityType::SKELETON_HORSE, false),
+            Sound::EntityHorseJump
+        );
+        assert_eq!(
+            undead_horse_jump_sound(&EntityType::ZOMBIE_HORSE, true),
+            Sound::EntityHorseJump
+        );
+    }
 }
 
 const fn skeleton_trap_expires(current_trap_time: i32) -> bool {
     current_trap_time >= 18_000
+}
+
+fn undead_horse_allows_interaction(entity_type: &EntityType, is_tame: bool) -> bool {
+    entity_type != &EntityType::ZOMBIE_HORSE || is_tame
+}
+
+fn trap_horse_push(x_roll: f64, z_roll: f64) -> Vector3<f64> {
+    Vector3::new(
+        x_roll.clamp(0.0, 1.0) * 1.1485,
+        0.0,
+        z_roll.clamp(0.0, 1.0) * 1.1485,
+    )
+}
+
+const fn trap_player_qualifies(is_alive: bool, is_spectator: bool) -> bool {
+    is_alive && !is_spectator
+}
+
+fn undead_horse_jump_sound(entity_type: &EntityType, is_in_water: bool) -> Sound {
+    if entity_type == &EntityType::SKELETON_HORSE && is_in_water {
+        Sound::EntitySkeletonHorseJumpWater
+    } else {
+        Sound::EntityHorseJump
+    }
 }

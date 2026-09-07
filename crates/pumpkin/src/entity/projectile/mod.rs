@@ -24,6 +24,7 @@ pub mod fireball;
 pub mod firework_rocket;
 pub mod fishing_bobber;
 pub mod lingering_potion;
+pub mod llama_spit;
 pub mod shulker_bullet;
 pub mod small_fireball;
 pub mod snowball;
@@ -37,6 +38,7 @@ pub fn is_projectile(entity_type: &EntityType) -> bool {
         || *entity_type == EntityType::TRIDENT
         || *entity_type == EntityType::EGG
         || *entity_type == EntityType::SNOWBALL
+        || *entity_type == EntityType::LLAMA_SPIT
         || *entity_type == EntityType::FIREWORK_ROCKET
         || *entity_type == EntityType::WIND_CHARGE
         || *entity_type == EntityType::SPLASH_POTION

@@ -5,10 +5,9 @@ use crate::entity::mob::Mob;
 use crate::entity::predicate::EntityPredicate;
 use crate::entity::{EntityBase, player::Player};
 use pumpkin_data::entity::EntityType;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use std::sync::{Arc, Weak};
 
-#[expect(dead_code)]
 pub struct LookAtEntityGoal {
     goal_control: Controls,
     target: Option<Arc<dyn EntityBase>>,
@@ -17,6 +16,7 @@ pub struct LookAtEntityGoal {
     chance: f32,
     look_forward: bool,
     target_type: &'static EntityType,
+    any_mob: bool,
     target_predicate: TargetPredicate,
 }
 
@@ -38,6 +38,7 @@ impl LookAtEntityGoal {
             chance,
             look_forward,
             target_type,
+            any_mob: false,
             target_predicate,
         }
     }
@@ -51,6 +52,14 @@ impl LookAtEntityGoal {
         Box::new(Self::new(mob_weak, target_type, range, 0.02, false))
     }
 
+    /// Java's class-based `LookAtPlayerGoal` can target the broad `Mob` class.
+    #[must_use]
+    pub fn for_any_mob(mob_weak: Weak<dyn Mob>, range: f32) -> Box<Self> {
+        let mut goal = Self::new(mob_weak, &EntityType::PLAYER, range, 0.02, false);
+        goal.any_mob = true;
+        Box::new(goal)
+    }
+
     fn create_target_predicate(
         mob_weak: Weak<dyn Mob>,
         target_type: &'static EntityType,
@@ -59,12 +68,14 @@ impl LookAtEntityGoal {
         let mut target_predicate = TargetPredicate::create_non_attackable();
         target_predicate.base_max_distance = range as f64; // TODO
         if target_type == &EntityType::PLAYER {
-            target_predicate.set_predicate(move |living_entity, _world| {
+            target_predicate.set_predicate(move |entity_id, world| {
                 let mob_weak = mob_weak.clone();
                 async move {
-                    if let Some(mob_arc) = mob_weak.upgrade() {
+                    if let (Some(mob_arc), Some(target)) =
+                        (mob_weak.upgrade(), world.get_entity_by_id(entity_id))
+                    {
                         let predicate = EntityPredicate::Rides(mob_arc.get_entity());
-                        predicate.test(&living_entity.entity).await
+                        predicate.test(target.get_entity()).await
                     } else {
                         // MobEntity is destroyed
                         false
@@ -84,20 +95,71 @@ impl Goal for LookAtEntityGoal {
                 return false;
             }
 
-            if mob.get_random().random::<f32>() >= self.chance {
+            if mob.get_entity_random().next_f32() >= self.chance {
                 return false;
             }
 
             let world = mob_entity.living_entity.entity.world.load();
             let mob_pos = mob_entity.living_entity.entity.pos.load();
 
-            if *self.target_type == EntityType::PLAYER {
-                self.target = world
-                    .get_closest_player(mob_pos, self.range.into())
-                    .map(|p: Arc<Player>| p as Arc<dyn EntityBase>);
+            let mut candidates: Vec<Arc<dyn EntityBase>> = if self.any_mob {
+                let self_id = mob_entity.living_entity.entity.entity_id;
+                let mut candidates = Vec::new();
+                world.extend_entities_in_box_where(
+                    &mut candidates,
+                    usize::MAX,
+                    mob_entity.living_entity.entity.bounding_box.load().expand(
+                        self.range.into(),
+                        3.0,
+                        self.range.into(),
+                    ),
+                    |entity| {
+                        entity.get_entity().entity_id != self_id
+                            && entity.get_entity().is_alive()
+                            && entity.get_mob().is_some()
+                    },
+                );
+                candidates
+            } else if *self.target_type == EntityType::PLAYER {
+                world
+                    .get_nearby_players(mob_pos, self.range.into())
+                    .into_iter()
+                    .map(|player: Arc<Player>| player as Arc<dyn EntityBase>)
+                    .collect()
             } else {
-                self.target =
-                    world.get_closest_entity(mob_pos, self.range.into(), Some(&[self.target_type]));
+                let mut candidates = Vec::new();
+                world.extend_entities_in_box_where(
+                    &mut candidates,
+                    usize::MAX,
+                    mob_entity.living_entity.entity.bounding_box.load().expand(
+                        self.range.into(),
+                        3.0,
+                        self.range.into(),
+                    ),
+                    |entity| entity.get_entity().entity_type == self.target_type,
+                );
+                candidates
+            };
+            candidates.sort_by(|a, b| {
+                a.get_entity()
+                    .pos
+                    .load()
+                    .squared_distance_to_vec(&mob_pos)
+                    .total_cmp(&b.get_entity().pos.load().squared_distance_to_vec(&mob_pos))
+            });
+            self.target = None;
+            for candidate in candidates {
+                let Some(living) = candidate.get_living_entity() else {
+                    continue;
+                };
+                if self
+                    .target_predicate
+                    .test(&world, Some(&mob_entity.living_entity), living)
+                    .await
+                {
+                    self.target = Some(candidate);
+                    break;
+                }
             }
 
             self.target.is_some()
@@ -127,7 +189,7 @@ impl Goal for LookAtEntityGoal {
 
     fn start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
         Box::pin(async {
-            self.look_time = self.get_tick_count(40 + mob.get_random().random_range(0..40));
+            self.look_time = self.get_tick_count(40 + mob.get_entity_random().next_bounded_i32(40));
         })
     }
 
@@ -162,5 +224,19 @@ impl Goal for LookAtEntityGoal {
 
     fn controls(&self) -> Controls {
         self.goal_control
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LookAtEntityGoal;
+
+    #[test]
+    fn any_mob_constructor_uses_the_class_wide_mode() {
+        let weak = std::sync::Weak::<crate::entity::passive::cow::CowEntity>::new();
+        let weak: std::sync::Weak<dyn crate::entity::mob::Mob> = weak;
+        let goal = LookAtEntityGoal::for_any_mob(weak, 8.0);
+        assert!(goal.any_mob);
+        assert_eq!(goal.range, 8.0);
     }
 }

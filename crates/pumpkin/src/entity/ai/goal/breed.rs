@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use crate::entity::{
-    EntityBase, ai::pathfinder::NavigatorGoal, experience_orb::ExperienceOrbEntity, mob::Mob,
+    EntityBase, ai::pathfinder::NavigatorGoal, ai::target_predicate::TargetPredicate,
+    experience_orb::ExperienceOrbEntity, mob::Mob,
 };
 use pumpkin_data::entity::EntityStatus;
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
+use pumpkin_util::random::RandomImpl;
+use uuid::Uuid;
 
 use super::{Controls, Goal, GoalFuture};
 
@@ -24,9 +27,9 @@ impl BreedGoal {
         })
     }
 
-    fn find_mate(mob: &dyn Mob) -> Option<Arc<dyn EntityBase>> {
+    async fn find_mate(mob: &dyn Mob) -> Option<Arc<dyn EntityBase>> {
         let mob_entity = mob.get_mob_entity();
-        if !mob_entity.is_in_love() || mob.is_sitting() || !mob.can_breed_now() {
+        if !mob_entity.is_in_love() {
             return None;
         }
 
@@ -34,6 +37,9 @@ impl BreedGoal {
         let pos = entity.pos.load();
         let world = entity.world.load();
         let my_uuid = entity.entity_uuid;
+        let conditions = TargetPredicate::create_non_attackable()
+            .set_base_max_distance(8.0)
+            .ignore_visibility();
 
         let nearby = world.get_nearby_entities(pos, 8.0);
         let mut closest: Option<(f64, Arc<dyn EntityBase>)> = None;
@@ -43,15 +49,18 @@ impl BreedGoal {
             if c_entity.entity_uuid == my_uuid {
                 continue;
             }
-            if !mob.can_mate_with(candidate.as_ref()) {
+            let Some(candidate_living) = candidate.get_living_entity() else {
                 continue;
-            }
-            if !candidate.is_in_love()
-                || !candidate.is_breeding_ready()
+            };
+            if !conditions
+                .test(
+                    world.as_ref(),
+                    Some(&mob_entity.living_entity),
+                    candidate_living,
+                )
+                .await
+                || !mob.can_mate_with(candidate.as_ref()).await
                 || candidate.is_panicking()
-                || candidate
-                    .get_mob()
-                    .is_some_and(|mob| mob.is_sitting() || !mob.can_breed_now())
             {
                 continue;
             }
@@ -71,9 +80,10 @@ impl BreedGoal {
         let entity = mob.get_entity();
         let world = entity.world.load();
 
-        if let Some(player) = mob_entity
-            .breeder
-            .load()
+        let mate_breeder = mate
+            .get_mob()
+            .and_then(|mob| mob.get_mob_entity().breeder.load());
+        if let Some(player) = select_breeder(mob_entity.breeder.load(), mate_breeder)
             .and_then(|uuid| world.get_player_by_uuid(uuid))
         {
             player
@@ -111,8 +121,28 @@ impl BreedGoal {
             Some(ActorEventType::InLoveHearts),
         );
         if world.level_info.load().game_rules.mob_drops {
-            ExperienceOrbEntity::spawn(&world, parent_pos, rand::random_range(1..=7)).await;
+            let experience = (mob.get_entity_random().next_bounded_i32(7) + 1) as u32;
+            ExperienceOrbEntity::spawn(&world, parent_pos, experience).await;
         }
+    }
+}
+
+fn select_breeder(first: Option<Uuid>, second: Option<Uuid>) -> Option<Uuid> {
+    first.or(second)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_breeder;
+    use uuid::Uuid;
+
+    #[test]
+    fn breeder_attribution_prefers_first_parent_then_falls_back_to_mate() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        assert_eq!(select_breeder(Some(first), Some(second)), Some(first));
+        assert_eq!(select_breeder(None, Some(second)), Some(second));
+        assert_eq!(select_breeder(None, None), None);
     }
 }
 
@@ -120,33 +150,25 @@ impl Goal for BreedGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
             let mob_entity = mob.get_mob_entity();
-            if !mob_entity.is_breeding_ready()
-                || !mob_entity.is_in_love()
-                || mob.is_sitting()
-                || !mob.can_breed_now()
-            {
+            if !mob_entity.is_in_love() {
                 return false;
             }
 
-            self.mate = Self::find_mate(mob);
+            self.mate = Self::find_mate(mob).await;
             self.mate.is_some()
         })
     }
 
-    fn should_continue<'a>(&'a self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
+    fn should_continue<'a>(&'a self, _mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async {
             let Some(mate) = &self.mate else {
                 return false;
             };
 
-            if mob.is_sitting()
-                || !mob.can_breed_now()
-                || !mate.get_entity().is_alive()
-                || mate.is_panicking()
-                || mate
-                    .get_mob()
-                    .is_some_and(|mob| mob.is_sitting() || !mob.can_breed_now())
-            {
+            let alive = mate
+                .get_living_entity()
+                .is_some_and(|living| living.is_part_of_game());
+            if !alive || mate.is_panicking() {
                 return false;
             }
 
@@ -160,16 +182,10 @@ impl Goal for BreedGoal {
         })
     }
 
-    fn stop<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
+    fn stop<'a>(&'a mut self, _mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
         Box::pin(async {
             self.mate = None;
             self.timer = 0;
-            let mut navigator = mob
-                .get_mob_entity()
-                .navigator
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            navigator.stop();
         })
     }
 
@@ -203,14 +219,10 @@ impl Goal for BreedGoal {
 
             self.timer += 1;
 
-            if self.timer >= 60 && dist_sq < 9.0 {
+            if self.timer >= self.get_tick_count(60) && dist_sq < 9.0 {
                 Self::breed(mob, mate.as_ref()).await;
             }
         })
-    }
-
-    fn should_run_every_tick(&self) -> bool {
-        true
     }
 
     fn controls(&self) -> Controls {

@@ -5,7 +5,7 @@ use crate::entity::{ai::goal::ParentHandle, mob::Mob};
 use crate::world::World;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ impl<M: MoveToTargetPos> MoveToTargetPosGoal<M> {
     }
 
     pub fn get_interval(mob: &dyn Mob) -> i32 {
-        to_goal_ticks(MIN_INTERVAL + mob.get_random().random_range(0..MIN_INTERVAL))
+        to_goal_ticks(MIN_INTERVAL + mob.get_entity_random().next_bounded_i32(MIN_INTERVAL))
     }
 
     pub async fn find_target_pos(&mut self, mob: &dyn Mob) -> bool {
@@ -161,9 +161,10 @@ impl<M: MoveToTargetPos> Goal for MoveToTargetPosGoal<M> {
         Box::pin(async {
             Self::start_moving_to_target(mob);
             self.trying_time = 0;
-            let random = mob.get_random().random_range(0..MIN_WAITING_TIME);
+            let mut rng = mob.get_entity_random();
+            let random = rng.next_bounded_i32(MIN_WAITING_TIME);
             self.safe_waiting_time =
-                mob.get_random().random_range(random..MIN_WAITING_TIME) + MIN_WAITING_TIME;
+                rng.next_bounded_i32(MIN_WAITING_TIME - random) + random + MIN_WAITING_TIME;
         })
     }
 

@@ -97,7 +97,22 @@ const NODE_REACH_XZ: f64 = 0.5;
 const NODE_REACH_Y: f64 = 1.0;
 const MAX_YAW_TURN_PER_TICK: f32 = 90.0;
 
+fn endpoint_within_target_reach(end: Vector3<i32>, target: Vector3<i32>) -> bool {
+    let dx = i64::from(end.x) - i64::from(target.x);
+    let dz = i64::from(end.z) - i64::from(target.z);
+    dx * dx + dz * dz <= 2
+}
+
 impl Navigator {
+    #[must_use]
+    pub fn detached_probe(&self) -> Self {
+        let mut probe = Self::default();
+        probe.mob_width = self.mob_width;
+        probe.mob_height = self.mob_height;
+        probe.path_type_overrides = self.path_type_overrides.clone();
+        probe
+    }
+
     pub fn set_progress(&mut self, goal: NavigatorGoal) {
         self.is_idle.store(false, Ordering::Relaxed);
         if let Some(current) = &self.current_goal {
@@ -154,6 +169,21 @@ impl Navigator {
         self.compute_path(entity, destination)
             .await
             .is_some_and(|path| path.can_reach() || path.get_dist_to_target() <= distance)
+    }
+
+    /// Performs Vanilla's `TargetGoal.canReach` probe without changing this
+    /// navigator's active path. Vanilla accepts an endpoint whose horizontal
+    /// squared distance from the target block is at most 2.25.
+    pub async fn can_reach_target(
+        &mut self,
+        entity: &LivingEntity,
+        destination: Vector3<f64>,
+    ) -> bool {
+        let target = destination.to_block_pos();
+        self.compute_path(entity, destination)
+            .await
+            .and_then(|path| path.get_end_node_pos())
+            .is_some_and(|end| endpoint_within_target_reach(end, target.0))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -481,5 +511,24 @@ impl Navigator {
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.is_idle.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::endpoint_within_target_reach;
+    use pumpkin_util::math::vector3::Vector3;
+
+    #[test]
+    fn target_goal_reach_uses_vanilla_horizontal_radius() {
+        let target = Vector3::new(0, 64, 0);
+        assert!(endpoint_within_target_reach(
+            Vector3::new(1, -50, 1),
+            target
+        ));
+        assert!(!endpoint_within_target_reach(
+            Vector3::new(2, 64, 0),
+            target
+        ));
     }
 }

@@ -5,7 +5,7 @@ use crate::entity::ai::pathfinder::NavigatorGoal;
 use crate::entity::mob::Mob;
 use crate::entity::predicate::EntityPredicate;
 use pumpkin_util::math::vector3::Vector3;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 const MAX_ATTACK_TIME: i64 = 20;
 
@@ -204,7 +204,7 @@ impl Goal for MeleeAttackGoal {
             let should_update_nav = self.update_countdown_ticks <= 0
                 && (self.last_target_position.is_none_or(|last_pos| {
                     current_target_pos.squared_distance_to_vec(&last_pos) >= 1.0
-                }) || mob.get_random().random_range(0..20) == 0);
+                }) || mob.get_entity_random().next_bounded_i32(20) == 0);
 
             if should_update_nav {
                 let mob_pos = mob.get_entity().pos.load();
@@ -220,7 +220,7 @@ impl Goal for MeleeAttackGoal {
                     speed: self.speed,
                 });
                 self.last_target_position = Some(current_target_pos);
-                self.update_countdown_ticks = 4 + mob.get_random().random_range(0..7);
+                self.update_countdown_ticks = 4 + mob.get_entity_random().next_bounded_i32(7);
                 if dist_sq > 1024.0 {
                     self.update_countdown_ticks += 10;
                 } else if dist_sq > 256.0 {
@@ -238,7 +238,7 @@ impl Goal for MeleeAttackGoal {
                     .get_entity()
                     .on_ground
                     .load(std::sync::atomic::Ordering::Relaxed)
-                && mob.get_random().random_range(0..10) == 0
+                && mob.get_entity_random().next_bounded_i32(10) == 0
             {
                 let velocity = Self::spider_leap_velocity(
                     mob.get_entity().velocity.load(),

@@ -2,8 +2,8 @@ use super::{Controls, Goal, GoalFuture};
 use crate::entity::mob::Mob;
 use pumpkin_data::Block;
 use pumpkin_data::tag::{self, Taggable};
+use pumpkin_util::random::RandomImpl;
 use pumpkin_world::world::BlockFlags;
-use rand::RngExt;
 
 const MAX_TIMER: i32 = 40;
 
@@ -31,7 +31,7 @@ impl EatGrassGoal {
 impl Goal for EatGrassGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async move {
-            if mob.get_random().random_range(0..1000) != 0 {
+            if mob.get_entity_random().next_bounded_i32(1000) != 0 {
                 return false;
             }
 

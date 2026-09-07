@@ -6,7 +6,7 @@ use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use super::{Controls, Goal, GoalFuture};
 use crate::entity::ai::pathfinder::NavigatorGoal;
@@ -97,7 +97,7 @@ impl WitchAttackGoal {
             has_slowness,
             has_poison,
             has_weakness,
-            mob.get_random().random_range(0.0..1.0) < 0.25,
+            mob.get_entity_random().next_f32() < 0.25,
         );
 
         let shooter = mob.get_entity();

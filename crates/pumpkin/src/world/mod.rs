@@ -13,6 +13,7 @@ use pumpkin_protocol::bedrock::client::{
 use pumpkin_protocol::bedrock::network_item::{NetworkItemDescriptor, NetworkItemStackDescriptor};
 use pumpkin_protocol::codec::data_component::data_to_proto_sound;
 use pumpkin_world::generation::proto_chunk::GenerationCache;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Weak};
 use std::{
@@ -28,6 +29,7 @@ pub mod map;
 pub mod portal;
 pub mod time;
 pub mod villager_poi;
+pub mod wandering_trader_spawner;
 
 use crate::block::RandomTickArgs;
 use crate::world::chunker::is_within_view_distance;
@@ -141,7 +143,7 @@ use pumpkin_util::{
 };
 use pumpkin_util::{
     math::{get_section_cord, position::chunk_section_from_pos, vector2::Vector2},
-    random::{RandomImpl, get_seed, xoroshiro128::Xoroshiro},
+    random::{RandomGenerator, RandomImpl, get_seed, xoroshiro128::Xoroshiro},
 };
 use pumpkin_world::inventory::Clearable;
 use pumpkin_world::world::{GetBlockError, WorldPortalExt};
@@ -245,6 +247,8 @@ pub struct World {
     pub uuid: Uuid,
     /// The underlying level, responsible for chunk management and terrain generation.
     pub level: Arc<Level>,
+    /// Obfuscated seed used by Java's biome zoom, cached once per world.
+    biome_zoom_seed: i64,
     pub level_info: Arc<ArcSwap<LevelData>>,
     /// A map of active players within the world, keyed by their unique UUID.
     pub players: ArcSwap<Vec<Arc<Player>>>,
@@ -262,6 +266,10 @@ pub struct World {
     pub worldborder: Mutex<Worldborder>,
     /// The world's time, including counting ticks for weather, time cycles, and statistics.
     pub level_time: Mutex<LevelTime>,
+    /// Lock-free authoritative snapshot for synchronous spawn predicates.
+    pub time_of_day_snapshot: AtomicI64,
+    /// Persistent level RandomSource used by synchronous natural-spawn logic.
+    pub spawn_random: std::sync::Mutex<RandomGenerator>,
     /// The type of dimension the world is in.
     pub dimension: Dimension,
     pub sea_level: i32,
@@ -394,6 +402,7 @@ impl World {
 
         Self {
             uuid: Uuid::new_v4(),
+            biome_zoom_seed: pumpkin_world::biome::hash_seed(level.seed.0),
             level,
             level_info,
             players: ArcSwap::new(Arc::new(Vec::new())),
@@ -403,6 +412,10 @@ impl World {
             scoreboard: Mutex::new(Scoreboard::default()),
             worldborder: Mutex::new(Worldborder::new(0.0, 0.0, 5.999_996_8E7, 0, 5, 300)),
             level_time: Mutex::new(LevelTime::new()),
+            time_of_day_snapshot: AtomicI64::new(0),
+            spawn_random: std::sync::Mutex::new(RandomGenerator::Xoroshiro(Xoroshiro::from_seed(
+                get_seed(),
+            ))),
             dimension,
             weather: Mutex::new(Weather::new()),
             block_registry,
@@ -1597,6 +1610,8 @@ impl World {
             let mut level_time = self.level_time.lock().await;
             let advance_time = self.level_info.load().game_rules.advance_time;
             level_time.tick(advance_time);
+            self.time_of_day_snapshot
+                .store(level_time.time_of_day, Relaxed);
 
             // Auto-save logic
             if level_time.world_age % 100 == 0 {
@@ -1638,6 +1653,8 @@ impl World {
             let mut level_time = self.level_time.lock().await;
             let time = time_of_day + 24000;
             level_time.set_time(time - time % 24000);
+            self.time_of_day_snapshot
+                .store(level_time.time_of_day, Relaxed);
             level_time.send_time(self).await;
             drop(level_time);
 
@@ -2273,6 +2290,8 @@ impl World {
     pub async fn set_time_of_day(&self, time: i64) {
         let mut level_time = self.level_time.lock().await;
         level_time.set_time(time);
+        self.time_of_day_snapshot
+            .store(level_time.time_of_day, Relaxed);
         level_time.send_time(self).await;
     }
 
@@ -5434,6 +5453,15 @@ impl World {
     }
 
     pub fn get_biome(&self, position: &BlockPos) -> &'static Biome {
+        let [x, y, z] = pumpkin_world::biome::zoomed_quart_position(
+            self.biome_zoom_seed,
+            [position.0.x, position.0.y, position.0.z],
+        );
+        let position = BlockPos::new(
+            x << 2,
+            (y << 2).clamp(self.min_y, self.min_y + self.dimension.height - 1),
+            z << 2,
+        );
         let chunk_pos = position.chunk_position();
         if let Some(chunk) = self.level.loaded_chunks.get(&chunk_pos) {
             let id = chunk

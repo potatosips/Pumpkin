@@ -151,6 +151,9 @@ impl CommandExecutor for ActionExecutor {
                         TimeArgumentConsumer::find_arg(args, ARG_TIME)?
                     };
                     level_time.set_time(time_count.into());
+                    world
+                        .time_of_day_snapshot
+                        .store(level_time.time_of_day, std::sync::atomic::Ordering::Relaxed);
                     level_time.send_time(world).await;
                     sender
                         .send_message(pumpkin_macros::translate_cross!(
@@ -165,6 +168,9 @@ impl CommandExecutor for ActionExecutor {
                 Action::Add => {
                     let time_count = TimeArgumentConsumer::find_arg(args, ARG_TIME)?;
                     level_time.add_time(time_count.into());
+                    world
+                        .time_of_day_snapshot
+                        .store(level_time.time_of_day, std::sync::atomic::Ordering::Relaxed);
                     level_time.send_time(world).await;
                     let total_ticks = level_time.time_of_day;
                     sender

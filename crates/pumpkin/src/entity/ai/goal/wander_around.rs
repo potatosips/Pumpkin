@@ -2,7 +2,7 @@ use super::{Controls, Goal, GoalFuture, to_goal_ticks};
 use crate::entity::{ai::pathfinder::NavigatorGoal, mob::Mob};
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 pub struct WanderAroundGoal {
     goal_control: Controls,
@@ -26,12 +26,12 @@ impl WanderAroundGoal {
         let entity = &mob.get_mob_entity().living_entity.entity;
         let world = entity.world.load();
         let pos = entity.pos.load();
-        let mut rng = mob.get_random();
+        let mut rng = mob.get_entity_random();
 
         let horizontal_range = 8.0;
 
-        let dx = rng.random_range(-horizontal_range..=horizontal_range);
-        let dz = rng.random_range(-horizontal_range..=horizontal_range);
+        let dx = rng.next_f64() * horizontal_range * 2.0 - horizontal_range;
+        let dz = rng.next_f64() * horizontal_range * 2.0 - horizontal_range;
         let target_x = pos.x + dx;
         let target_z = pos.z + dz;
 
@@ -68,7 +68,7 @@ impl Goal for WanderAroundGoal {
             if mob.is_sitting() {
                 return false;
             }
-            if mob.get_random().random_range(0..self.chance) != 0 {
+            if mob.get_entity_random().next_bounded_i32(self.chance) != 0 {
                 return false;
             }
 

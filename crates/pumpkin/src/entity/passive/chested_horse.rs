@@ -15,6 +15,7 @@ use pumpkin_data::{
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_world::inventory::{Clearable, Inventory, InventoryFuture, SimpleInventory};
+use rand::{RngExt, rng};
 
 use crate::entity::{EntityBase, mob::MobEntity, player::Player};
 
@@ -245,9 +246,9 @@ impl ChestedHorseData {
         }
     }
 
-    pub async fn try_attach(
+    pub(super) async fn try_attach<T: super::horse_food::Equine>(
         &self,
-        entity: &dyn EntityBase,
+        equine: &T,
         player: &Player,
         stack: &mut ItemStack,
         sound: Sound,
@@ -256,13 +257,18 @@ impl ChestedHorseData {
             return false;
         }
 
-        self.set_has_chest(entity, true);
+        self.set_has_chest(equine, true);
+        super::horse_food::open_equine_mouth(equine);
         stack.decrement_unless_creative(player.gamemode.load(), 1);
-        let entity = entity.get_entity();
-        entity
-            .world
-            .load()
-            .play_sound(sound, SoundCategory::Neutral, &entity.pos.load());
+        let entity = equine.get_entity();
+        let mut random = rng();
+        entity.world.load().play_sound_fine(
+            sound,
+            SoundCategory::Neutral,
+            &entity.pos.load(),
+            1.0,
+            chest_equip_pitch(random.random::<f32>(), random.random::<f32>()),
+        );
         true
     }
 
@@ -280,6 +286,10 @@ impl ChestedHorseData {
         );
         drops
     }
+}
+
+fn chest_equip_pitch(first_roll: f32, second_roll: f32) -> f32 {
+    1.0 + (first_roll - second_roll) * 0.2
 }
 
 pub async fn drop_mount_inventory_on_death(mob: &MobEntity, chested: Option<&ChestedHorseData>) {
@@ -385,5 +395,11 @@ mod tests {
             MountBodySlotKind::None,
             &ItemStack::EMPTY
         ));
+    }
+
+    #[test]
+    fn chest_equip_sound_uses_vanilla_pitch_range() {
+        assert_eq!(chest_equip_pitch(0.0, 1.0), 0.8);
+        assert_eq!(chest_equip_pitch(1.0, 0.0), 1.2);
     }
 }

@@ -21,7 +21,7 @@ use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::random::xoroshiro128::Xoroshiro;
-use pumpkin_util::random::{RandomGenerator, get_seed};
+use pumpkin_util::random::{RandomGenerator, RandomImpl, get_seed};
 use pumpkin_util::version::JavaMinecraftVersion;
 use pumpkin_world::inventory::Inventory;
 use rand::RngExt;
@@ -68,6 +68,7 @@ pub mod zombified_piglin;
 
 pub struct MobEntity {
     pub living_entity: LivingEntity,
+    pub random: std::sync::Mutex<RandomGenerator>,
     pub goals_selector: std::sync::Mutex<GoalSelector>,
     pub target_selector: std::sync::Mutex<GoalSelector>,
     pub navigator: std::sync::Mutex<Navigator>,
@@ -107,6 +108,9 @@ impl MobEntity {
     pub fn new(entity: Entity) -> Self {
         Self {
             living_entity: LivingEntity::new(entity),
+            random: std::sync::Mutex::new(RandomGenerator::Xoroshiro(Xoroshiro::from_seed(
+                get_seed(),
+            ))),
             goals_selector: std::sync::Mutex::new(GoalSelector::default()),
             target_selector: std::sync::Mutex::new(GoalSelector::default()),
             navigator: std::sync::Mutex::new(Navigator::default()),
@@ -285,9 +289,14 @@ impl MobEntity {
                 .intersects(&target_hitbox)
     }
 
-    pub fn is_dark_enough_to_spawn(world: &World, pos: &BlockPos, is_thundering: bool) -> bool {
+    pub fn is_dark_enough_to_spawn(
+        world: &World,
+        pos: &BlockPos,
+        is_thundering: bool,
+        random: &mut RandomGenerator,
+    ) -> bool {
         let sky_light = world.get_sky_light_level(pos);
-        if sky_light > rand::random_range(0..32) {
+        if i32::from(sky_light) > random.next_bounded_i32(32) {
             return false;
         }
 
@@ -300,22 +309,25 @@ impl MobEntity {
         }
 
         let current_brightness = if is_thundering {
-            (sky_light - 10).max(block_light)
+            sky_light.saturating_sub(10).max(block_light)
         } else {
             sky_light.max(block_light)
         };
 
-        // TODO
-        let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(get_seed()));
-        current_brightness <= dimension.monster_spawn_light_level.get(&mut random) as u8
+        current_brightness <= dimension.monster_spawn_light_level.get(random) as u8
     }
 
-    pub fn check_monster_spawn_rules(world: &World, pos: &BlockPos, is_thundering: bool) -> bool {
+    pub fn check_monster_spawn_rules(
+        world: &World,
+        pos: &BlockPos,
+        is_thundering: bool,
+        random: &mut RandomGenerator,
+    ) -> bool {
         if world.level_info.load().difficulty == Difficulty::Peaceful {
             return false;
         }
 
-        if !Self::is_dark_enough_to_spawn(world, pos, is_thundering) {
+        if !Self::is_dark_enough_to_spawn(world, pos, is_thundering, random) {
             return false;
         }
 
@@ -591,8 +603,11 @@ impl NBTStorage for MobEntity {
 }
 
 pub trait Mob: EntityBase + Send + Sync {
-    fn get_random(&self) -> rand::rngs::ThreadRng {
-        rand::rng()
+    fn get_entity_random(&self) -> std::sync::MutexGuard<'_, RandomGenerator> {
+        self.get_mob_entity()
+            .random
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn get_max_look_yaw_change(&self) -> f32 {
@@ -608,6 +623,18 @@ pub trait Mob: EntityBase + Send + Sync {
     }
 
     fn get_mob_entity(&self) -> &MobEntity;
+
+    /// Vanilla `Mob.canAttackType`. Most mobs never select ghasts through
+    /// ordinary target goals; the few entity-specific exceptions override it.
+    fn can_attack_type(&self, target_type: &'static EntityType) -> bool {
+        target_type != &EntityType::GHAST
+    }
+
+    fn can_ambient_stand<'a>(&'a self) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async { false })
+    }
+
+    fn start_ambient_stand(&self) {}
 
     fn get_attack_damage(&self) -> f32 {
         self.get_mob_entity()
@@ -652,6 +679,8 @@ pub trait Mob: EntityBase + Send + Sync {
     fn get_trading_player(&self) -> Option<Arc<Player>> {
         None
     }
+
+    fn stop_trading(&self) {}
 
     fn get_home(&self) -> Option<BlockPos> {
         None
@@ -760,8 +789,13 @@ pub trait Mob: EntityBase + Send + Sync {
     /// Returns whether this mob accepts `mate` as a breeding partner. Most
     /// animals only mate with their own entity type; horse-family hybrids
     /// override this rule.
-    fn can_mate_with(&self, mate: &dyn EntityBase) -> bool {
-        self.get_entity().entity_type == mate.get_entity().entity_type
+    fn can_mate_with<'a>(&'a self, mate: &'a dyn EntityBase) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async move {
+            self.get_entity().entity_uuid != mate.get_entity().entity_uuid
+                && self.get_entity().entity_type == mate.get_entity().entity_type
+                && self.get_mob_entity().is_in_love()
+                && mate.is_in_love()
+        })
     }
 
     /// Selects the entity type produced by this pairing.
@@ -998,6 +1032,14 @@ pub trait Mob: EntityBase + Send + Sync {
         false
     }
 
+    fn get_walk_target_value(&self, _pos: BlockPos) -> f32 {
+        0.0
+    }
+
+    fn tick_untamed_riding<'a>(&'a self) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
     fn is_trusting(&self) -> bool {
         false
     }
@@ -1062,6 +1104,12 @@ pub trait Mob: EntityBase + Send + Sync {
     }
 
     fn get_llama(&self) -> Option<&crate::entity::passive::llama::LlamaEntity> {
+        None
+    }
+
+    fn get_wandering_trader(
+        &self,
+    ) -> Option<&crate::entity::passive::wandering_trader::WanderingTraderEntity> {
         None
     }
 

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Weak};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Weak,
+};
 
 use pumpkin_data::{Block, villager::VillagerProfession};
 use pumpkin_util::math::position::BlockPos;
@@ -13,6 +16,7 @@ struct JobSite {
 #[derive(Default)]
 pub struct VillagerPoiStorage {
     job_sites: HashMap<BlockPos, JobSite>,
+    meeting_sites: HashSet<BlockPos>,
 }
 
 impl VillagerPoiStorage {
@@ -25,6 +29,11 @@ impl VillagerPoiStorage {
     }
 
     pub fn update_block(&mut self, position: BlockPos, block: &Block) {
+        if block == &Block::BELL {
+            self.meeting_sites.insert(position);
+        } else {
+            self.meeting_sites.remove(&position);
+        }
         let Some(profession) = profession_for_block(block) else {
             self.job_sites.remove(&position);
             return;
@@ -39,6 +48,22 @@ impl VillagerPoiStorage {
                 owner: None,
             };
         }
+    }
+
+    #[must_use]
+    pub fn nearest_meeting_site(&self, origin: BlockPos, radius: i32) -> Option<BlockPos> {
+        let radius_squared = i64::from(radius).pow(2);
+        self.meeting_sites
+            .iter()
+            .filter_map(|position| {
+                let delta = position.0 - origin.0;
+                let distance_squared = i64::from(delta.x).pow(2)
+                    + i64::from(delta.y).pow(2)
+                    + i64::from(delta.z).pow(2);
+                (distance_squared <= radius_squared).then_some((distance_squared, *position))
+            })
+            .min_by_key(|(distance, _)| *distance)
+            .map(|(_, position)| position)
     }
 
     pub fn claim(
@@ -210,5 +235,18 @@ mod tests {
             storage.available_job_sites(origin, 48, Some(VillagerProfession::Farmer)),
             vec![composter]
         );
+    }
+
+    #[test]
+    fn nearest_meeting_site_tracks_bells() {
+        let mut storage = VillagerPoiStorage::default();
+        let origin = BlockPos::new(0, 64, 0);
+        let near = BlockPos::new(8, 64, 0);
+        let far = BlockPos::new(20, 64, 0);
+        storage.update_block(far, &Block::BELL);
+        storage.update_block(near, &Block::BELL);
+        assert_eq!(storage.nearest_meeting_site(origin, 48), Some(near));
+        storage.update_block(near, &Block::AIR);
+        assert_eq!(storage.nearest_meeting_site(origin, 48), Some(far));
     }
 }

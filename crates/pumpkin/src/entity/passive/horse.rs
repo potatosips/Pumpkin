@@ -6,6 +6,7 @@ use std::sync::{
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::{
     attributes::Attributes,
+    damage::DamageType,
     data_component_impl::EquipmentSlot,
     entity::EntityType,
     item::Item,
@@ -15,15 +16,17 @@ use pumpkin_data::{
     tracked_data,
 };
 use pumpkin_protocol::java::client::play::Metadata;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use uuid::Uuid;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
-        breed::BreedGoal, look_around::RandomLookAroundGoal, look_at_entity::LookAtEntityGoal,
-        swim::SwimGoal, wander_around::WanderAroundGoal,
+        ambient_stand::AmbientStandGoal, breed::BreedGoal, escape_danger::EscapeDangerGoal,
+        follow_parent::FollowParentGoal, look_around::RandomLookAroundGoal,
+        look_at_entity::LookAtEntityGoal, run_around_like_crazy::RunAroundLikeCrazyGoal,
+        swim::SwimGoal, tempt::TemptGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -47,18 +50,26 @@ pub struct HorseEntity {
 impl HorseEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
-        let mut rng = rand::rng();
-        let max_health =
-            15.0 + f64::from(rng.random_range(0..8)) + f64::from(rng.random_range(0..9));
-        let movement_speed = (0.449_999_988_079_071_04
-            + rng.random::<f64>() * 0.3
-            + rng.random::<f64>() * 0.3
-            + rng.random::<f64>() * 0.3)
-            * 0.25;
-        let jump_strength = 0.400_000_005_960_464_5
-            + rng.random::<f64>() * 0.2
-            + rng.random::<f64>() * 0.2
-            + rng.random::<f64>() * 0.2;
+        let (max_health, movement_speed, jump_strength, variant) = {
+            let mut rng = mob_entity
+                .random
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let max_health =
+                15.0 + f64::from(rng.next_bounded_i32(8)) + f64::from(rng.next_bounded_i32(9));
+            let movement_speed = (0.449_999_988_079_071_04
+                + rng.next_f64() * 0.3
+                + rng.next_f64() * 0.3
+                + rng.next_f64() * 0.3)
+                * 0.25;
+            let jump_strength = 0.400_000_005_960_464_5
+                + rng.next_f64() * 0.2
+                + rng.next_f64() * 0.2
+                + rng.next_f64() * 0.2;
+            let variant =
+                encode_variant(rng.next_inbetween_i32(0, 6), rng.next_inbetween_i32(0, 4));
+            (max_health, movement_speed, jump_strength, variant)
+        };
         mob_entity
             .living_entity
             .set_attribute_base(&Attributes::MAX_HEALTH, max_health);
@@ -72,7 +83,7 @@ impl HorseEntity {
         let horse = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
-            variant: AtomicI32::new(random_variant()),
+            variant: AtomicI32::new(variant),
             tamed: std::sync::atomic::AtomicBool::new(false),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
@@ -94,13 +105,21 @@ impl HorseEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(SwimGoal::default()));
-            goal_selector.add_goal(1, BreedGoal::new(1.0));
-            goal_selector.add_goal(2, Box::new(WanderAroundGoal::new(0.7)));
+            goal_selector.add_goal(1, EscapeDangerGoal::new(1.2));
+            goal_selector.add_goal(1, Box::new(RunAroundLikeCrazyGoal::new()));
+            goal_selector.add_goal(2, BreedGoal::new(1.0));
             goal_selector.add_goal(
                 3,
+                Box::new(TemptGoal::new(1.25, super::horse_food::HORSE_TEMPT_ITEMS)),
+            );
+            goal_selector.add_goal(4, Box::new(FollowParentGoal::new(1.0)));
+            goal_selector.add_goal(6, Box::new(WanderAroundGoal::new(0.7)));
+            goal_selector.add_goal(
+                7,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
             );
-            goal_selector.add_goal(4, Box::new(RandomLookAroundGoal::default()));
+            goal_selector.add_goal(8, Box::new(RandomLookAroundGoal::default()));
+            goal_selector.add_goal(9, Box::new(AmbientStandGoal::new(400)));
         };
 
         mob_arc
@@ -120,6 +139,12 @@ impl HorseEntity {
             )],
             None,
         );
+    }
+
+    /// Applies the color shared by a naturally spawned horse group while retaining
+    /// this horse's independently randomized markings.
+    pub(crate) fn set_natural_spawn_group_color(&self, color: i32) {
+        self.set_variant(with_color(self.variant(), color));
     }
 
     pub fn set_tamed(&self, tamed: bool, owner: Option<Uuid>) {
@@ -185,24 +210,39 @@ fn normalize_variant(variant: i32) -> i32 {
     encode_variant(variant & 0xff, (variant >> 8) & 0xff)
 }
 
-fn random_variant() -> i32 {
-    let mut rng = rand::rng();
-    encode_variant(rng.random_range(0..=6), rng.random_range(0..=4))
+fn with_color(variant: i32, color: i32) -> i32 {
+    encode_variant(color, (variant >> 8) & 0xff)
 }
 
-fn inherited_variant(first: i32, second: i32, color_roll: i32, markings_roll: i32) -> i32 {
-    let pick = |first: i32, second: i32, roll: i32, random_max: i32| {
+fn inherited_variant(
+    first: i32,
+    second: i32,
+    color_roll: i32,
+    random_color: i32,
+    markings_roll: i32,
+    random_markings: i32,
+) -> i32 {
+    let pick_color = |first: i32, second: i32, roll: i32| {
         if roll < 4 {
             first
         } else if roll < 8 {
             second
         } else {
-            rand::rng().random_range(0..=random_max)
+            random_color
+        }
+    };
+    let pick_markings = |first: i32, second: i32, roll: i32| {
+        if roll < 2 {
+            first
+        } else if roll < 4 {
+            second
+        } else {
+            random_markings
         }
     };
     encode_variant(
-        pick(first & 0xff, second & 0xff, color_roll, 6),
-        pick((first >> 8) & 0xff, (second >> 8) & 0xff, markings_roll, 4),
+        pick_color(first & 0xff, second & 0xff, color_roll),
+        pick_markings((first >> 8) & 0xff, (second >> 8) & 0xff, markings_roll),
     )
 }
 
@@ -221,6 +261,7 @@ impl NBTStorage for HorseEntity {
             self.mob_entity.write_nbt(nbt).await;
             self.write_ageable_nbt(nbt);
             super::animal::Animal::write_animal_nbt(self, nbt);
+            super::horse_food::write_equine_state_nbt(self, nbt);
             nbt.put_int("Variant", self.variant());
             nbt.put_bool("Tame", self.tamed.load(Ordering::Relaxed));
             nbt.put_int("Temper", self.temper.load(Ordering::Relaxed));
@@ -248,6 +289,7 @@ impl NBTStorage for HorseEntity {
             .await;
             self.read_ageable_nbt(nbt);
             super::animal::Animal::read_animal_nbt(self, nbt);
+            super::horse_food::read_equine_state_nbt(self, nbt);
             if let Some(variant) = nbt.get_int("Variant") {
                 self.set_variant(variant);
             }
@@ -276,6 +318,7 @@ mod tests {
         assert_eq!(encode_variant(6, 4), 1030);
         assert_eq!(normalize_variant(2 | (3 << 8)), 770);
         assert_eq!(normalize_variant(255 | (255 << 8)), 1030);
+        assert_eq!(with_color(encode_variant(1, 3), 5), encode_variant(5, 3));
     }
 
     #[test]
@@ -295,13 +338,17 @@ mod tests {
     }
 
     #[test]
-    fn horse_variant_inheritance_prefers_parents_eight_ninths() {
+    fn horse_variant_inheritance_uses_vanilla_color_and_marking_odds() {
         let first = encode_variant(1, 2);
         let second = encode_variant(5, 4);
-        assert_eq!(inherited_variant(first, second, 0, 0), first);
-        assert_eq!(inherited_variant(first, second, 4, 4), second);
-        let mixed = inherited_variant(first, second, 0, 4);
+        assert_eq!(inherited_variant(first, second, 0, 0, 0, 0), first);
+        assert_eq!(inherited_variant(first, second, 4, 0, 2, 0), second);
+        let mixed = inherited_variant(first, second, 0, 0, 2, 0);
         assert_eq!(mixed, encode_variant(1, 4));
+        assert_eq!(
+            inherited_variant(first, second, 8, 3, 4, 1),
+            encode_variant(3, 1)
+        );
     }
 }
 
@@ -320,18 +367,41 @@ impl Mob for HorseEntity {
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
     }
+    fn on_damage<'a>(
+        &'a self,
+        _damage_type: DamageType,
+        _source: Option<&'a dyn EntityBase>,
+    ) -> EntityBaseFuture<'a, ()> {
+        Box::pin(async move { super::horse_food::react_to_equine_damage(self) })
+    }
+    fn can_ambient_stand<'a>(&'a self) -> EntityBaseFuture<'a, bool> {
+        Box::pin(super::horse_food::can_equine_ambient_stand(self))
+    }
+    fn tick_untamed_riding<'a>(&'a self) -> EntityBaseFuture<'a, ()> {
+        Box::pin(super::horse_food::tick_untamed_riding(self))
+    }
+    fn start_ambient_stand(&self) {
+        super::horse_food::start_equine_ambient_stand(self, Sound::EntityHorseAmbient);
+    }
     fn is_tame(&self) -> bool {
         self.tamed.load(Ordering::Relaxed)
     }
     fn get_horse(&self) -> Option<&HorseEntity> {
         Some(self)
     }
-    fn can_mate_with(&self, mate: &dyn EntityBase) -> bool {
-        super::horse_food::horse_family_offspring_type(
-            &EntityType::HORSE,
-            mate.get_entity().entity_type,
-        )
-        .is_some()
+    fn can_mate_with<'a>(&'a self, mate: &'a dyn EntityBase) -> EntityBaseFuture<'a, bool> {
+        Box::pin(async move {
+            super::horse_food::can_equine_mate(
+                self,
+                mate,
+                super::horse_food::horse_family_offspring_type(
+                    &EntityType::HORSE,
+                    mate.get_entity().entity_type,
+                )
+                .is_some(),
+            )
+            .await
+        })
     }
     fn breeding_offspring_type(&self, mate: &dyn EntityBase) -> &'static EntityType {
         super::horse_food::horse_family_offspring_type(
@@ -346,10 +416,12 @@ impl Mob for HorseEntity {
         child: &'a Arc<dyn EntityBase>,
     ) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
+            let mut random = self.get_entity_random();
             super::horse_food::configure_bred_equine_attributes(
                 &self.mob_entity.living_entity,
                 mate,
                 child,
+                &mut random,
             );
             let (Some(mate), Some(child)) = (
                 mate.get_mob().and_then(Mob::get_horse),
@@ -357,11 +429,25 @@ impl Mob for HorseEntity {
             ) else {
                 return;
             };
+            let color_roll = random.next_bounded_i32(9);
+            let random_color = if color_roll == 8 {
+                random.next_bounded_i32(7)
+            } else {
+                0
+            };
+            let markings_roll = random.next_bounded_i32(5);
+            let random_markings = if markings_roll == 4 {
+                random.next_bounded_i32(5)
+            } else {
+                0
+            };
             child.set_variant(inherited_variant(
                 self.variant(),
                 mate.variant(),
-                rand::rng().random_range(0..9),
-                rand::rng().random_range(0..9),
+                color_roll,
+                random_color,
+                markings_roll,
+                random_markings,
             ));
         })
     }
@@ -431,9 +517,9 @@ impl Mob for HorseEntity {
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             self.ageable_ai_step();
+            super::horse_food::try_start_equine_grazing(self).await;
             super::horse_food::tick_equine_animations(self);
             super::horse_food::tick_equine_natural_regeneration(self);
-            super::horse_food::tick_untamed_riding(self).await;
         })
     }
     fn mob_interact<'a>(
@@ -445,11 +531,15 @@ impl Mob for HorseEntity {
             if super::horse_food::open_equine_inventory(self, player).await {
                 return true;
             }
-            if super::horse_food::feed_equine(self, player, stack, Sound::EntityHorseEat).await {
+            if super::horse_food::feed_equine(self, player, stack).await {
                 return true;
             }
-            if !stack.is_empty() && !self.is_tame() {
-                super::horse_food::make_equine_mad(self, Sound::EntityHorseAngry);
+            if super::horse_food::should_make_untamed_equine_mad(
+                self.is_tame(),
+                stack.is_empty(),
+                super::horse_food::is_equine_food(self, stack.item),
+            ) {
+                super::horse_food::make_equine_mad(self);
                 return true;
             }
             if self.is_tame() && !self.is_baby() && stack.item.has_tag(&tag::Item::C_ARMORS_HORSE) {
@@ -470,7 +560,7 @@ impl Mob for HorseEntity {
                     return true;
                 }
             }
-            if super::horse_food::mount_equine(self, player, stack).await {
+            if super::horse_food::mount_equine(self, player).await {
                 return true;
             }
             self.mob_entity.mob_interact(player, stack).await

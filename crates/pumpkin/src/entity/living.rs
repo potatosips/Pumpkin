@@ -171,7 +171,19 @@ impl LivingEntity {
     ];
 
     fn hurt_sound_for_entity(entity_type: &'static EntityType) -> Sound {
-        entity_type.hurt_sound.unwrap_or(Sound::EntityGenericHurt)
+        match entity_type {
+            kind if kind == &EntityType::HORSE => Sound::EntityHorseHurt,
+            kind if kind == &EntityType::DONKEY => Sound::EntityDonkeyHurt,
+            kind if kind == &EntityType::MULE => Sound::EntityMuleHurt,
+            kind if kind == &EntityType::LLAMA || kind == &EntityType::TRADER_LLAMA => {
+                Sound::EntityLlamaHurt
+            }
+            kind if kind == &EntityType::SKELETON_HORSE => Sound::EntitySkeletonHorseHurt,
+            kind if kind == &EntityType::ZOMBIE_HORSE => Sound::EntityZombieHorseHurt,
+            kind if kind == &EntityType::VILLAGER => Sound::EntityVillagerHurt,
+            kind if kind == &EntityType::WANDERING_TRADER => Sound::EntityWanderingTraderHurt,
+            _ => entity_type.hurt_sound.unwrap_or(Sound::EntityGenericHurt),
+        }
     }
 
     pub fn new(entity: Entity) -> Self {
@@ -1436,6 +1448,18 @@ impl LivingEntity {
             return;
         }
 
+        let is_abstract_horse = is_abstract_horse_type(self.entity.entity_type);
+        let is_llama = is_llama_type(self.entity.entity_type);
+        if is_abstract_horse && !is_llama && fall_distance > 1.0 {
+            self.entity.world.load().play_sound_raw(
+                Sound::EntityHorseLand as u16,
+                SoundCategory::Neutral,
+                &self.entity.pos.load(),
+                0.4,
+                1.0,
+            );
+        }
+
         // Java's fallDamage rule applies to players, not to every living entity.
         // Keep mob fall damage active when the rule is disabled.
         if player.is_some()
@@ -1456,11 +1480,40 @@ impl LivingEntity {
         let unsafe_fall_distance = fall_distance + 1.0E-6 - safe_fall_distance;
 
         let damage = (unsafe_fall_distance * damage_per_distance).floor();
-        if damage > 0.0 {
+        // Llama overrides AbstractHorse: calculated fall damage is applied only from a
+        // six-block fall onward (to both itself and its passengers).
+        if should_apply_horse_family_fall_damage(self.entity.entity_type, fall_distance, damage) {
             let check_damage = self.damage(caller, damage, DamageType::FALL).await; // Fall
-            if check_damage {
+            if check_damage && !is_abstract_horse {
                 self.entity
                     .play_sound(Self::get_fall_sound(fall_distance as i32));
+            }
+
+            if is_abstract_horse {
+                let passengers = self.entity.passengers.lock().await.clone();
+                let fall_damage_enabled = self
+                    .entity
+                    .world
+                    .load()
+                    .level_info
+                    .load()
+                    .game_rules
+                    .fall_damage;
+                for passenger in passengers {
+                    if passenger.get_player().is_some() && !fall_damage_enabled {
+                        continue;
+                    }
+                    passenger
+                        .damage_with_context(
+                            passenger.as_ref(),
+                            damage,
+                            DamageType::FALL,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await;
+                }
             }
         }
     }
@@ -2138,7 +2191,10 @@ impl LivingEntity {
     }
 
     pub fn is_part_of_game(&self) -> bool {
-        !self.is_spectator() && self.entity.is_alive()
+        !self.is_spectator()
+            && self.entity.is_alive()
+            && self.health.load() > 0.0
+            && !self.dead.load(Relaxed)
     }
 
     pub async fn reset_state(&self) {
@@ -2261,6 +2317,28 @@ impl LivingEntity {
             Self::hurt_sound_for_entity(self.entity.entity_type)
         }
     }
+}
+
+fn is_abstract_horse_type(entity_type: &EntityType) -> bool {
+    entity_type == &EntityType::HORSE
+        || entity_type == &EntityType::DONKEY
+        || entity_type == &EntityType::MULE
+        || entity_type == &EntityType::LLAMA
+        || entity_type == &EntityType::TRADER_LLAMA
+        || entity_type == &EntityType::SKELETON_HORSE
+        || entity_type == &EntityType::ZOMBIE_HORSE
+}
+
+fn is_llama_type(entity_type: &EntityType) -> bool {
+    entity_type == &EntityType::LLAMA || entity_type == &EntityType::TRADER_LLAMA
+}
+
+fn should_apply_horse_family_fall_damage(
+    entity_type: &EntityType,
+    fall_distance: f32,
+    damage: f32,
+) -> bool {
+    damage > 0.0 && (!is_llama_type(entity_type) || fall_distance >= 6.0)
 }
 
 impl NBTStorage for LivingEntity {
@@ -3715,6 +3793,45 @@ mod tests {
     }
 
     #[test]
+    fn abstract_horse_fall_behavior_covers_every_1_21_4_horse_family_type() {
+        for entity_type in [
+            &EntityType::HORSE,
+            &EntityType::DONKEY,
+            &EntityType::MULE,
+            &EntityType::LLAMA,
+            &EntityType::TRADER_LLAMA,
+            &EntityType::SKELETON_HORSE,
+            &EntityType::ZOMBIE_HORSE,
+        ] {
+            assert!(is_abstract_horse_type(entity_type));
+        }
+        assert!(!is_abstract_horse_type(&EntityType::CAMEL));
+        assert!(!is_abstract_horse_type(&EntityType::PIG));
+    }
+
+    #[test]
+    fn llama_fall_damage_starts_at_six_blocks() {
+        for entity_type in [&EntityType::LLAMA, &EntityType::TRADER_LLAMA] {
+            assert!(!should_apply_horse_family_fall_damage(
+                entity_type,
+                5.999,
+                4.0
+            ));
+            assert!(should_apply_horse_family_fall_damage(entity_type, 6.0, 5.0));
+        }
+        assert!(should_apply_horse_family_fall_damage(
+            &EntityType::HORSE,
+            3.0,
+            2.0
+        ));
+        assert!(!should_apply_horse_family_fall_damage(
+            &EntityType::HORSE,
+            3.0,
+            0.0
+        ));
+    }
+
+    #[test]
     fn vanilla_cramming_threshold_counts_other_entities_and_disables_at_nonpositive_values() {
         assert!(!cramming_threshold_exceeded(0, usize::MAX));
         assert!(!cramming_threshold_exceeded(-1, usize::MAX));
@@ -3879,6 +3996,34 @@ mod tests {
             LivingEntity::hurt_sound_for_entity(&EntityType::CREEPER),
             Sound::EntityGenericHurt
         );
+    }
+
+    #[test]
+    fn hurt_sound_for_entity_uses_merchant_sounds() {
+        assert_eq!(
+            LivingEntity::hurt_sound_for_entity(&EntityType::VILLAGER),
+            Sound::EntityVillagerHurt
+        );
+        assert_eq!(
+            LivingEntity::hurt_sound_for_entity(&EntityType::WANDERING_TRADER),
+            Sound::EntityWanderingTraderHurt
+        );
+    }
+
+    #[test]
+    fn hurt_sound_for_entity_uses_horse_family_sounds() {
+        let cases = [
+            (&EntityType::HORSE, Sound::EntityHorseHurt),
+            (&EntityType::DONKEY, Sound::EntityDonkeyHurt),
+            (&EntityType::MULE, Sound::EntityMuleHurt),
+            (&EntityType::LLAMA, Sound::EntityLlamaHurt),
+            (&EntityType::TRADER_LLAMA, Sound::EntityLlamaHurt),
+            (&EntityType::SKELETON_HORSE, Sound::EntitySkeletonHorseHurt),
+            (&EntityType::ZOMBIE_HORSE, Sound::EntityZombieHorseHurt),
+        ];
+        for (entity_type, expected) in cases {
+            assert_eq!(LivingEntity::hurt_sound_for_entity(entity_type), expected);
+        }
     }
 
     #[test]

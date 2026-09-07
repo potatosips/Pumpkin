@@ -7,8 +7,8 @@ use pumpkin_data::{
     tag::{self, Taggable},
 };
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+use pumpkin_util::random::RandomImpl;
 use pumpkin_world::world::BlockFlags;
-use rand::RngExt;
 
 use super::{Controls, Goal, GoalFuture};
 use crate::entity::{ai::pathfinder::NavigatorGoal, mob::Mob, passive::turtle::TurtleEntity};
@@ -112,7 +112,7 @@ impl Goal for LayTurtleEggGoal {
                 && world.get_block_state(&nest).is_air()
             {
                 let mut properties = TurtleEggLikeProperties::default(&Block::TURTLE_EGG);
-                properties.eggs = mob.get_random().random_range(1..=4);
+                properties.eggs = mob.get_entity_random().next_inbetween_i32(1, 4) as u8;
                 world
                     .set_block_state(
                         &nest,

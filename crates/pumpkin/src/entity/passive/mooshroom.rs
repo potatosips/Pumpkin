@@ -14,6 +14,7 @@ use pumpkin_data::tracked_data;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::random::RandomImpl;
 use pumpkin_util::version::JavaMinecraftVersion;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -206,12 +207,14 @@ impl Mob for MooshroomEntity {
             let Some(child) = child.get_mob().and_then(Mob::get_mooshroom) else {
                 return;
             };
-            let brown = offspring_is_brown(
-                self.is_brown(),
-                mate.is_brown(),
-                rand::random::<bool>(),
-                rand::random_range(0..1024) == 0,
-            );
+            let first_brown = self.is_brown();
+            let second_brown = mate.is_brown();
+            let (choose_second, mutate) = if first_brown == second_brown {
+                (false, self.get_entity_random().next_bounded_i32(1024) == 0)
+            } else {
+                (self.get_entity_random().next_bool(), false)
+            };
+            let brown = offspring_is_brown(first_brown, second_brown, choose_second, mutate);
             child.brown.store(brown, Ordering::Relaxed);
         })
     }

@@ -12,7 +12,7 @@ use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use uuid::Uuid;
 
 use crate::entity::{
@@ -435,7 +435,7 @@ impl Mob for CatEntity {
             let inherited_variant = mate
                 .get_mob()
                 .and_then(Mob::get_cat)
-                .filter(|_| rand::random::<bool>())
+                .filter(|_| self.get_entity_random().next_bool())
                 .map_or_else(
                     || self.variant.load(Ordering::Relaxed),
                     |mate_cat| mate_cat.variant.load(Ordering::Relaxed),
@@ -586,7 +586,7 @@ impl Mob for CatEntity {
                 item_stack.decrement_unless_creative(player.gamemode.load(), 1);
                 self.play_eating_sound();
 
-                let tame_succeeded = rand::rng().random_range(0..3) == 0;
+                let tame_succeeded = self.get_entity_random().next_bounded_i32(3) == 0;
                 if tame_succeeded {
                     let entity = self.get_entity();
                     let mut event =

@@ -6,8 +6,8 @@ use crate::entity::mob::enderman::EndermanEntity;
 use pumpkin_data::Block;
 use pumpkin_data::block_properties::is_air;
 use pumpkin_util::math::position::BlockPos;
+use pumpkin_util::random::RandomImpl;
 use pumpkin_world::world::BlockFlags;
-use rand::RngExt;
 
 pub struct PlaceBlockGoal {
     enderman: Arc<EndermanEntity>,
@@ -32,7 +32,11 @@ impl Goal for PlaceBlockGoal {
                 return false;
             }
 
-            if mob.get_random().random_range(0..to_goal_ticks(2000)) != 0 {
+            if mob
+                .get_entity_random()
+                .next_bounded_i32(to_goal_ticks(2000))
+                != 0
+            {
                 return false;
             }
 
@@ -50,11 +54,11 @@ impl Goal for PlaceBlockGoal {
             let pos = entity.pos.load();
 
             let (bx, by, bz) = {
-                let mut rng = mob.get_random();
+                let mut rng = mob.get_entity_random();
                 (
-                    pos.x.floor() as i32 + rng.random_range(-1..=1),
-                    pos.y.floor() as i32 + rng.random_range(0..=2),
-                    pos.z.floor() as i32 + rng.random_range(-1..=1),
+                    pos.x.floor() as i32 + rng.next_inbetween_i32(-1, 1),
+                    pos.y.floor() as i32 + rng.next_inbetween_i32(0, 2),
+                    pos.z.floor() as i32 + rng.next_inbetween_i32(-1, 1),
                 )
             };
 

@@ -6,8 +6,8 @@ use crate::entity::mob::enderman::EndermanEntity;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::tag::{self, Taggable};
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+use pumpkin_util::random::RandomImpl;
 use pumpkin_world::world::BlockFlags;
-use rand::RngExt;
 
 pub struct PickUpBlockGoal {
     enderman: Arc<EndermanEntity>,
@@ -32,7 +32,7 @@ impl Goal for PickUpBlockGoal {
                 return false;
             }
 
-            if mob.get_random().random_range(0..to_goal_ticks(20)) != 0 {
+            if mob.get_entity_random().next_bounded_i32(to_goal_ticks(20)) != 0 {
                 return false;
             }
 
@@ -46,11 +46,11 @@ impl Goal for PickUpBlockGoal {
             let pos = entity.pos.load();
 
             let (bx, by, bz) = {
-                let mut rng = mob.get_random();
+                let mut rng = mob.get_entity_random();
                 (
-                    pos.x.floor() as i32 + rng.random_range(-2..=2),
-                    pos.y.floor() as i32 + rng.random_range(0..=2),
-                    pos.z.floor() as i32 + rng.random_range(-2..=2),
+                    pos.x.floor() as i32 + rng.next_inbetween_i32(-2, 2),
+                    pos.y.floor() as i32 + rng.next_inbetween_i32(0, 2),
+                    pos.z.floor() as i32 + rng.next_inbetween_i32(-2, 2),
                 )
             };
 

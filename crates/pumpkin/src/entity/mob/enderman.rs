@@ -24,7 +24,7 @@ use pumpkin_protocol::{
     java::client::play::{CEntityPositionSync, Metadata},
 };
 use pumpkin_util::math::{boundingbox::BoundingBox, position::BlockPos, vector3::Vector3};
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, NBTStorage, NbtFuture,
@@ -136,11 +136,11 @@ impl EndermanEntity {
         let entity = &self.mob_entity.living_entity.entity;
         let pos = entity.pos.load();
         let (x, y, z) = {
-            let mut rng = self.get_random();
+            let mut rng = self.get_entity_random();
             (
-                pos.x + (rng.random_range(0.0..1.0) - 0.5) * 64.0,
-                pos.y + (rng.random_range(0i32..64) - 32) as f64,
-                pos.z + (rng.random_range(0.0..1.0) - 0.5) * 64.0,
+                pos.x + (rng.next_f64() - 0.5) * 64.0,
+                pos.y + f64::from(rng.next_bounded_i32(64) - 32),
+                pos.z + (rng.next_f64() - 0.5) * 64.0,
             )
         };
 
@@ -165,11 +165,11 @@ impl EndermanEntity {
         let ny = dy / dist;
         let nz = dz / dist;
         let (x, y, z) = {
-            let mut rng = self.get_random();
+            let mut rng = self.get_entity_random();
             (
-                pos.x + (rng.random_range(0.0..1.0) - 0.5) * 8.0 - nx * 16.0,
-                pos.y + (rng.random_range(0i32..16) - 8) as f64 - ny * 16.0,
-                pos.z + (rng.random_range(0.0..1.0) - 0.5) * 8.0 - nz * 16.0,
+                pos.x + (rng.next_f64() - 0.5) * 8.0 - nx * 16.0,
+                pos.y + f64::from(rng.next_bounded_i32(16) - 8) - ny * 16.0,
+                pos.z + (rng.next_f64() - 0.5) * 8.0 - nz * 16.0,
             )
         };
 
@@ -486,9 +486,10 @@ impl Mob for EndermanEntity {
                 let brightness = f32::from(world.get_max_local_raw_brightness(&block_pos)) / 15.0;
                 let exposed = time < 12_000 && world.can_see_sky(&block_pos);
                 let teleport_chance = sunlight_teleport_chance(brightness);
+                let teleport_roll = self.get_entity_random().next_f32();
                 if exposed
                     && brightness > 0.5
-                    && self.get_random().random_range(0.0..1.0) < teleport_chance
+                    && teleport_roll < teleport_chance
                     && self.teleport_randomly()
                 {
                     self.set_target(None).await;
@@ -549,7 +550,7 @@ impl Mob for EndermanEntity {
             if source.is_some_and(|s| s.get_living_entity().is_some()) {
                 return;
             }
-            let should_teleport = self.get_random().random_range(0..10) != 0;
+            let should_teleport = self.get_entity_random().next_bounded_i32(10) != 0;
             if should_teleport {
                 self.teleport_randomly();
             }

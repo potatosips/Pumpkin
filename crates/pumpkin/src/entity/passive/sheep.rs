@@ -11,6 +11,7 @@ use pumpkin_data::{
 };
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -263,7 +264,7 @@ impl Mob for SheepEntity {
             let color = mixed_offspring_color(
                 self.get_color(),
                 mate_sheep.get_color(),
-                rand::random::<bool>(),
+                self.get_entity_random().next_bool(),
             );
             child_sheep
                 .color_and_sheared

@@ -5,6 +5,7 @@ use crossbeam::atomic::AtomicCell;
 use pumpkin_data::attributes::Attributes;
 use pumpkin_data::entity::EntityType;
 use pumpkin_data::sound::{Sound, SoundCategory};
+use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_util::Difficulty;
 use pumpkin_util::math::boundingbox::{BoundingBox, EntityDimensions};
@@ -19,7 +20,6 @@ use crate::entity::{
 };
 use crate::world::World;
 use pumpkin_util::random::RandomImpl;
-use rand::RngExt;
 
 pub struct SlimeEntity {
     entity: Arc<MobEntity>,
@@ -91,8 +91,9 @@ impl SlimeEntity {
     }
 
     pub fn randomize_size(&self) {
-        let mut size_scale = rand::random_range(0..3);
-        if size_scale < 2 && rand::random_range(0.0..1.0) < 0.5 {
+        let mut random = self.get_entity_random();
+        let mut size_scale = random.next_bounded_i32(3);
+        if size_scale < 2 && random.next_f32() < 0.5 {
             size_scale += 1;
         }
         let size = 1 << size_scale;
@@ -159,7 +160,11 @@ impl SlimeEntity {
         self.get_size() <= 1
     }
 
-    pub fn check_slime_spawn_rules(world: &World, pos: &BlockPos) -> bool {
+    pub fn check_slime_spawn_rules(
+        world: &World,
+        pos: &BlockPos,
+        random: &mut pumpkin_util::random::RandomGenerator,
+    ) -> bool {
         if world.level_info.load().difficulty == Difficulty::Peaceful {
             return false;
         }
@@ -167,23 +172,26 @@ impl SlimeEntity {
         // TODO: check spawn reason. if it's spawner, we should return true if block below is valid
         // For now, we assume natural spawning as that's what we are implementing.
 
-        // Swamp/Surface Spawning
-        // TODO: fix
-        // let biome = world.get_biome(pos);
-        // if biome.has_tag(&pumpkin_data::tag::WorldgenBiome::MINECRAFT_ALLOWS_SURFACE_SLIME_SPAWNS)
-        //     && pos.0.y > 50
-        //     && pos.0.y < 70
-        // {
-        //     let time = world.level_time.lock().await.time_of_day;
-        //     let moon_phase = (time / 24000) % 8;
-        //     let surface_slime_spawn_chance = Self::get_spawn_chance(moon_phase);
-        //     let mut rng = rand::rng();
-        //     if rng.random::<f32>() < surface_slime_spawn_chance
-        //         && world.get_max_local_raw_brightness(pos) <= rng.random_range(0..8)
-        //     {
-        //         return true;
-        //     }
-        // }
+        // Swamp/surface spawning. Vanilla consumes the two float rolls before
+        // testing local brightness, and only consumes the bounded light roll
+        // if both float gates pass.
+        if world
+            .get_biome(pos)
+            .has_tag(&tag::WorldgenBiome::MINECRAFT_ALLOWS_SURFACE_SLIME_SPAWNS)
+            && pos.0.y > 50
+            && pos.0.y < 70
+        {
+            let time = world
+                .time_of_day_snapshot
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let moon_brightness = Self::moon_brightness(time);
+            if random.next_f32() < 0.5
+                && random.next_f32() < moon_brightness
+                && i32::from(world.get_max_local_raw_brightness(pos)) <= random.next_bounded_i32(8)
+            {
+                return true;
+            }
+        }
 
         // Slime Chunk Spawning
         let chunk_pos = pos.chunk_position();
@@ -196,23 +204,23 @@ impl SlimeEntity {
         );
         let mut slime_rand = pumpkin_util::random::legacy_rand::LegacyRand::from_seed(slime_seed);
 
-        let mut rng = rand::rng();
-        if rng.random_range(0..10) == 0 && slime_rand.next_bounded_i32(10) == 0 && pos.0.y < 40 {
+        let is_slime_chunk = slime_rand.next_bounded_i32(10) == 0;
+        if random.next_bounded_i32(10) == 0 && is_slime_chunk && pos.0.y < 40 {
             return true;
         }
 
         false
     }
 
-    // const fn get_spawn_chance(moon_phase: i64) -> f32 {
-    //     match moon_phase {
-    //         0 => 1.0,
-    //         1 | 7 => 0.75,
-    //         2 | 6 => 0.5,
-    //         3 | 5 => 0.25,
-    //         _ => 0.0,
-    //     }
-    // }
+    const fn moon_brightness(time_of_day: i64) -> f32 {
+        match (time_of_day / 24_000).rem_euclid(8) {
+            0 => 1.0,
+            1 | 7 => 0.75,
+            2 | 6 => 0.5,
+            3 | 5 => 0.25,
+            _ => 0.0,
+        }
+    }
 
     pub(crate) const fn hurt_sound_for_size(size: i32) -> Sound {
         if size == 1 {
@@ -222,8 +230,8 @@ impl SlimeEntity {
         }
     }
 
-    fn get_jump_delay() -> i32 {
-        rand::random_range(10..30)
+    fn get_jump_delay(&self) -> i32 {
+        10 + self.get_entity_random().next_bounded_i32(20)
     }
 
     fn rot_lerp(start: f32, end: f32, max_step: f32) -> f32 {
@@ -260,7 +268,8 @@ impl SlimeEntity {
 
     fn get_sound_pitch(&self) -> f32 {
         let pitch_adjuster = if self.is_tiny() { 1.4 } else { 0.8 };
-        (rand::random_range(0.0..1.0) - rand::random_range(0.0..1.0)) * 0.2 + 1.0 * pitch_adjuster
+        let mut random = self.get_entity_random();
+        ((random.next_f32() - random.next_f32()) * 0.2 + 1.0) * pitch_adjuster
     }
 }
 
@@ -317,8 +326,7 @@ impl Mob for SlimeEntity {
                     SoundCategory::Hostile,
                     &self.entity.living_entity.entity.pos.load(),
                     self.get_sound_volume(),
-                    ((rand::random_range(0.0..1.0) - rand::random_range(0.0..1.0)) * 0.2 + 1.0)
-                        / 0.8,
+                    self.get_sound_pitch(),
                 );
 
                 self.target_squish.store(-0.5);
@@ -359,7 +367,14 @@ impl Mob for SlimeEntity {
                 let world = self.entity.living_entity.entity.world.load();
                 let pos = self.entity.living_entity.entity.pos.load();
                 let half_size = size / 2;
-                let count = 2 + rand::random_range(0..3);
+                let (count, child_yaws) = {
+                    let mut random = self.get_entity_random();
+                    let count = 2 + random.next_bounded_i32(3);
+                    let yaws = (0..count)
+                        .map(|_| random.next_f32() * 360.0)
+                        .collect::<Vec<_>>();
+                    (count, yaws)
+                };
 
                 let width = self
                     .entity
@@ -391,7 +406,7 @@ impl Mob for SlimeEntity {
                         .living_entity
                         .entity
                         .yaw
-                        .store(rand::random_range(0.0..360.0));
+                        .store(child_yaws[i as usize]);
                     world.spawn_entity(slime_like).await;
                 }
             }
@@ -437,7 +452,7 @@ impl MoveControlTrait for SlimeMoveControl {
                 let current_delay = slime.jump_delay.load(Ordering::Relaxed);
                 if current_delay <= 0 {
                     // Start jump
-                    let mut next_delay = SlimeEntity::get_jump_delay();
+                    let mut next_delay = slime.get_jump_delay();
                     if slime.is_aggressive.load(Ordering::Relaxed) {
                         next_delay /= 3;
                     }
@@ -491,9 +506,9 @@ impl Goal for SlimeFloatGoal {
         })
     }
 
-    fn tick<'a>(&'a mut self, _mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
+    fn tick<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
         Box::pin(async move {
-            if rand::random_range(0.0..1.0) < 0.8 {
+            if mob.get_entity_random().next_f32() < 0.8 {
                 self.slime
                     .entity
                     .living_entity
@@ -618,12 +633,12 @@ impl Goal for SlimeRandomDirectionGoal {
         })
     }
 
-    fn tick<'a>(&'a mut self, _mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
+    fn tick<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
         Box::pin(async move {
             self.next_randomize_time -= 1;
             if self.next_randomize_time <= 0 {
-                self.next_randomize_time = rand::random_range(40..100);
-                self.chosen_degrees = rand::random_range(0.0..360.0);
+                self.next_randomize_time = 40 + mob.get_entity_random().next_bounded_i32(60);
+                self.chosen_degrees = mob.get_entity_random().next_f32() * 360.0;
             }
             self.slime.target_yaw.store(self.chosen_degrees);
             self.slime.is_aggressive.store(false, Ordering::Relaxed);
@@ -683,5 +698,17 @@ mod tests {
         assert_eq!(SlimeEntity::rot_lerp(0.0, 45.0, 90.0), 45.0);
         assert_eq!(SlimeEntity::rot_lerp(0.0, 180.0, 90.0), 90.0);
         assert_eq!(SlimeEntity::rot_lerp(350.0, 10.0, 90.0), 370.0);
+    }
+
+    #[test]
+    fn slime_surface_spawn_uses_vanilla_moon_brightness_cycle() {
+        let expected = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
+        for (day, brightness) in expected.into_iter().enumerate() {
+            assert_eq!(
+                SlimeEntity::moon_brightness(day as i64 * 24_000),
+                brightness
+            );
+        }
+        assert_eq!(SlimeEntity::moon_brightness(-24_000), 0.75);
     }
 }

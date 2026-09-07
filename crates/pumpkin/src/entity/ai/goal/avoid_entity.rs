@@ -5,7 +5,7 @@ use crate::entity::{EntityBase, ai::pathfinder::NavigatorGoal, mob::Mob};
 use pumpkin_data::entity::EntityType;
 use pumpkin_util::GameMode;
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 const FAST_DISTANCE_SQ: f64 = 49.0;
 const HORIZONTAL_RANGE: f64 = 16.0;
@@ -104,11 +104,11 @@ impl AvoidEntityGoal {
         let world = entity.world.load();
 
         let candidates = {
-            let mut rng = mob.get_random();
+            let mut rng = mob.get_entity_random();
             let dir_x = mob_pos.x - threat_pos.x;
             let dir_z = mob_pos.z - threat_pos.z;
             let (dir_x, dir_z) = if dir_x == 0.0 && dir_z == 0.0 {
-                (rng.random_range(-1.0..1.0), rng.random_range(-1.0..1.0))
+                (rng.next_f64() * 2.0 - 1.0, rng.next_f64() * 2.0 - 1.0)
             } else {
                 (dir_x, dir_z)
             };
@@ -116,13 +116,12 @@ impl AvoidEntityGoal {
 
             let mut candidates = Vec::with_capacity(10);
             for _ in 0..10 {
-                let angle = base_angle
-                    + (2.0 * rng.random_range(0.0..1.0) - 1.0) * std::f64::consts::FRAC_PI_2;
-                let t = rng.random_range(0.0..1.0f64).sqrt();
+                let angle = base_angle + (2.0 * rng.next_f64() - 1.0) * std::f64::consts::FRAC_PI_2;
+                let t = rng.next_f64().sqrt();
                 let dist = t * HORIZONTAL_RANGE * std::f64::consts::SQRT_2;
                 let dx = -dist * angle.sin();
                 let dz = dist * angle.cos();
-                let dy = rng.random_range(-VERTICAL_RANGE..=VERTICAL_RANGE);
+                let dy = rng.next_inbetween_i32(-VERTICAL_RANGE, VERTICAL_RANGE);
                 candidates.push((dx, dy, dz));
             }
             candidates

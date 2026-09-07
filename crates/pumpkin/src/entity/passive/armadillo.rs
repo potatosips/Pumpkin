@@ -12,6 +12,7 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -33,9 +34,8 @@ pub const SCARE_CHECK_INTERVAL: i32 = 80;
 pub const SCARE_DISTANCE_HORIZONTAL: f64 = 7.0;
 pub const SCARE_DISTANCE_VERTICAL: f64 = 2.0;
 
-fn pick_next_scute_drop_time() -> i32 {
-    let rand_ticks = (rand::random::<u32>() % 6000) as i32;
-    rand_ticks + 6000
+const fn scute_drop_time(roll: i32) -> i32 {
+    roll + 6000
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -125,12 +125,19 @@ pub struct ArmadilloEntity {
 impl ArmadilloEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
+        let scute_time = scute_drop_time(
+            mob_entity
+                .random
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .next_bounded_i32(6000),
+        );
         let armadillo = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
             state: AtomicI32::new(ArmadilloState::Idle.id()),
             in_state_ticks: AtomicU64::new(0),
-            scute_time: AtomicI32::new(pick_next_scute_drop_time()),
+            scute_time: AtomicI32::new(scute_time),
             danger_detected_recently_ticks: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(armadillo);
@@ -388,8 +395,10 @@ impl Mob for ArmadilloEntity {
                         SoundCategory::Neutral,
                         &pos,
                     );
-                    self.scute_time
-                        .store(pick_next_scute_drop_time(), Ordering::Relaxed);
+                    self.scute_time.store(
+                        scute_drop_time(self.get_entity_random().next_bounded_i32(6000)),
+                        Ordering::Relaxed,
+                    );
                 }
             }
 

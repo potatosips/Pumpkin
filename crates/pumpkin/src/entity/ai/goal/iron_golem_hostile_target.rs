@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use pumpkin_data::entity::{EntityType, MobCategory};
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use super::{Controls, Goal, GoalFuture, to_goal_ticks, track_target::TrackTargetGoal};
 use crate::entity::{EntityBase, ai::target_predicate::TargetPredicate, mob::Mob};
@@ -37,7 +37,10 @@ impl Goal for IronGolemHostileTargetGoal {
     fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async move {
             if self.reciprocal_chance > 0
-                && mob.get_random().random_range(0..self.reciprocal_chance) != 0
+                && mob
+                    .get_entity_random()
+                    .next_bounded_i32(self.reciprocal_chance)
+                    != 0
             {
                 return false;
             }
@@ -70,8 +73,8 @@ impl Goal for IronGolemHostileTargetGoal {
                     continue;
                 };
                 if self
-                    .target_predicate
-                    .test(&world, Some(living), candidate_living)
+                    .track_target_goal
+                    .can_track(mob, Some(candidate_living), &self.target_predicate)
                     .await
                 {
                     self.target = Some(candidate);

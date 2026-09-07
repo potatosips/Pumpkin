@@ -6,7 +6,7 @@ use std::sync::{
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_data::{entity::EntityType, item::Item};
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -44,7 +44,12 @@ pub struct ChickenEntity {
 impl ChickenEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
-        let egg_lay_time = rand::rng().random_range(6000..12000);
+        let egg_lay_time = 6000
+            + mob_entity
+                .random
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .next_bounded_i32(6000);
         let chicken = Self {
             mob_entity,
             variant: AtomicU8::new(1), // Default to temperate
@@ -181,7 +186,7 @@ impl Mob for ChickenEntity {
                 entity.set_velocity(current_velocity.multiply(1.0, 0.6, 1.0));
             }
             if !self.is_baby() && self.egg_lay_time.fetch_sub(1, Ordering::Relaxed) <= 1 {
-                let next_time = rand::rng().random_range(6000..12000);
+                let next_time = 6000 + self.get_entity_random().next_bounded_i32(6000);
                 let world = entity.world.load_full();
                 let pos = entity.block_pos.load();
                 let mut drop_event =

@@ -1,10 +1,11 @@
 use super::{Controls, Goal, to_goal_ticks};
+use crate::entity::EntityBase;
 use crate::entity::ai::goal::GoalFuture;
 use crate::entity::ai::target_predicate::TargetPredicate;
 use crate::entity::living::LivingEntity;
 use crate::entity::mob::Mob;
 use pumpkin_data::attributes::Attributes;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 const UNSET: i32 = 0;
@@ -20,6 +21,7 @@ pub struct TrackTargetGoal {
     time_without_visibility: AtomicI32,
     pub max_time_without_visibility: i32,
     target_predicate: TargetPredicate,
+    follow_distance_scale: f64,
 }
 
 #[expect(dead_code)]
@@ -35,6 +37,7 @@ impl TrackTargetGoal {
             time_without_visibility: AtomicI32::new(0),
             max_time_without_visibility: 60,
             target_predicate: TargetPredicate::create_attackable().ignore_visibility(),
+            follow_distance_scale: 1.0,
         }
     }
 
@@ -47,12 +50,27 @@ impl TrackTargetGoal {
         self
     }
 
-    fn can_navigate_to_entity(&self, mob: &dyn Mob, _target: &LivingEntity) -> bool {
-        let cooldown = to_goal_ticks(10 + mob.get_random().random_range(0..5));
+    pub const fn set_follow_distance_scale(mut self, scale: f64) -> Self {
+        self.follow_distance_scale = scale;
+        self
+    }
+
+    async fn can_navigate_to_entity(&self, mob: &dyn Mob, target: &LivingEntity) -> bool {
+        let cooldown = to_goal_ticks(10 + mob.get_entity_random().next_bounded_i32(5));
         self.check_can_navigate_cooldown
             .store(cooldown, Ordering::Relaxed);
-        // TODO: after implementing path
-        false
+        let mob_entity = mob.get_mob_entity();
+        let destination = target.entity.pos.load();
+        let mut probe = {
+            let navigator = mob_entity
+                .navigator
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            navigator.detached_probe()
+        };
+        probe
+            .can_reach_target(&mob_entity.living_entity, destination)
+            .await
     }
 
     fn remembers_visible_target(&self, has_line_of_sight: bool) -> bool {
@@ -86,7 +104,19 @@ impl TrackTargetGoal {
             return false;
         }
 
-        // TODO: isInPositionTargetRange (isWithinHome in Java) check
+        if !mob.can_attack_type(target.entity.entity_type) {
+            return false;
+        }
+
+        if let Some(target_base) = world.get_entity_by_id(target.entity.entity_id)
+            && self.is_same_team(mob, target_base.as_ref()).await
+        {
+            return false;
+        }
+
+        if !mob_entity.is_in_position_target_range_pos(&target.entity.block_pos.load()) {
+            return false;
+        }
 
         if self.check_can_navigate {
             let cooldown = self
@@ -98,7 +128,7 @@ impl TrackTargetGoal {
             }
 
             if self.can_navigate_flag.load(Ordering::Relaxed) == UNSET {
-                let can_reach = self.can_navigate_to_entity(mob, target);
+                let can_reach = self.can_navigate_to_entity(mob, target).await;
                 self.can_navigate_flag.store(
                     if can_reach { CAN_TRACK } else { CANNOT_TRACK },
                     Ordering::Relaxed,
@@ -111,6 +141,21 @@ impl TrackTargetGoal {
         }
 
         true
+    }
+
+    pub async fn is_same_team(&self, mob: &dyn Mob, target: &dyn EntityBase) -> bool {
+        let mob_entity = mob.get_mob_entity();
+        let world = mob_entity.living_entity.entity.world.load();
+        let scoreboard = world.scoreboard.lock().await;
+        let source_name = mob_entity.living_entity.entity.entity_uuid.to_string();
+        let target_name = target.get_scoreboard_name();
+        matches!(
+            (
+                scoreboard.get_entity_team(&source_name),
+                scoreboard.get_entity_team(&target_name)
+            ),
+            (Some(source), Some(candidate)) if source.name == candidate.name
+        )
     }
 }
 
@@ -132,14 +177,18 @@ impl Goal for TrackTargetGoal {
                 return false;
             }
 
+            let world = mob_entity.living_entity.entity.world.load();
             if !self
-                .can_track(mob, Some(target), &self.target_predicate)
+                .target_predicate
+                .test(&world, Some(&mob_entity.living_entity), target)
                 .await
             {
                 return false;
             }
 
-            // TODO: Team checks (return false if on the same team)
+            if self.is_same_team(mob, target_base.as_ref()).await {
+                return false;
+            }
 
             let dist_sq = mob_entity
                 .living_entity
@@ -151,7 +200,8 @@ impl Goal for TrackTargetGoal {
             // Get follow range attribute value and check if target is within range
             let follow_range = mob_entity
                 .living_entity
-                .get_attribute_value(&Attributes::FOLLOW_RANGE);
+                .get_attribute_value(&Attributes::FOLLOW_RANGE)
+                * self.follow_distance_scale;
 
             if dist_sq > follow_range * follow_range {
                 return false;

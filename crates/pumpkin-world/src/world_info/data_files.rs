@@ -208,33 +208,6 @@ pub struct WorldClocksData {
     pub data_version: i32,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
-pub struct WanderingTraderData {
-    #[serde(rename = "spawn_delay", default = "default_wandering_trader_delay")]
-    pub spawn_delay: i32,
-    #[serde(rename = "spawn_chance", default = "default_wandering_trader_chance")]
-    pub spawn_chance: i32,
-    #[serde(rename = "DataVersion", default)]
-    pub data_version: i32,
-}
-
-const fn default_wandering_trader_delay() -> i32 {
-    24_000
-}
-const fn default_wandering_trader_chance() -> i32 {
-    25
-}
-
-impl Default for WanderingTraderData {
-    fn default() -> Self {
-        Self {
-            spawn_delay: default_wandering_trader_delay(),
-            spawn_chance: default_wandering_trader_chance(),
-            data_version: 0,
-        }
-    }
-}
-
 #[must_use]
 pub fn minecraft_data_dir(level_folder: &Path) -> PathBuf {
     level_folder.join("data").join("minecraft")
@@ -489,50 +462,6 @@ pub fn write_world_clocks(
     let file = File::create(&path)?;
 
     pumpkin_nbt::nbt_compress::write_gzip_compound_tag(root, file)
-        .map_err(|e| WorldInfoError::SerializationError(e.to_string()))
-}
-
-pub fn read_wandering_trader(level_folder: &Path) -> WanderingTraderData {
-    let path = minecraft_data_dir(level_folder).join("wandering_trader.dat");
-    if !path.exists() {
-        return WanderingTraderData::default();
-    }
-    match File::open(&path) {
-        Ok(f) => match read_gzip_compound_tag(f) {
-            Ok(compound) => {
-                let data_compound = compound.get_compound("data");
-                let c = data_compound.as_ref().map_or(&compound, |v| v);
-                WanderingTraderData {
-                    spawn_delay: c.get_int("WanderingTraderSpawnDelay").unwrap_or(24_000),
-                    spawn_chance: c.get_int("WanderingTraderSpawnChance").unwrap_or(25),
-                    data_version: c.get_int("DataVersion").unwrap_or(0),
-                }
-            }
-            Err(e) => {
-                warn!("Failed to deserialize wandering_trader.dat, using defaults: {e}");
-                WanderingTraderData::default()
-            }
-        },
-        Err(e) => {
-            warn!("Failed to open wandering_trader.dat: {e}");
-            WanderingTraderData::default()
-        }
-    }
-}
-
-pub fn write_wandering_trader(
-    level_folder: &Path,
-    data: &WanderingTraderData,
-) -> Result<(), WorldInfoError> {
-    let dir = ensure_minecraft_data_dir(level_folder)?;
-    let path = dir.join("wandering_trader.dat");
-    let file = File::create(&path)?;
-    let mut data_comp = NbtCompound::new();
-    data_comp.put_int("WanderingTraderSpawnDelay", data.spawn_delay);
-    data_comp.put_int("WanderingTraderSpawnChance", data.spawn_chance);
-    let mut root = NbtCompound::new();
-    root.put_compound("data", data_comp);
-    pumpkin_nbt::nbt_compress::write_gzip_compound_tag(root, BufWriter::new(file))
         .map_err(|e| WorldInfoError::SerializationError(e.to_string()))
 }
 

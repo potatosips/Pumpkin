@@ -2,7 +2,7 @@ use std::f64::consts::TAU;
 
 use super::{Controls, Goal};
 use crate::entity::{ai::goal::GoalFuture, mob::Mob};
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 pub struct RandomLookAroundGoal {
     goal_control: Controls,
@@ -28,7 +28,7 @@ impl Goal for RandomLookAroundGoal {
             if mob.get_mob_entity().target.lock().await.is_some() {
                 return false;
             }
-            mob.get_random().random::<f32>() < 0.02
+            mob.get_entity_random().next_f32() < 0.02
         })
     }
 
@@ -43,10 +43,10 @@ impl Goal for RandomLookAroundGoal {
 
     fn start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, ()> {
         Box::pin(async {
-            let d = TAU * mob.get_random().random::<f64>();
+            let d = TAU * mob.get_entity_random().next_f64();
             self.delta_x = d.cos();
             self.delta_z = d.sin();
-            let look_time = 20 + mob.get_random().random_range(0..20);
+            let look_time = 20 + mob.get_entity_random().next_bounded_i32(20);
             self.look_time = look_time;
         })
     }

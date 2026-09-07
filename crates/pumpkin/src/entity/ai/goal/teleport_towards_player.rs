@@ -41,7 +41,7 @@ impl TeleportTowardsPlayerGoal {
         }
     }
 
-    async fn find_staring_player(&self) -> Option<Arc<Player>> {
+    async fn find_staring_player(&self, mob: &dyn Mob) -> Option<Arc<Player>> {
         let entity = &self.enderman.mob_entity.living_entity.entity;
         let world = entity.world.load();
         let pos = entity.pos.load();
@@ -59,12 +59,8 @@ impl TeleportTowardsPlayerGoal {
 
         let living = player.get_living_entity()?;
         if !self
-            .target_predicate
-            .test(
-                &world,
-                Some(&self.enderman.mob_entity.living_entity),
-                living,
-            )
+            .track_target_goal
+            .can_track(mob, Some(living), &self.target_predicate)
             .await
         {
             return None;
@@ -79,9 +75,9 @@ impl TeleportTowardsPlayerGoal {
 }
 
 impl Goal for TeleportTowardsPlayerGoal {
-    fn can_start<'a>(&'a mut self, _mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
+    fn can_start<'a>(&'a mut self, mob: &'a dyn Mob) -> GoalFuture<'a, bool> {
         Box::pin(async move {
-            let Some(player) = self.find_staring_player().await else {
+            let Some(player) = self.find_staring_player(mob).await else {
                 return false;
             };
             self.target_player = Some(player);

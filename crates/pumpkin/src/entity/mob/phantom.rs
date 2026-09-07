@@ -133,6 +133,10 @@ impl Mob for PhantomEntity {
         &self.mob_entity
     }
 
+    fn can_attack_type(&self, _target_type: &'static EntityType) -> bool {
+        true
+    }
+
     fn get_mob_gravity(&self) -> f64 {
         0.0
     }

@@ -11,6 +11,7 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -343,7 +344,7 @@ impl Mob for FoxEntity {
             let variant = mate
                 .get_mob()
                 .and_then(Mob::get_fox)
-                .filter(|_| rand::random::<bool>())
+                .filter(|_| self.get_entity_random().next_bool())
                 .map_or_else(|| self.get_variant(), |mate_fox| mate_fox.get_variant());
             child_fox.variant.store(variant.id(), Ordering::Relaxed);
             let mut trusted = child_fox

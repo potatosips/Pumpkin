@@ -146,6 +146,8 @@ pub struct Server {
     // world stuff which maybe should be put into a struct
     pub level_info: Arc<ArcSwap<LevelData>>,
     world_info_writer: Arc<dyn WorldInfoWriter>,
+    pub wandering_trader_spawner:
+        Mutex<crate::world::wandering_trader_spawner::WanderingTraderSpawner>,
 }
 
 impl Server {
@@ -259,6 +261,24 @@ impl Server {
                 .collect::<Vec<_>>()
         );
 
+        let loaded_level_info = level_info.load();
+        let mut wandering_trader_data =
+            crate::world::wandering_trader_spawner::WanderingTraderState {
+                spawn_delay: loaded_level_info.wandering_trader_spawn_delay,
+                spawn_chance: loaded_level_info.wandering_trader_spawn_chance,
+            };
+        let wandering_trader_id = loaded_level_info.wandering_trader_id;
+        drop(loaded_level_info);
+        if wandering_trader_data.spawn_delay == 0 && wandering_trader_data.spawn_chance == 0 {
+            wandering_trader_data.spawn_delay = 24_000;
+            wandering_trader_data.spawn_chance = 25;
+            level_info.rcu(|current| {
+                let mut updated = (**current).clone();
+                updated.wandering_trader_spawn_delay = 24_000;
+                updated.wandering_trader_spawn_chance = 25;
+                updated
+            });
+        }
         let server = Self {
             basic_config,
             advanced_config,
@@ -297,6 +317,12 @@ impl Server {
             player_idle_timeout: AtomicI32::new(0),
             mojang_public_keys: ArcSwap::from_pointee(Vec::new()),
             world_info_writer: Arc::new(AnvilLevelInfo),
+            wandering_trader_spawner: Mutex::new(
+                crate::world::wandering_trader_spawner::WanderingTraderSpawner::new(
+                    wandering_trader_data,
+                    wandering_trader_id,
+                ),
+            ),
             level_info,
         };
         let server = Arc::new(server);
@@ -583,7 +609,6 @@ impl Server {
             error!("Failed to save level.dat: {err}");
             return Err(format!("Failed to save level.dat: {err}"));
         }
-
         Ok(())
     }
 
@@ -1048,6 +1073,8 @@ impl Server {
         }
 
         set.join_all().await;
+
+        self.wandering_trader_spawner.lock().await.tick(self).await;
 
         // Global tasks
         if let Err(e) = self.player_data_storage.tick(self).await {

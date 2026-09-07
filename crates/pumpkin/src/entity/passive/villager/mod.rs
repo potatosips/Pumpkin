@@ -39,9 +39,9 @@ use crate::entity::{
     ai::{
         goal::{
             avoid_entity::AvoidEntityGoal, look_around::RandomLookAroundGoal,
-            look_at_entity::LookAtEntityGoal, swim::SwimGoal,
-            trade_with_player::TradeWithPlayerGoal, wander_around::WanderAroundGoal,
-            work_at_job_site::WorkAtJobSiteGoal,
+            look_at_entity::LookAtEntityGoal, look_at_trading_player::LookAtTradingPlayerGoal,
+            swim::SwimGoal, trade_with_player::TradeWithPlayerGoal,
+            wander_around::WanderAroundGoal, work_at_job_site::WorkAtJobSiteGoal,
         },
         pathfinder::Navigator,
     },
@@ -420,6 +420,7 @@ impl VillagerEntity {
             );
 
             goal_selector.add_goal(2, Box::new(TradeWithPlayerGoal::new(0.5)));
+            goal_selector.add_goal(2, Box::new(LookAtTradingPlayerGoal::new()));
             // Basic movement and looking (Vanilla uses 0.5 speed)
             goal_selector.add_goal(3, Box::new(WorkAtJobSiteGoal::new(0.5)));
             goal_selector.add_goal(4, Box::new(WanderAroundGoal::new(0.5)));
@@ -1188,7 +1189,7 @@ impl VillagerEntity {
         item
     }
 
-    fn bedrock_trade_data(
+    pub(crate) fn bedrock_trade_data(
         offers: &[pumpkin_protocol::java::client::play::MerchantOffer],
         level: i32,
     ) -> NbtCompound {
@@ -1839,6 +1840,14 @@ impl Mob for VillagerEntity {
             .world
             .load()
             .get_player_by_uuid(player_uuid)
+    }
+
+    fn stop_trading(&self) {
+        self.is_trading.store(false, Ordering::Relaxed);
+        *self
+            .trading_player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     fn get_home(&self) -> Option<BlockPos> {

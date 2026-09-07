@@ -13,7 +13,7 @@ use pumpkin_data::{
 };
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -100,7 +100,14 @@ impl RabbitEntity {
             .load()
             .get_biome(&mob_entity.living_entity.entity.block_pos.load())
             .registry_id;
-        let variant = RabbitVariant::natural_for_biome(biome, rand::random());
+        let variant = RabbitVariant::natural_for_biome(
+            biome,
+            mob_entity
+                .random
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .next_f32(),
+        );
         let rabbit = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
@@ -209,15 +216,15 @@ impl Mob for RabbitEntity {
             ) else {
                 return;
             };
-            let variant = if self.get_random().random_range(0..20) == 0 {
+            let variant = if self.get_entity_random().next_bounded_i32(20) == 0 {
                 let entity = self.get_entity();
                 let biome = entity
                     .world
                     .load()
                     .get_biome(&entity.block_pos.load())
                     .registry_id;
-                RabbitVariant::natural_for_biome(biome, rand::random())
-            } else if self.get_random().random_bool(0.5) {
+                RabbitVariant::natural_for_biome(biome, self.get_entity_random().next_f32())
+            } else if self.get_entity_random().next_bool() {
                 self.variant()
             } else {
                 mate.variant()

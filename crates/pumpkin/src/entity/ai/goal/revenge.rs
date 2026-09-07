@@ -64,8 +64,8 @@ impl Goal for RevengeGoal {
             };
 
             if !self
-                .target_predicate
-                .test(&world, Some(&mob_entity.living_entity), attacker_living)
+                .track_target_goal
+                .can_track(mob, Some(attacker_living), &self.target_predicate)
                 .await
             {
                 return false;

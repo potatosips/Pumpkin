@@ -12,6 +12,7 @@ use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_protocol::java::client::play::Metadata;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage,
@@ -205,15 +206,16 @@ impl Mob for WitchEntity {
             let living = &self.mob_entity.living_entity;
             let potion = if living.entity.touching_water.load(Ordering::Relaxed)
                 && !living.has_effect(&StatusEffect::WATER_BREATHING).await
-                && rand::random::<f32>() < 0.15
+                && self.get_entity_random().next_f32() < 0.15
             {
                 Some(pumpkin_data::potion::Potion::WATER_BREATHING.id as i32)
             } else if living.entity.fire_ticks.load(Ordering::Relaxed) > 0
                 && !living.has_effect(&StatusEffect::FIRE_RESISTANCE).await
-                && rand::random::<f32>() < 0.15
+                && self.get_entity_random().next_f32() < 0.15
             {
                 Some(pumpkin_data::potion::Potion::FIRE_RESISTANCE.id as i32)
-            } else if living.health.load() < living.get_max_health() && rand::random::<f32>() < 0.05
+            } else if living.health.load() < living.get_max_health()
+                && self.get_entity_random().next_f32() < 0.05
             {
                 Some(pumpkin_data::potion::Potion::HEALING.id as i32)
             } else {
@@ -226,7 +228,7 @@ impl Mob for WitchEntity {
                         .squared_distance_to_vec(&target.get_entity().pos.load());
                     if distance > 121.0
                         && !living.has_effect(&StatusEffect::SPEED).await
-                        && rand::random::<f32>() < 0.5
+                        && self.get_entity_random().next_f32() < 0.5
                     {
                         Some(pumpkin_data::potion::Potion::SWIFTNESS.id as i32)
                     } else {

@@ -10,7 +10,7 @@ use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::java::client::play::Metadata;
 use pumpkin_util::GameMode;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 
 use crate::entity::{
     Entity, EntityBase, EntityBaseFuture, NBTStorage, NbtFuture,
@@ -149,6 +149,12 @@ impl Mob for IronGolemEntity {
         &self.mob_entity
     }
 
+    fn can_attack_type(&self, target_type: &'static EntityType) -> bool {
+        !(self.is_player_created() && target_type == &EntityType::PLAYER)
+            && target_type != &EntityType::CREEPER
+            && target_type != &EntityType::GHAST
+    }
+
     fn mob_tick<'a>(&'a self, _caller: &'a Arc<dyn EntityBase>) -> EntityBaseFuture<'a, ()> {
         Box::pin(async move {
             let attack_tick = self.attack_animation_tick.load(Ordering::Relaxed);
@@ -170,7 +176,8 @@ impl Mob for IronGolemEntity {
             .get_attribute_value(&pumpkin_data::attributes::Attributes::ATTACK_DAMAGE)
             as f32;
         let roll = if base_damage > 0.0 {
-            rand::rng().random_range(0..base_damage as i32)
+            self.get_entity_random()
+                .next_bounded_i32(base_damage as i32)
         } else {
             0
         };

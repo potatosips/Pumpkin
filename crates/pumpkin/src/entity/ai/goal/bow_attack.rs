@@ -7,7 +7,7 @@ use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::sound::{Sound, SoundCategory};
 use pumpkin_util::Hand;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -301,10 +301,10 @@ impl Goal for BowAttackGoal {
             }
 
             if self.strafing_ticks >= 20 {
-                if mob.get_random().random_range(0.0..1.0) < 0.3 {
+                if mob.get_entity_random().next_f32() < 0.3 {
                     self.strafing_clockwise = !self.strafing_clockwise;
                 }
-                if mob.get_random().random_range(0.0..1.0) < 0.3 {
+                if mob.get_entity_random().next_f32() < 0.3 {
                     self.strafing_backwards = !self.strafing_backwards;
                 }
                 self.strafing_ticks = 0;

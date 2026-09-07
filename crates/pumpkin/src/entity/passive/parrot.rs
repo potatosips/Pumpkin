@@ -12,7 +12,7 @@ use pumpkin_data::tag::{self, Taggable};
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_protocol::bedrock::server::actor_event::ActorEventType;
 use pumpkin_protocol::java::client::play::Metadata;
-use rand::RngExt;
+use pumpkin_util::random::RandomImpl;
 use uuid::Uuid;
 
 use crate::entity::{
@@ -204,7 +204,7 @@ impl Mob for ParrotEntity {
                     .has_tag(&tag::Item::MINECRAFT_PARROT_FOOD)
             {
                 item_stack.decrement_unless_creative(player.gamemode.load(), 1);
-                if rand::rng().random_range(0..10) == 0 {
+                if self.get_entity_random().next_bounded_i32(10) == 0 {
                     let entity = self.get_entity();
                     let mut event =
                         crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(
