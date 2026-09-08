@@ -438,6 +438,7 @@ impl World {
 
     pub fn update_active_chunks(self: &Arc<Self>) {
         let mut active_chunks = FxHashSet::default();
+        let mut natural_spawn_chunks = FxHashSet::default();
         let sim_dist = self.server.upgrade().map_or(10, |s| {
             s.advanced_config.networking.java.simulation_distance.get()
         }) as i32;
@@ -448,15 +449,16 @@ impl World {
                     active_chunks.insert(center.add_raw(dx, dy));
                 }
             }
+            if player.gamemode.load() != GameMode::Spectator {
+                add_natural_spawn_chunks(&mut natural_spawn_chunks, center);
+            }
         }
         if let Ok(forced) = self.forced_chunks.lock() {
             active_chunks.extend(forced.iter().copied());
         }
 
-        let mut spawnable_chunks = 0;
         for pos in &active_chunks {
             if self.level.is_chunk_loaded(pos) {
-                spawnable_chunks += 1;
                 self.migrate_pending_block_entities(*pos);
             }
         }
@@ -464,7 +466,7 @@ impl World {
         self.active_chunks.store(Arc::new(active_chunks));
 
         self.spawn_state.store(Arc::new(SpawnState::new(
-            spawnable_chunks,
+            natural_spawn_chunks.len() as i32,
             &self.entities,
             self,
         )));
@@ -1773,7 +1775,9 @@ impl World {
                 lock.difficulty == Difficulty::Peaceful,
             )
         };
-        let spawn_passives = self.level_time.lock().await.time_of_day % 400 == 0;
+        // ServerChunkCache.tickChunks uses game time, independent of daylight
+        // cycle and `/time set`, for the 400-tick persistent-category cadence.
+        let spawn_passives = is_passive_spawn_tick(self.level_time.lock().await.world_age);
         let spawn_enemies = !peaceful && spawn_monsters && spawn_mobs;
         let spawn_passives = spawn_passives && spawn_mobs;
 
@@ -1795,19 +1799,12 @@ impl World {
 
             spawning_chunks.shuffle(&mut rng());
 
-            for chunk_batch in spawning_chunks.chunks(8) {
-                let batch = chunk_batch.to_vec();
-                let world = self.clone();
-                let s_list = spawn_list.clone();
-                let s_state = spawn_state.clone();
-
-                chunk_tasks.spawn(async move {
-                    for (pos, chunk) in batch {
-                        world
-                            .tick_spawning_chunk(pos, &chunk, &s_list, &s_state)
-                            .await;
-                    }
-                });
+            // Vanilla processes eligible chunks sequentially. Besides preserving
+            // RNG order, this makes the shared global/local caps authoritative:
+            // a later chunk observes every mob spawned by earlier chunks.
+            for (pos, chunk) in spawning_chunks {
+                self.tick_spawning_chunk(pos, &chunk, &spawn_list, &spawn_state)
+                    .await;
             }
         }
 
@@ -2275,6 +2272,11 @@ impl World {
             is_thundering,
         );
         for entity in entities {
+            // NaturalSpawner provisionally accounts each accepted candidate so
+            // later attempts in this pass see it. World insertion performs the
+            // authoritative add; undo the provisional entry first to avoid
+            // counting every natural spawn twice. A cancelled spawn stays at zero.
+            spawn_state.remove_entity(self, entity.as_ref());
             self.spawn_entity(entity).await;
         }
     }
@@ -7129,6 +7131,18 @@ fn effective_random_tick_speed(value: i64) -> u32 {
     value.clamp(0, i64::from(u32::MAX)) as u32
 }
 
+fn add_natural_spawn_chunks(chunks: &mut FxHashSet<Vector2<i32>>, center: Vector2<i32>) {
+    for dx in -8..=8 {
+        for dz in -8..=8 {
+            chunks.insert(center.add_raw(dx, dz));
+        }
+    }
+}
+
+const fn is_passive_spawn_tick(world_age: i64) -> bool {
+    world_age % 400 == 0
+}
+
 fn required_sleeping_players(eligible_players: usize, percentage: i64) -> usize {
     let percentage = percentage.clamp(0, 100) as usize;
     eligible_players
@@ -7161,13 +7175,14 @@ mod tests {
     };
     use pumpkin_nbt::compound::NbtCompound;
     use pumpkin_util::math::position::BlockPos;
+    use pumpkin_util::math::vector2::Vector2;
     use pumpkin_util::math::vector3::Vector3;
     use uuid::Uuid;
 
     use super::{
-        World, bedrock_block_breaking_rate, bedrock_chest_block_actor, effective_random_tick_speed,
-        remove_saved_entity_nbt, replace_saved_entity_nbt, required_sleeping_players,
-        spawn_search_parameters,
+        World, add_natural_spawn_chunks, bedrock_block_breaking_rate, bedrock_chest_block_actor,
+        effective_random_tick_speed, is_passive_spawn_tick, remove_saved_entity_nbt,
+        replace_saved_entity_nbt, required_sleeping_players, spawn_search_parameters,
     };
 
     fn saved_entity(uuid: Uuid, marker: i32) -> NbtCompound {
@@ -7303,6 +7318,27 @@ mod tests {
             effective_random_tick_speed(i64::from(i32::MAX)),
             i32::MAX as u32
         );
+    }
+
+    #[test]
+    fn passive_spawn_cadence_uses_game_time() {
+        assert!(is_passive_spawn_tick(0));
+        assert!(is_passive_spawn_tick(400));
+        assert!(is_passive_spawn_tick(12_000));
+        assert!(!is_passive_spawn_tick(399));
+        assert!(!is_passive_spawn_tick(401));
+    }
+
+    #[test]
+    fn natural_spawn_cap_uses_fixed_eight_chunk_radius() {
+        let mut chunks = rustc_hash::FxHashSet::default();
+        add_natural_spawn_chunks(&mut chunks, Vector2::new(0, 0));
+        assert_eq!(chunks.len(), 17 * 17);
+        assert!(chunks.contains(&Vector2::new(-8, 8)));
+        assert!(!chunks.contains(&Vector2::new(9, 0)));
+
+        add_natural_spawn_chunks(&mut chunks, Vector2::new(1, 0));
+        assert_eq!(chunks.len(), 18 * 17);
     }
 
     #[test]

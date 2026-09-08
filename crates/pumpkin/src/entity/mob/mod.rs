@@ -624,6 +624,17 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn get_mob_entity(&self) -> &MobEntity;
 
+    /// Vanilla `Mob.requiresCustomPersistence`. Subclasses extend this for
+    /// their own state; the base implementation preserves mounted mobs.
+    fn requires_custom_persistence(&self) -> bool {
+        self.get_mob_entity()
+            .living_entity
+            .entity
+            .vehicle
+            .try_lock()
+            .is_ok_and(|vehicle| vehicle.is_some())
+    }
+
     /// Vanilla `Mob.canAttackType`. Most mobs never select ghasts through
     /// ordinary target goals; the few entity-specific exceptions override it.
     fn can_attack_type(&self, target_type: &'static EntityType) -> bool {

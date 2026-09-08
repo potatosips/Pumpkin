@@ -317,6 +317,16 @@ impl fmt::Debug for SpawnState {
 }
 
 impl SpawnState {
+    fn counts_towards_mob_cap(entity: &dyn EntityBase) -> bool {
+        let entity_type = entity.get_entity().entity_type;
+        entity_type.mob
+            && entity_type.category != &MobCategory::MISC
+            && entity.get_mob().is_none_or(|mob| {
+                !mob.get_mob_entity().is_persistence_required()
+                    && !mob.requires_custom_persistence()
+            })
+    }
+
     #[must_use]
     pub fn empty() -> Self {
         Self {
@@ -333,11 +343,11 @@ impl SpawnState {
     }
 
     pub fn add_entity(&self, world: &World, entity: &dyn EntityBase) {
-        let base_entity = entity.get_entity();
-        let entity_type = base_entity.entity_type;
-        if !entity_type.mob || entity_type.category == &MobCategory::MISC {
+        if !Self::counts_towards_mob_cap(entity) {
             return;
         }
+        let base_entity = entity.get_entity();
+        let entity_type = base_entity.entity_type;
         let entity_pos = base_entity.block_pos.load();
         let biome = base_entity.current_biome.load();
         if let Some(cost) = biome.spawn_costs.get(entity_type.resource_name) {
@@ -354,11 +364,11 @@ impl SpawnState {
     }
 
     pub fn remove_entity(&self, world: &World, entity: &dyn EntityBase) {
-        let base_entity = entity.get_entity();
-        let entity_type = base_entity.entity_type;
-        if !entity_type.mob || entity_type.category == &MobCategory::MISC {
+        if !Self::counts_towards_mob_cap(entity) {
             return;
         }
+        let base_entity = entity.get_entity();
+        let entity_type = base_entity.entity_type;
         let entity_pos = base_entity.block_pos.load();
         let biome = base_entity.current_biome.load();
         if let Some(cost) = biome.spawn_costs.get(entity_type.resource_name) {
@@ -382,18 +392,13 @@ impl SpawnState {
         let potential = PotentialCalculator::default();
         let local_mob_cap = LocalMobCapCalculator::default();
         let counter = MobCounts::default();
-        let active_chunks = world.active_chunks.load();
         for entity in entities.load().iter() {
+            if !Self::counts_towards_mob_cap(entity.as_ref()) {
+                continue;
+            }
             let entity = entity.get_entity();
             let entity_type = entity.entity_type;
-            if !entity_type.mob || entity_type.category == &MobCategory::MISC {
-                // TODO (mob.isPersistenceRequired() || mob.requiresCustomPersistence())
-                continue;
-            }
             let chunk_pos = entity.chunk_pos.load();
-            if !active_chunks.contains(&chunk_pos) {
-                continue;
-            }
             let entity_pos = entity.block_pos.load();
             let biome = entity.current_biome.load();
             if let Some(cost) = biome.spawn_costs.get(entity_type.resource_name) {

@@ -452,6 +452,16 @@ impl Mob for EndermanEntity {
         &self.mob_entity
     }
 
+    fn requires_custom_persistence(&self) -> bool {
+        self.mob_entity
+            .living_entity
+            .entity
+            .vehicle
+            .try_lock()
+            .is_ok_and(|vehicle| vehicle.is_some())
+            || self.get_carried_block().is_some()
+    }
+
     fn set_mob_target(&self, target: Option<Arc<dyn EntityBase>>) -> GoalFuture<'_, ()> {
         Box::pin(async move {
             self.set_target(target).await;
