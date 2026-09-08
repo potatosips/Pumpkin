@@ -515,11 +515,13 @@ pub fn check_spawn_rules(
             && world.get_max_local_raw_brightness(pos) > 8;
     }
     if id == EntityType::CAMEL.id
+        || id == EntityType::CAT.id
         || id == EntityType::CHICKEN.id
         || id == EntityType::COW.id
         || id == EntityType::DONKEY.id
         || id == EntityType::HORSE.id
         || id == EntityType::LLAMA.id
+        || id == EntityType::MULE.id
         || id == EntityType::PANDA.id
         || id == EntityType::PIG.id
         || id == EntityType::SHEEP.id
@@ -572,6 +574,12 @@ pub fn check_spawn_rules(
     }
     if id == EntityType::WOLF.id {
         return bright_ground(&tag::Block::MINECRAFT_WOLVES_SPAWNABLE_ON);
+    }
+    if id == EntityType::PILLAGER.id {
+        // PatrollingMonster.checkPatrollingMonsterSpawnRules checks block
+        // light first, then delegates to the normal hostile predicate.
+        return world.get_block_light_level(pos).unwrap_or(0) <= 8
+            && mob::MobEntity::check_monster_spawn_rules(world, pos, is_thundering, random);
     }
 
     // TODO
