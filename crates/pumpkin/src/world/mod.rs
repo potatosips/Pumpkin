@@ -4388,16 +4388,26 @@ impl World {
             )
             .await;
 
+        // Finish the server-side death cleanup and move the player away from the
+        // death location before making them alive again. Item collision runs on
+        // the server tick and may otherwise insert nearby death drops during the
+        // asynchronous respawn packet/chunk sequence.
+        if !keep_inventory {
+            player.set_experience(0, 0.0, 0).await;
+            player.inventory.clear().await;
+        }
+
+        // Set entity position before restoring health and loading chunks, so an
+        // alive player is never observable at the old death position.
+        player.get_entity().set_pos(position);
+        player.get_entity().set_rotation(yaw, pitch);
+        player.get_entity().last_pos.store(position);
+
         player.living_entity.reset_state().await;
 
         player.send_permission_lvl_update();
 
         player.hunger_manager.restart();
-
-        if !keep_inventory {
-            player.set_experience(0, 0.0, 0).await;
-            player.inventory.clear().await;
-        }
 
         player.send_abilities_update().await;
 
@@ -4420,12 +4430,6 @@ impl World {
                 VarInt(points),
             ))
             .await;
-
-        // Set entity position BEFORE loading chunks, so chunks load at the right location
-        // This mirrors the initial spawn flow where update_position is called before teleport
-        player.get_entity().set_pos(position);
-        player.get_entity().set_rotation(yaw, pitch);
-        player.get_entity().last_pos.store(position);
 
         // Load chunks and send world info FIRST (before teleport packet)
         target_world
