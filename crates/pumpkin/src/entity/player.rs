@@ -39,6 +39,25 @@ use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+fn wind_burst_level(item_stack: &ItemStack) -> Option<i32> {
+    item_stack
+        .get_data_component::<EnchantmentsImpl>()?
+        .enchantment
+        .iter()
+        .find_map(|(enchantment, level)| {
+            (**enchantment == Enchantment::WIND_BURST && *level > 0).then_some(*level)
+        })
+}
+
+fn wind_burst_knockback_multiplier(level: i32) -> f32 {
+    match level {
+        1 => 1.2,
+        2 => 1.75,
+        3 => 2.2,
+        level => 1.5 + 0.35 * (level.saturating_sub(1) as f32),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CustomScoreboard {
     Java(Scoreboard),
@@ -1539,6 +1558,15 @@ impl Player {
                 SoundCategory::Players,
                 &pos,
             );
+            if let Some(level) = wind_burst_level(&item_stack) {
+                world
+                    .explode_wind_charge(
+                        attacker_entity.pos.load(),
+                        3.5,
+                        f64::from(wind_burst_knockback_multiplier(level)),
+                    )
+                    .await;
+            }
         }
 
         player_attack_sound(&pos, &world, attack_type).await;
@@ -7142,7 +7170,7 @@ fn health_sync_required(
 mod tests {
     use super::{
         bedrock_inventory_slot, extra_attack_knockback, health_sync_required, player_is_pushable,
-        read_root_vehicle, write_root_vehicle,
+        read_root_vehicle, wind_burst_knockback_multiplier, write_root_vehicle,
     };
     use crate::entity::combat::AttackType;
     use pumpkin_nbt::{compound::NbtCompound, tag::NbtTag};
@@ -7194,6 +7222,13 @@ mod tests {
         assert_eq!(bedrock_inventory_slot(44), Some(8));
         assert_eq!(bedrock_inventory_slot(8), None);
         assert_eq!(bedrock_inventory_slot(45), None);
+    }
+
+    #[test]
+    fn wind_burst_uses_vanilla_knockback_multipliers() {
+        assert_eq!(wind_burst_knockback_multiplier(1), 1.2);
+        assert_eq!(wind_burst_knockback_multiplier(2), 1.75);
+        assert_eq!(wind_burst_knockback_multiplier(3), 2.2);
     }
 
     #[test]
