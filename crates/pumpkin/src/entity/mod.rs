@@ -357,6 +357,17 @@ pub trait EntityBase: Send + Sync + NBTStorage + std::any::Any {
             let mut buf = Vec::new();
             let m = Metadata::new(tracked_data::entity::DATA_SHARED_FLAGS_ID, flags);
             let _ = m.write(&mut buf, &version);
+            if let Some(custom_name) = &**entity.custom_name.load() {
+                let _ = Metadata::new(
+                    tracked_data::entity::DATA_CUSTOM_NAME,
+                    Some(custom_name.clone()),
+                )
+                .write(&mut buf, &version);
+            }
+            if entity.custom_name_visible.load(Ordering::Relaxed) {
+                let _ = Metadata::new(tracked_data::entity::DATA_CUSTOM_NAME_VISIBLE, true)
+                    .write(&mut buf, &version);
+            }
             buf.put_u8(255);
             let meta_packet = CSetEntityMetadata::new(entity.entity_id.into(), buf.into());
             if let Ok(meta_data) = client.serialize_packet(&meta_packet) {
