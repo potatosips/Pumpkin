@@ -13,9 +13,10 @@ use pumpkin_data::effect::StatusEffect;
 use pumpkin_data::entity::{EntityPose, EntityType};
 use pumpkin_data::item::{Item, JavaToBedrockItemMapping};
 use pumpkin_data::item_stack::ItemStack;
+use pumpkin_data::meta_data_type::MetaDataType;
 use pumpkin_data::potion::Effect;
 use pumpkin_data::tag::{Enchantment as EnchantmentTag, Taggable};
-use pumpkin_data::tracked_data;
+use pumpkin_data::tracked_data::{self, TrackedData, TrackedId};
 use pumpkin_inventory::merchant::merchant_screen_handler::MerchantScreenHandler;
 use pumpkin_inventory::screen_handler::{
     BoxFuture, InventoryPlayer, ScreenHandlerFactory, SharedScreenHandler,
@@ -1771,7 +1772,7 @@ impl Mob for VillagerEntity {
         Box::pin(async move {
             let mut metadata = Vec::new();
             Metadata::new(
-                tracked_data::villager::VILLAGER_DATA,
+                villager_data_tracker(version),
                 *self.villager_data.lock().await,
             )
             .write(&mut metadata, &version)
@@ -2228,6 +2229,20 @@ impl Mob for VillagerEntity {
     }
 }
 
+const fn villager_data_tracker(version: JavaMinecraftVersion) -> TrackedData {
+    if matches!(version, JavaMinecraftVersion::V_26_2) {
+        tracked_data::villager::VILLAGER_DATA
+    } else {
+        TrackedData::new(
+            TrackedId {
+                v1_21_4: 18,
+                v26_2: 18,
+            },
+            MetaDataType::VILLAGER_DATA,
+        )
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -2240,7 +2255,10 @@ mod tests {
     #[test]
     fn villager_data_metadata_uses_the_villager_tracker_slot() {
         let data = VillagerData::new(VillagerType::Plains, VillagerProfession::Librarian, 1);
-        let metadata = Metadata::new(tracked_data::villager::VILLAGER_DATA, data.clone());
+        let metadata = Metadata::new(
+            villager_data_tracker(JavaMinecraftVersion::V_26_2),
+            data.clone(),
+        );
         let mut bytes = Vec::new();
 
         metadata
@@ -2250,10 +2268,19 @@ mod tests {
         assert_eq!(bytes, [19, 18, 2, 9, 1]);
 
         let mut legacy_bytes = Vec::new();
-        Metadata::new(tracked_data::villager::VILLAGER_DATA, data)
-            .write(&mut legacy_bytes, &JavaMinecraftVersion::V_1_21_4)
-            .unwrap();
+        Metadata::new(
+            villager_data_tracker(JavaMinecraftVersion::V_1_21_4),
+            data.clone(),
+        )
+        .write(&mut legacy_bytes, &JavaMinecraftVersion::V_1_21_4)
+        .unwrap();
         assert_eq!(legacy_bytes, [18, 19, 2, 9, 1]);
+
+        let mut v1_21_11_bytes = Vec::new();
+        Metadata::new(villager_data_tracker(JavaMinecraftVersion::V_1_21_11), data)
+            .write(&mut v1_21_11_bytes, &JavaMinecraftVersion::V_1_21_11)
+            .unwrap();
+        assert_eq!(v1_21_11_bytes[0], 18);
     }
 
     #[test]
